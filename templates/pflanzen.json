@@ -1,0 +1,122 @@
+{
+  "_hinweis": [
+    "Pflanzenbeiwerte und Bodenkennwerte - alle aus FAO-56.",
+    "",
+    "  kc      Pflanzenbeiwert. ETc = Kc * ET0.   [FAO-56, Tabelle 12]",
+    "  zr      groesste wirksame Durchwurzelungstiefe in Metern.",
+    "  p       Anteil des nutzbaren Bodenwassers, der ohne Stress entnommen",
+    "          werden darf.                        [FAO-56, Tabelle 22]",
+    "",
+    "Wo FAO drei Werte nennt (Anfang, Hauptzeit, Ende), steht hier der Wert der",
+    "Hauptzeit - fuer einen Hausgarten in der Saison ist das der richtige.",
+    "Rasen hat ohnehin keine Wachstumsstadien im Sinne des Papiers.",
+    "",
+    "Die Beiwerte von FAO-56 gelten fuer ein halbfeuchtes Klima mit RHmin um",
+    "45 Prozent und Wind um 2 m/s. Bei staendig trockener Luft oder viel Wind",
+    "liegen sie zu niedrig. Die Feinanpassung dafuer ist bewusst NICHT",
+    "eingebaut: sie braucht die Pflanzenhoehe und den Entwicklungsstand, und",
+    "beides weiss hier niemand. Wer es genauer braucht, hebt den Kc-Wert der",
+    "Zone von Hand an."
+  ],
+
+  "bepflanzung": {
+    "rasen_kuehl": {
+      "text": "Rasen, kuehle Jahreszeit (Wiesenrispe, Weidelgras, Schwingel)",
+      "kc": 0.95, "zr": 0.75, "p": 0.40,
+      "quelle": "FAO-56 Tab. 12 (0,90/0,95/0,95) und Tab. 22 (Zr 0,5-1,0 m, p 0,40)"
+    },
+    "rasen_warm": {
+      "text": "Rasen, warme Jahreszeit (Bermuda, St. Augustine)",
+      "kc": 0.85, "zr": 0.75, "p": 0.50,
+      "quelle": "FAO-56 Tab. 12 (0,80/0,85/0,85) und Tab. 22 (Zr 0,5-1,0 m, p 0,50)"
+    },
+    "rasen_sparsam": {
+      "text": "Rasen, sparsam gewaessert (nimmt Sommerbraeune in Kauf)",
+      "kc": 0.85, "zr": 0.75, "p": 0.55,
+      "quelle": "FAO-56 Tab. 12, Fussnote 15: 'Kc's for turf can be reduced by 0,10' bei sorgfaeltigem Wassermanagement. p bewusst hoeher - der Rasen darf trockener werden."
+    },
+    "gemuese_klein": {
+      "text": "Gemuese, kleinwuechsig (Salat, Kohl, Moehren)",
+      "kc": 1.05, "zr": 0.40, "p": 0.35,
+      "quelle": "FAO-56 Tab. 12 (Small Vegetables 0,7/1,05/0,95), Tab. 22 (Kohl p 0,45, Salat p 0,30)"
+    },
+    "tomate": {
+      "text": "Tomaten",
+      "kc": 1.15, "zr": 1.00, "p": 0.40,
+      "quelle": "FAO-56 Tab. 12 (Kc mid 1,15) und Tab. 22 (Zr 0,7-1,5 m, p 0,40)"
+    },
+    "erdbeere": {
+      "text": "Erdbeeren",
+      "kc": 0.85, "zr": 0.25, "p": 0.20,
+      "quelle": "FAO-56 Tab. 12 (0,40/0,85/0,75) und Tab. 22 (Zr 0,2-0,3 m, p 0,20)"
+    },
+    "beerenstraucher": {
+      "text": "Beerenstraeucher",
+      "kc": 1.05, "zr": 0.90, "p": 0.50,
+      "quelle": "FAO-56 Tab. 12 (0,30/1,05/0,50) und Tab. 22 (Zr 0,6-1,2 m, p 0,50)"
+    },
+    "hecke_gehoelz": {
+      "text": "Hecke, Straeucher, junge Gehoelze",
+      "kc": 0.90, "zr": 1.00, "p": 0.50,
+      "quelle": "Ableitung aus FAO-56 Tab. 12 (Beerenstraeucher) - fuer Zierhecken nennt FAO keinen eigenen Wert. GESCHAETZT.",
+      "geschaetzt": 1
+    },
+    "staudenbeet": {
+      "text": "Staudenbeet, Blumen",
+      "kc": 1.00, "zr": 0.50, "p": 0.40,
+      "quelle": "Ableitung aus FAO-56 Tab. 12 (Small Vegetables / Blumen) - fuer Zierstauden nennt FAO keinen eigenen Wert. GESCHAETZT.",
+      "geschaetzt": 1
+    },
+    "topf_kuebel": {
+      "text": "Kuebel und Topfpflanzen",
+      "kc": 1.10, "zr": 0.25, "p": 0.30,
+      "quelle": "Kein FAO-Wert. Kuebel trocknen schneller aus als Boden - Zr klein, p klein. GESCHAETZT.",
+      "geschaetzt": 1
+    }
+  },
+
+  "boden": {
+    "_hinweis": [
+      "theta_fc = Feldkapazitaet, theta_wp = permanenter Welkepunkt, beide in",
+      "m3/m3. Daraus wird die nutzbare Feldkapazitaet gerechnet:",
+      "TAW = 1000 * (theta_fc - theta_wp) * Zr    [FAO-56, Gl. 82]",
+      "",
+      "Die drei mit 'quelle' belegten Werte stehen woertlich in FAO-56,",
+      "Kapitel 8. Die uebrigen sind gaengige Richtwerte fuer die jeweilige",
+      "Bodenart und als geschaetzt gekennzeichnet. Wer es genau will, laesst",
+      "eine Bodenprobe untersuchen und traegt die Werte von Hand ein - das",
+      "Feld dafuer gibt es."
+    ],
+    "sand":            { "text": "Sand",                 "theta_fc": 0.12, "theta_wp": 0.05, "geschaetzt": 1 },
+    "lehmiger_sand":   { "text": "Lehmiger Sand",        "theta_fc": 0.15, "theta_wp": 0.06,
+                         "quelle": "FAO-56 Kap. 8, Beispiel 34: Loamy sand" },
+    "sandiger_lehm":   { "text": "Sandiger Lehm",        "theta_fc": 0.22, "theta_wp": 0.10, "geschaetzt": 1 },
+    "lehm":            { "text": "Lehm",                 "theta_fc": 0.27, "theta_wp": 0.13, "geschaetzt": 1 },
+    "schluff":         { "text": "Schluff",              "theta_fc": 0.32, "theta_wp": 0.15,
+                         "quelle": "FAO-56 Kap. 8, Beispiel 34: Silt" },
+    "schluffiger_ton": { "text": "Schluffiger Ton",      "theta_fc": 0.35, "theta_wp": 0.23,
+                         "quelle": "FAO-56 Kap. 8, Beispiel 34: Silty clay" },
+    "ton":             { "text": "Ton",                  "theta_fc": 0.36, "theta_wp": 0.22, "geschaetzt": 1 },
+    "eigen":           { "text": "Eigene Werte eintragen", "theta_fc": 0.25, "theta_wp": 0.12, "geschaetzt": 1 }
+  },
+
+  "regner": {
+    "_hinweis": [
+      "Niederschlagsraten in mm/h - nur als Startpunkt.",
+      "",
+      "JEDE dieser Zahlen ist ein Erfahrungswert und keine Messung. Die",
+      "tatsaechliche Rate haengt an Duesen, Druck, Ueberlappung und",
+      "Verlegeabstand und weicht regelmaessig um die Haelfte ab. Deshalb gibt",
+      "es im Reiter Zonen die Becherprobe: Becher aufstellen, Zone eine",
+      "bekannte Zeit laufen lassen, Millimeter eintragen - das Plugin rechnet",
+      "die Rate aus. Solange keine Messung vorliegt, sind alle Liter- und",
+      "Minutenangaben als geschaetzt gekennzeichnet."
+    ],
+    "versenkregner":  { "text": "Versenkregner (Getriebe)", "mmh": 10.0, "geschaetzt": 1 },
+    "sprueher":       { "text": "Spruehduesen",             "mmh": 35.0, "geschaetzt": 1 },
+    "impulsregner":   { "text": "Impulsregner",             "mmh": 12.0, "geschaetzt": 1 },
+    "viereckregner":  { "text": "Viereckregner",            "mmh": 15.0, "geschaetzt": 1 },
+    "perlschlauch":   { "text": "Perl- oder Tropfschlauch", "mmh":  5.0, "geschaetzt": 1 },
+    "tropfer":        { "text": "Tropfer (Einzelabgabe)",   "mmh":  4.0, "geschaetzt": 1 }
+  }
+}
