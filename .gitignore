@@ -1,0 +1,12 @@
+# Von Python beim Ausfuehren erzeugt. Gehoert nicht ins Repository: die
+# .pyc-Dateien sind an die Python-Fassung des jeweiligen Rechners gebunden
+# und werden beim naechsten Lauf ohnehin neu erzeugt.
+__pycache__/
+*.pyc
+
+# Betriebssystem-Beiwerk
+.DS_Store
+Thumbs.db
+
+# Protokolle
+*.log
