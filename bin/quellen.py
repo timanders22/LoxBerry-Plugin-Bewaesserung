@@ -34,6 +34,11 @@ _LOG = logging.getLogger("bewaesserung.quellen")
 
 OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
 
+# Merkmal fuer "diese Nutzlast ist kein JSON". Ein eigenes Objekt statt None,
+# damit sich "noch nicht zerlegt" von "zerlegt, war aber Muell" unterscheiden
+# laesst - None ist ein gueltiges JSON-Ergebnis.
+_KAPUTT = object()
+
 
 # --------------------------------------------------------------------------
 # Pfade in JSON
@@ -150,7 +155,21 @@ def open_meteo(breite: float, laenge: float, zeitzone: str = "auto",
         "timezone": zeitzone or "auto",
     }
     url = OPEN_METEO + "?" + urllib.parse.urlencode(frage)
-    d = http_holen(url, zeit)
+    # Der Aufrufer im Dienst faengt Ausnahmen dieser Funktion bereits ab und
+    # rechnet dann mit den Werten der eigenen Station weiter. Trotzdem wird
+    # hier zusaetzlich gefangen: die Funktion soll auch dann brauchbar sein,
+    # wenn sie einmal von anderer Stelle aufgerufen wird - etwa aus dem
+    # Reiter Test. Ein leeres, aber wohlgeformtes Ergebnis ist an jeder
+    # Stelle besser handhabbar als eine Ausnahme.
+    try:
+        d = http_holen(url, zeit)
+    except Exception as f:            # noqa: BLE001 - Netz kann alles werfen
+        _LOG.warning("Open-Meteo antwortet nicht (%s): %s", type(f).__name__, f)
+        return {"ok": 0, "tage": [], "einheiten": {}, "hoehe": None,
+                "zeitzone": None, "fehler": "%s: %s" % (type(f).__name__, f)}
+    if not isinstance(d, dict):
+        return {"ok": 0, "tage": [], "einheiten": {}, "hoehe": None,
+                "zeitzone": None, "fehler": "Antwort ist kein JSON-Objekt."}
     tage = (d.get("daily") or {})
     zeiten = tage.get("time") or []
     aus = []
@@ -190,7 +209,8 @@ class Sammler:
         self.felder = (quellen or {}).get("felder") or {}
         self.http_url = str((quellen or {}).get("http_url") or "")
         self.einheiten = (tabelle or {}).get("einheiten") or {}
-        self.mqtt: dict[str, tuple[float, float]] = {}   # thema -> (wert, ts)
+        self.mqtt: dict[str, tuple[str, float]] = {}     # thema -> (rohtext, ts)
+        self._geparst: dict[str, Any] = {}               # thema -> zerlegtes JSON
         self.roh_http: Any = None
         self.letzter_http_fehler = ""
 
@@ -203,10 +223,42 @@ class Sammler:
     def mqtt_setzen(self, thema: str, nutzlast: str) -> None:
         """Eine Nachricht aus dem Broker ablegen.
 
-        Steht im Feld ein JSON-Objekt, wird spaeter mit dem Pfad daraus
-        gelesen. Deshalb wird hier NICHT sofort in eine Zahl gewandelt.
+        Der Rohtext wird aufgehoben, nicht sofort in eine Zahl gewandelt:
+        derselbe Text kann fuer die eine Groesse eine blanke Zahl und fuer
+        die andere ein JSON-Objekt mit eigenem Pfad sein. Zwei Felder duerfen
+        auf dasselbe Thema zeigen und verschiedene Pfade daraus lesen - das
+        ginge nicht mehr, wenn hier schon entschieden wuerde.
+
+        Das Zerlegen des JSON wird stattdessen GEMERKT (siehe _geparst).
+        Damit wird jede Nutzlast genau einmal zerlegt, egal wie oft danach
+        gefragt wird - und die Bedeutung bleibt trotzdem unveraendert.
         """
         self.mqtt[thema] = (nutzlast, time.time())
+        # Beim naechsten Zugriff neu zerlegen.
+        self._geparst.pop(thema, None)
+
+    def mqtt_json(self, thema: str, nutzlast: str) -> Any:
+        """Die Nutzlast eines Themas als JSON - hoechstens einmal zerlegt.
+
+        Ohne diesen Merker wuerde derselbe Text bei jedem Rechengang und fuer
+        jede Groesse erneut durch json.loads laufen. Der Zeitgewinn ist klein
+        (eine Nutzlast von hundert Zeichen kostet Mikrosekunden, nicht
+        Millisekunden - die oft geaeusserte Sorge um die Rechenlast eines
+        Raspberry Pi trifft hier nicht zu). Der eigentliche Gewinn ist ein
+        anderer: eine kaputte Nutzlast wird einmal als kaputt erkannt und
+        nicht bei jedem Zugriff aufs Neue.
+
+        Rueckgabe: die zerlegten Daten oder das Sonderobjekt _KAPUTT.
+        """
+        merker = self._geparst.get(thema)
+        if merker is not None:
+            return merker
+        try:
+            d: Any = json.loads(nutzlast)
+        except ValueError:
+            d = _KAPUTT
+        self._geparst[thema] = d
+        return d
 
     # ---- Abholen ----
 
@@ -237,10 +289,10 @@ class Sammler:
                 return None, "mqtt_veraltet"
             roh = nutzlast
             if f.get("pfad"):
-                try:
-                    roh = json_pfad(json.loads(nutzlast), str(f["pfad"]))
-                except ValueError:
+                d = self.mqtt_json(str(f.get("thema") or ""), nutzlast)
+                if d is _KAPUTT:
                     return None, "mqtt_kein_json"
+                roh = json_pfad(d, str(f["pfad"]))
         elif weg == "http":
             if self.roh_http is None:
                 return None, "http_nichts"

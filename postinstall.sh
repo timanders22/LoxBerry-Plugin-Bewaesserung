@@ -31,7 +31,8 @@ chmod 755 "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     [ -f "$PCONFIG/$f" ] || echo '{}' > "$PCONFIG/$f"
 done
-chmod 644 "$PCONFIG"/*.json 2>/dev/null
+# 0600, nicht 0644: in bewaesserung.json steht das Aktionstoken.
+chmod 600 "$PCONFIG"/*.json 2>/dev/null
 
 # Aus der Sicherung zurueckholen, wenn die Datei leer ist.
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
@@ -50,6 +51,32 @@ if [ -f "$BKV" ] && [ ! -f "$PDATA/verlauf.json" ]; then
     echo "<OK> Verlauf des Wasserhaushalts wiederhergestellt - die Bilanz laeuft weiter."
 fi
 
+# ---------- Eigentuemer richtigstellen ----------
+#
+# Das hier ist die wichtigste Zeile dieses Skripts, und sie fehlte bis 0.9.0.
+#
+# LoxBerry fuehrt postinstall.sh als root aus. Alles, was hier entsteht,
+# gehoert danach root: die mit 'echo {} >' angelegten Konfigurationsdateien
+# ebenso wie die mit 'cp -p' aus der Sicherung zurueckgeholten - cp -p
+# uebernimmt zwar Rechte und Zeitstempel, aber der Eigentuemer richtet sich
+# nach dem, der kopiert.
+#
+# Oberflaeche und Dienst laufen als loxberry. Mit root-eigenen Dateien
+# konnte die Oberflaeche sie zwar LESEN (0644), aber nicht schreiben. Wer
+# nach der Installation eine Zone anlegte, klickte auf Speichern und bekam
+# eine Fehlermeldung - oder schlimmer: gar keine, weil das Schreiben mit @
+# unterdrueckt war. Das betraf nicht nur das Update, sondern schon die
+# Erstinstallation.
+if id loxberry >/dev/null 2>&1; then
+    chown -R loxberry:loxberry "$PCONFIG" "$PDATA" "$PLOG" "$PBIN" 2>/dev/null
+    for BKD in "$BASE/config/plugins/$PFOLDER".backup.*; do
+        [ -e "$BKD" ] && chown loxberry:loxberry "$BKD" 2>/dev/null
+    done
+    echo "<OK> Eigentuemer der Konfigurations-, Daten- und Protokolldateien: loxberry."
+else
+    echo "<INFO> Benutzer loxberry nicht gefunden - Eigentuemer nicht geaendert."
+fi
+
 # ---------- Python ----------
 PY3=$(command -v python3)
 if [ -z "$PY3" ]; then
@@ -58,6 +85,14 @@ if [ -z "$PY3" ]; then
 fi
 PYVER=$("$PY3" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)
 echo "<INFO> Gefundenes Python: $PYVER"
+# Untergrenze 3.8 - und die bleibt so.
+#
+# Der Quelltext kommt mit 3.8 aus: 'from __future__ import annotations' macht
+# die Schreibweisen 'float | None' und 'dict[str, Any]' zu blossen
+# Zeichenketten, die zur Laufzeit gar nicht ausgewertet werden, und
+# asyncio.run gibt es seit 3.7. Die Untergrenze anzuheben, weil LoxBerry 3
+# ohnehin Python 3.9 mitbringt, wuerde also nichts gewinnen und nur
+# Installationen ausschliessen, auf denen das Plugin laufen wuerde.
 "$PY3" -c 'import sys;sys.exit(0 if sys.version_info>=(3,8) else 1)' || {
     echo "<FAIL> Python 3.8 oder neuer wird gebraucht, gefunden wurde $PYVER."
     exit 1

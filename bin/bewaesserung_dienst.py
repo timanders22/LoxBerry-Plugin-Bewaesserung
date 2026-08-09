@@ -113,17 +113,40 @@ def json_lesen(p: str) -> dict:
 
 
 def json_schreiben(p: str, d: Any, rechte: int | None = None) -> bool:
+    """Nebendatei schreiben, dann umbenennen - os.replace ist unteilbar.
+
+    Der Name der Nebendatei traegt die Prozessnummer. Ohne sie hiess sie
+    schlicht <datei>.tmp, und die ist nicht eindeutig: der Dienst schreibt
+    abbild.json im Takt, und derselbe Code laeuft ein zweites Mal, sobald
+    jemand im Reiter Test auf 'Jetzt rechnen' klickt (dienst.sh einmal).
+    Beide schrieben dann in dieselbe Nebendatei, und was am Ende umbenannt
+    wurde, war eine Mischung aus zwei JSON-Dokumenten - also keines.
+
+    fsync vor dem Umbenennen: ohne ihn steht nach einem Stromausfall zwar
+    ein Dateiname da, aber womoeglich noch kein Inhalt. Beim Verlauf des
+    Wasserhaushalts waere das der Unterschied zwischen 'Bilanz laeuft
+    weiter' und 'faengt bei null an'.
+    """
+    tmp = "%s.tmp.%d" % (p, os.getpid())
     try:
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(d, fh, ensure_ascii=False, indent=1)
+            fh.flush()
+            os.fsync(fh.fileno())
         if rechte is not None:
             os.chmod(tmp, rechte)
         os.replace(tmp, p)
         return True
-    except OSError as f:
+    except (OSError, TypeError, ValueError) as f:
+        # TypeError/ValueError: ein nicht serialisierbarer Wert im Abbild.
+        # Ohne diesen Zweig bliebe eine halbe Nebendatei liegen und der
+        # Fehler flöge bis in die Hauptschleife.
         _LOG.error("Konnte %s nicht schreiben: %s", p, f)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
         return False
 
 
@@ -198,7 +221,13 @@ def mqtt_senden(paare: dict, praefix: str) -> int:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         for name, wert in paare.items():
-            zeile = "%s/%s %s" % (praefix.strip("/"), name, wert)
+            # 'publish ' davor - das ist die Form, die der UDP-Eingang des
+            # LoxBerry-Gateways erwartet und die auch die uebrigen Plugins
+            # dieser Reihe benutzen. Bis 0.9.0 fehlte das Verb hier als
+            # einzigem Plugin.
+            zeile = "publish %s/%s %s" % (
+                _mqtt_thema(praefix.strip("/")), _mqtt_thema(name),
+                _mqtt_sauber(wert))
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", int(g["udpport"])))
             gesendet += 1
         s.close()
@@ -206,6 +235,40 @@ def mqtt_senden(paare: dict, praefix: str) -> int:
         _LOG.warning("MQTT-Gateway nicht erreichbar: %s", f)
         return 0
     return gesendet
+
+
+def _mqtt_sauber(wert: Any) -> str:
+    """Zeilenumbrueche und Steuerzeichen entfernen.
+
+    Der UDP-Eingang des Gateways wertet einen Zeilenumbruch als Ende des
+    Befehls: ein mehrzeiliger Wert zerfaellt dort in Bruchstuecke, aus denen
+    das Gateway erfundene Themen bildet.
+
+    Hier sind die Werte zwar durchweg Zahlen - aber die Themennamen kommen
+    aus dem Zonenschluessel, und der stammt aus der Konfiguration. Ein
+    Leerzeichen darin wuerde die Trennung zwischen Thema und Wert verschieben.
+    """
+    t = str(wert)
+    for z in ("\r\n", "\r", "\n", "\t"):
+        t = t.replace(z, " ")
+    t = "".join(c for c in t if c >= " ")
+    while "  " in t:
+        t = t.replace("  ", " ")
+    return t.strip()
+
+
+def _mqtt_thema(teil: Any) -> str:
+    """Einen Themenbestandteil bereinigen.
+
+    Strenger als beim Wert: im Thema darf ueberhaupt kein Leerzeichen stehen,
+    denn genau daran trennt das Gateway Thema und Nutzlast. Ein Zonenname wie
+    'Rasen hinten' wuerde die Zeile sonst mitten im Thema abschneiden, und
+    Loxone bekaeme das Thema 'bewaesserung/Rasen' mit dem Wert 'hinten'.
+    """
+    t = _mqtt_sauber(teil)
+    for z in (" ", "+", "#"):        # + und # sind MQTT-Platzhalter
+        t = t.replace(z, "_")
+    return t or "unbenannt"
 
 
 # ------------------------------------------------------------ Der Rechengang
@@ -260,7 +323,9 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
             quellen.Sammler({}, vorlagen()), online_heute, standort)
 
     m = dict(zus["messwerte"])
-    m["monat"], m["tag"] = heute.month, heute.day
+    # Das Jahr gehoert dazu: in einem Schaltjahr waere der Tagesindex
+    # sonst ab dem 1. Maerz um eins zu klein (siehe fao56.tagesnummer).
+    m["monat"], m["tag"], m["jahr"] = heute.month, heute.day, heute.year
     et0_eigen = None
     et0_fehler = ""
     if m.get("tmin") is not None and m.get("tmax") is not None:
@@ -496,12 +561,24 @@ def einmal() -> int:
 def selbsttest() -> int:
     z: list[tuple[int, str]] = []
     z.append((1, "Python %s" % sys.version.split()[0]))
+    # Welcher Interpreter laeuft hier eigentlich? Das ist die Frage, die man
+    # sich stellt, wenn paho-mqtt 'fehlt', obwohl es installiert wurde: es
+    # liegt dann in der virtuellen Umgebung, waehrend der Dienst mit dem
+    # System-Python laeuft.
+    in_venv = "/venv/" in sys.executable
+    z.append((1, "Interpreter: %s (%s)" % (
+        sys.executable,
+        "virtuelle Umgebung" if in_venv
+        else "System-Python - paho-mqtt muesste dann systemweit installiert sein")))
     try:
         import paho.mqtt.client  # noqa: F401
         z.append((1, "Paket paho-mqtt geladen (MQTT-Quellen moeglich)"))
     except ImportError:
         z.append((-1, "Paket paho-mqtt fehlt - nur Online- und HTTP-Quellen. "
-                      "Nachinstallieren: pip install paho-mqtt"))
+                      "Alles Uebrige laeuft weiter." + ("" if in_venv else
+                      " Achtung: dieser Lauf benutzt den System-Python. Wurde das "
+                      "Paket in die virtuelle Umgebung installiert, sieht er es "
+                      "nicht.")))
     for name, p in (("Konfiguration", CONFIGDIR), ("Daten", DATADIR), ("Log", LOGDIR)):
         os.makedirs(p, exist_ok=True)
         z.append((1 if os.access(p, os.W_OK) else 0,

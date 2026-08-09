@@ -7,7 +7,15 @@
 # gestartet, kommt dort ueberall Leerstring zurueck - das Skript werkelt dann
 # gegen /-Pfade und meldet trotzdem Erfolg.
 
-SELF=$(cd "$(dirname "$0")" && pwd)          # <home>/bin/plugins/<ordner>
+# readlink -f loest Symlinks auf, BEVOR das Verzeichnis bestimmt wird.
+#
+# LoxBerry legt Daemons als Symlink unter system/daemons/plugins/ ab. Von dort
+# aufgerufen ergaebe dirname "$0" den Pfad .../system/daemons/plugins, PNAME
+# waere buchstaeblich "plugins", und der Dienst legte PID-Datei, Sollmerker
+# und Protokoll unter <home>/data/plugins/plugins/ an - neben, nicht in
+# seinem eigenen Ordner. Die Oberflaeche saehe den Dienst nie laufen, und der
+# Waechter startete ihn jede Minute ein weiteres Mal.
+SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # <home>/bin/plugins/<ordner>
 PNAME=$(basename "$SELF")
 LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
@@ -17,7 +25,29 @@ PID="$PDATA/dienst.pid"
 SOLL="$PDATA/soll_laufen"
 LOGDATEI="$PLOG/bewaesserung.log"
 SKRIPT="$SELF/bewaesserung_dienst.py"
-PY="$SELF/venv/bin/python3"
+# Welcher Python?
+#
+# Die virtuelle Umgebung gibt es nur, damit das FREIWILLIGE Paket paho-mqtt
+# einen Platz hat. Der Dienst selbst kommt mit der Standardbibliothek aus.
+#
+# postinstall.sh sagt darum ausdruecklich: 'Das Plugin laeuft trotzdem - dann
+# aber ohne MQTT-Quellen', wenn sich die Umgebung nicht anlegen laesst (etwa
+# weil das Paket python3-venv fehlt). Bis 0.9.1 hielt dieses Skript sich
+# nicht daran: es bestand auf venv/bin/python3 und verweigerte den Start mit
+# 'Plugin neu installieren'. Die Installation meldete also Erfolg mit einer
+# beruhigenden Nebenbemerkung, und der Dienst lief nie an - auch der Reiter
+# Test schlug fehl, mit einem Hinweis auf die falsche Ursache.
+#
+# Deshalb: die Umgebung wird bevorzugt, der System-Python ist die
+# Rueckfallebene. Erst wenn es beide nicht gibt, ist es ein Fehler.
+PYVENV="$SELF/venv/bin/python3"
+if [ -x "$PYVENV" ]; then
+    PY="$PYVENV"
+    PYHERKUNFT="virtuelle Umgebung"
+else
+    PY=$(command -v python3 2>/dev/null)
+    PYHERKUNFT="System-Python (ohne virtuelle Umgebung - MQTT-Quellen brauchen paho-mqtt)"
+fi
 
 mkdir -p "$PDATA" "$PLOG" 2>/dev/null
 
@@ -36,9 +66,13 @@ starten() {
         echo "laeuft bereits (PID $(cat "$PID"))"
         return 0
     fi
-    if [ ! -x "$PY" ]; then
-        echo "FEHLER: virtuelle Python-Umgebung fehlt ($PY). Plugin neu installieren."
+    if [ -z "$PY" ] || [ ! -x "$PY" ]; then
+        echo "FEHLER: es wurde ueberhaupt kein python3 gefunden - weder unter"
+        echo "        $PYVENV noch im Suchpfad. Ohne Python laeuft der Dienst nicht."
         return 1
+    fi
+    if [ "$PY" != "$PYVENV" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hinweis: die virtuelle Umgebung fehlt, es wird $PY benutzt. Alles laeuft - nur MQTT-Quellen brauchen paho-mqtt." >> "$LOGDATEI"
     fi
     if [ ! -f "$SKRIPT" ]; then
         echo "FEHLER: $SKRIPT fehlt. Plugin neu installieren."
@@ -98,9 +132,21 @@ case "$1" in
         exit 1
         ;;
     selbsttest)
+        # Auch hier gilt die Rueckfallebene. Bis 0.9.1 schlug der Reiter Test
+        # fehl, sobald die virtuelle Umgebung fehlte - und die Meldung wies
+        # auf 'Plugin neu installieren' statt auf den wahren Grund.
+        if [ -z "$PY" ] || [ ! -x "$PY" ]; then
+            echo "FEHLER: kein python3 gefunden (weder $PYVENV noch im Suchpfad)."
+            exit 1
+        fi
+        echo "Python: $PY  ($PYHERKUNFT)"
         "$PY" "$SKRIPT" --selbsttest
         ;;
     einmal)
+        if [ -z "$PY" ] || [ ! -x "$PY" ]; then
+            echo "FEHLER: kein python3 gefunden (weder $PYVENV noch im Suchpfad)."
+            exit 1
+        fi
         "$PY" "$SKRIPT" --einmal
         ;;
     waechter)

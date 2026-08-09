@@ -110,6 +110,18 @@ if ($bw_post && isset($_POST['speichern'])) {
             $bw_cfg[$f] = $w;
         }
     }
+    // Gleiche Anfangs- und Endzeit wird abgewiesen.
+    //
+    // '08:00 bis 08:00' ist der Tippfehler, der entsteht, wenn jemand die
+    // zweite Zeit vergisst zu aendern. Bis 0.9.0 fiel das in den
+    // Mitternachtszweig der Fensterrechnung und kam als volle 24 Stunden
+    // heraus - der Plan haette dann die ganze Nacht zum Giessen gehabt.
+    // Wer wirklich rund um die Uhr giessen will, traegt 00:00 bis 23:59 ein;
+    // das sagt dasselbe und meint es auch.
+    if (isset($bw_cfg['fenster_von'], $bw_cfg['fenster_bis'])
+        && $bw_cfg['fenster_von'] === $bw_cfg['fenster_bis']) {
+        $bw_fehler[] = bw_t('EINST.FEHLER_FENSTER_GLEICH');
+    }
     $bw_topic = $bw_sauber('mqtt_topic');
     if ($bw_topic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $bw_topic)) {
         $bw_fehler[] = bw_t('EINST.FEHLER_TOPIC');
@@ -247,6 +259,12 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_RATE'), bw_e($bw_name));
             continue;
         }
+        // Mikroklima-Faktor. Leer heisst 1,0 - und das ist der Regelfall.
+        $bw_mk = $bw_hol('z_mikroklima');
+        if ($bw_mk !== '' && (!is_numeric($bw_mk) || (float) $bw_mk < 0.3 || (float) $bw_mk > 1.5)) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_MIKRO'), bw_e($bw_name));
+            continue;
+        }
         $bw_alt = bw_zone($bw_s);
         $bw_neu[] = array(
             'schluessel'   => $bw_s,
@@ -260,6 +278,7 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             'theta_fc'     => (float) $bw_bodd['theta_fc'],
             'theta_wp'     => (float) $bw_bodd['theta_wp'],
             'rate_mmh'     => $bw_rate !== '' ? (float) $bw_rate : 0.0,
+            'mikroklima'   => $bw_mk !== '' ? (float) $bw_mk : 1.0,
             'rate_gemessen' => (int) (isset($bw_alt['rate_gemessen']) ? $bw_alt['rate_gemessen'] : 0),
             'im_zyklus'    => !empty($_POST['z_zyklus'][$bw_i]) ? 1 : 0,
             'feuchte_thema' => trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
@@ -425,17 +444,17 @@ if ($bw_rahmen) {
 </table>
 
 <div class="sm-tabs">
-  <a href="#" class="sm-tab" data-ziel="tab-settings"><?= bw_e(bw_t('REITER.EINSTELLUNGEN')) ?></a>
-  <a href="#" class="sm-tab" data-ziel="tab-sources"><?= bw_e(bw_t('REITER.QUELLEN')) ?></a>
-  <a href="#" class="sm-tab" data-ziel="tab-zones"><?= bw_e(bw_t('REITER.ZONEN')) ?></a>
-  <a href="#" class="sm-tab" data-ziel="tab-mqtt"><?= bw_e(bw_t('REITER.MQTT')) ?></a>
-  <a href="#" class="sm-tab" data-ziel="tab-loxone"><?= bw_e(bw_t('REITER.LOXONE')) ?></a>
-  <a href="#" class="sm-tab" data-ziel="tab-test"><?= bw_e(bw_t('REITER.TEST')) ?></a>
-  <a href="#" class="sm-tab" data-ziel="tab-log"><?= bw_e(bw_t('REITER.LOG')) ?></a>
+  <a href="index.php?form=settings" class="sm-tab<?= $bw_tab === 'tab-settings' ? ' sm-active' : '' ?>" data-ziel="tab-settings"><?= bw_e(bw_t('REITER.EINSTELLUNGEN')) ?></a>
+  <a href="index.php?form=sources" class="sm-tab<?= $bw_tab === 'tab-sources' ? ' sm-active' : '' ?>" data-ziel="tab-sources"><?= bw_e(bw_t('REITER.QUELLEN')) ?></a>
+  <a href="index.php?form=zones" class="sm-tab<?= $bw_tab === 'tab-zones' ? ' sm-active' : '' ?>" data-ziel="tab-zones"><?= bw_e(bw_t('REITER.ZONEN')) ?></a>
+  <a href="index.php?form=mqtt" class="sm-tab<?= $bw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" data-ziel="tab-mqtt"><?= bw_e(bw_t('REITER.MQTT')) ?></a>
+  <a href="index.php?form=loxone" class="sm-tab<?= $bw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" data-ziel="tab-loxone"><?= bw_e(bw_t('REITER.LOXONE')) ?></a>
+  <a href="index.php?form=test" class="sm-tab<?= $bw_tab === 'tab-test' ? ' sm-active' : '' ?>" data-ziel="tab-test"><?= bw_e(bw_t('REITER.TEST')) ?></a>
+  <a href="index.php?form=log" class="sm-tab<?= $bw_tab === 'tab-log' ? ' sm-active' : '' ?>" data-ziel="tab-log"><?= bw_e(bw_t('REITER.LOG')) ?></a>
 </div>
 
 <!-- ============ Einstellungen ============ -->
-<div class="sm-seite" id="tab-settings">
+<div class="sm-seite<?= $bw_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
 <div class="sm-hinweis"><?= bw_t('EINST.WAS_IST_DAS') ?></div>
 
 <h2><?= bw_e(bw_t('EINST.H_DIENST')) ?></h2>
@@ -444,15 +463,15 @@ if ($bw_rahmen) {
   <span style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
   <span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
-<form method="post">
-  <input type="hidden" name="activetab" value="tab-settings">
-  <button class="sm-b sm-b-aktion" name="dienst" value="start"><?= bw_e(bw_t('EINST.K_START')) ?></button>
-  <button class="sm-b sm-b-aktion" name="dienst" value="restart"><?= bw_e(bw_t('EINST.K_NEUSTART')) ?></button>
-  <button class="sm-b sm-b-aktion" name="dienst" value="stop"><?= bw_e(bw_t('EINST.K_STOP')) ?></button>
+<form action="index.php" method="post">
+  <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+  <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="start"><?= bw_e(bw_t('EINST.K_START')) ?></button>
+  <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="restart"><?= bw_e(bw_t('EINST.K_NEUSTART')) ?></button>
+  <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="stop"><?= bw_e(bw_t('EINST.K_STOP')) ?></button>
 </form>
 
-<form method="post">
-<input type="hidden" name="activetab" value="tab-settings">
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
 <h2><?= bw_e(bw_t('EINST.H_STANDORT')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('EINST.STANDORT_ERKLAERUNG') ?></p>
 <?php foreach (array('breite', 'laenge', 'hoehe', 'wind_hoehe') as $bw_f) { ?>
@@ -490,17 +509,17 @@ if ($bw_rahmen) {
   <label for="mqtt_topic"><?= bw_e(bw_t('EINST.L_MQTT_TOPIC')) ?></label>
   <input data-role="none" type="text" name="mqtt_topic" id="mqtt_topic" value="<?= bw_e($bw_cfg['mqtt_topic']) ?>">
 </div>
-<button class="sm-b sm-b-aktion" name="speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
+<button data-role="none" class="sm-b sm-b-aktion" name="speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 </div>
 
 <!-- ============ Quellen ============ -->
-<div class="sm-seite" id="tab-sources">
+<div class="sm-seite<?= $bw_tab === 'tab-sources' ? ' sm-active' : '' ?>" id="tab-sources">
 <h2><?= bw_e(bw_t('QUELL.H_TITEL')) ?></h2>
 <div class="sm-hinweis"><?= bw_t('QUELL.ERKLAERUNG') ?></div>
 
-<form method="post">
-<input type="hidden" name="activetab" value="tab-sources">
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-sources">
 <div class="sm-feld">
   <label for="vorlage"><?= bw_e(bw_t('QUELL.L_VORLAGE')) ?></label>
   <select data-role="none" name="vorlage" id="vorlage">
@@ -510,14 +529,14 @@ if ($bw_rahmen) {
   </select>
   <p class="sm-hilfe"><?= bw_t('QUELL.H_VORLAGE') ?></p>
 </div>
-<button class="sm-b sm-b-aktion" name="vorlage_waehlen" value="1"><?= bw_e(bw_t('QUELL.K_VORLAGE')) ?></button>
+<button data-role="none" class="sm-b sm-b-aktion" name="vorlage_waehlen" value="1"><?= bw_e(bw_t('QUELL.K_VORLAGE')) ?></button>
 </form>
 <?php if (isset($bw_q['vorlage']) && isset($bw_vorl['vorlagen'][$bw_q['vorlage']]['hinweis'])) { ?>
 <div class="sm-warnung"><?= bw_e($bw_vorl['vorlagen'][$bw_q['vorlage']]['hinweis']) ?></div>
 <?php } ?>
 
-<form method="post">
-<input type="hidden" name="activetab" value="tab-sources">
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-sources">
 <div class="sm-feld">
   <label for="http_url"><?= bw_e(bw_t('QUELL.L_URL')) ?></label>
   <input data-role="none" type="text" name="http_url" id="http_url"
@@ -553,20 +572,21 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <?php } ?>
 </table>
 <p class="sm-hilfe"><?= bw_t('QUELL.FUSSNOTE') ?></p>
-<button class="sm-b sm-b-aktion" name="quellen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
+<button data-role="none" class="sm-b sm-b-aktion" name="quellen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 </div>
 
 <!-- ============ Zonen ============ -->
-<div class="sm-seite" id="tab-zones">
+<div class="sm-seite<?= $bw_tab === 'tab-zones' ? ' sm-active' : '' ?>" id="tab-zones">
 <h2><?= bw_e(bw_t('ZONE.H_TITEL')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('ZONE.ERKLAERUNG') ?></p>
-<form method="post">
-<input type="hidden" name="activetab" value="tab-zones">
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-zones">
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_SCHLUESSEL')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_FLAECHE')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEPFLANZUNG')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_BODEN')) ?></th><th><?= bw_e(bw_t('ZONE.T_RATE')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_MIKRO')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_FEUCHTE')) ?></th><th><?= bw_e(bw_t('ZONE.T_ZYKLUS')) ?></th></tr>
 <?php for ($bw_i = 0; $bw_i < 8; $bw_i++) {
     $bw_z = isset($bw_zonen[$bw_i]) ? $bw_zonen[$bw_i] : array(); ?>
@@ -593,6 +613,9 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
           ? '<span class="sm-an">' . bw_e(bw_t('ZONE.GEMESSEN')) . '</span>'
           : '<span class="sm-schaetz">' . bw_e(bw_t('ZONE.GESCHAETZT')) . '</span>' ?></div>
       <?php } ?></td>
+  <td><input data-role="none" type="text" name="z_mikroklima[<?= $bw_i ?>]" size="4"
+             value="<?= bw_e(isset($bw_z['mikroklima']) && (float) $bw_z['mikroklima'] != 1.0
+                             ? $bw_z['mikroklima'] : '') ?>" placeholder="1,0"></td>
   <td><input data-role="none" type="text" name="z_feuchte[<?= $bw_i ?>]" size="16"
              value="<?= bw_e(isset($bw_z['feuchte_thema']) ? $bw_z['feuchte_thema'] : '') ?>"
              placeholder="<?= bw_e(bw_t('ZONE.P_FEUCHTE')) ?>"></td>
@@ -601,14 +624,15 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <?php } ?>
 </table>
 <p class="sm-hilfe"><?= bw_t('ZONE.FUSSNOTE') ?></p>
-<button class="sm-b sm-b-aktion" name="zonen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
+<p class="sm-hilfe"><?= bw_t('ZONE.HILFE_MIKRO') ?></p>
+<button data-role="none" class="sm-b sm-b-aktion" name="zonen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 
 <h2><?= bw_e(bw_t('ZONE.H_BECHER')) ?></h2>
 <div class="sm-warnung"><?= bw_t('ZONE.BECHER_ERKLAERUNG') ?></div>
 <?php if ($bw_zonen) { ?>
-<form method="post">
-<input type="hidden" name="activetab" value="tab-zones">
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-zones">
 <div class="sm-feld"><label for="becher"><?= bw_e(bw_t('ZONE.L_BECHER_ZONE')) ?></label>
 <select data-role="none" name="becher" id="becher">
 <?php foreach ($bw_zonen as $bw_z) { ?>
@@ -619,7 +643,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <input data-role="none" type="text" name="becher_min" id="becher_min" value="15"></div>
 <div class="sm-feld"><label for="becher_mm"><?= bw_e(bw_t('ZONE.L_BECHER_MM')) ?></label>
 <input data-role="none" type="text" name="becher_mm" id="becher_mm" value=""></div>
-<button class="sm-b sm-b-aktion" name="becher_senden" value="1"><?= bw_e(bw_t('ZONE.K_BECHER')) ?></button>
+<button data-role="none" class="sm-b sm-b-aktion" name="becher_senden" value="1"><?= bw_e(bw_t('ZONE.K_BECHER')) ?></button>
 </form>
 <?php } ?>
 
@@ -648,7 +672,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 </div>
 
 <!-- ============ MQTT ============ -->
-<div class="sm-seite" id="tab-mqtt">
+<div class="sm-seite<?= $bw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
 <h2><?= bw_e(bw_t('MQTT.H_TITEL')) ?></h2>
 <?php $bw_g = bw_mqtt_zustand(); ?>
 <table class="sm-tabelle" style="max-width:520px">
@@ -677,7 +701,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 </div>
 
 <!-- ============ Einbindung in Loxone ============ -->
-<div class="sm-seite" id="tab-loxone">
+<div class="sm-seite<?= $bw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <h2><?= bw_e(bw_t('LOX.H_TITEL')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('LOX.EINLEITUNG') ?></p>
 
@@ -692,9 +716,9 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <?php } ?>
 </table>
 <p class="sm-hilfe sm-mono">http://<?= bw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'loxberry') ?>/plugins/<?= bw_e($bw_p['plugin']) ?>/index.php?token=<?= bw_e($bw_token) ?>&amp;aktion=status</p>
-<form method="post" style="display:inline">
-  <input type="hidden" name="activetab" value="tab-loxone">
-  <button class="sm-b sm-b-lesen" name="vorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_VORLAGE')) ?></button>
+<form action="index.php" method="post" style="display:inline">
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <button data-role="none" class="sm-b sm-b-lesen" name="vorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_VORLAGE')) ?></button>
 </form>
 </div>
 
@@ -739,16 +763,16 @@ foreach ($bw_liste as $bw_z2) { ?>
 <h3><?= bw_e(bw_t('LOX.S4_TITEL')) ?></h3>
 <p class="sm-hilfe"><?= bw_t('LOX.S4_TEXT') ?></p>
 <table class="sm-tabelle"><tr><th><?= bw_e(bw_t('LOX.T_TOKEN')) ?></th><td class="sm-mono"><?= bw_e($bw_token) ?></td></tr></table>
-<form method="post" style="display:inline">
-  <input type="hidden" name="activetab" value="tab-loxone">
-  <button class="sm-b sm-b-aktion" name="token_neu" value="1"
+<form action="index.php" method="post" style="display:inline">
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <button data-role="none" class="sm-b sm-b-aktion" name="token_neu" value="1"
     onclick="return confirm(<?= json_encode(strip_tags(html_entity_decode(bw_t('LOX.TOKEN_FRAGE'), ENT_QUOTES, 'UTF-8'))) ?>)"><?= bw_e(bw_t('LOX.K_TOKEN_NEU')) ?></button>
 </form>
 </div>
 </div>
 
 <!-- ============ Test ============ -->
-<div class="sm-seite" id="tab-test">
+<div class="sm-seite<?= $bw_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?= bw_e(bw_t('TEST.H_SELBSTPRUEFUNG')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('TEST.EINLEITUNG') ?></p>
 <?= bw_pruefungen_html() ?>
@@ -759,12 +783,12 @@ foreach ($bw_liste as $bw_z2) { ?>
   <span style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
   <span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
-<form method="post">
-  <input type="hidden" name="activetab" value="tab-test">
-  <button class="sm-b sm-b-lesen" name="test" value="status"><?= bw_e(bw_t('TEST.K_STATUS')) ?></button>
-  <button class="sm-b sm-b-technik" name="test" value="roh"><?= bw_e(bw_t('TEST.K_ROH')) ?></button>
-  <button class="sm-b sm-b-technik" name="selbsttest" value="1"><?= bw_e(bw_t('TEST.K_SELBSTTEST')) ?></button>
-  <button class="sm-b sm-b-aktion" name="test" value="rechnen"><?= bw_e(bw_t('TEST.K_RECHNEN')) ?></button>
+<form action="index.php" method="post">
+  <input data-role="none" type="hidden" name="activetab" value="tab-test">
+  <button data-role="none" class="sm-b sm-b-lesen" name="test" value="status"><?= bw_e(bw_t('TEST.K_STATUS')) ?></button>
+  <button data-role="none" class="sm-b sm-b-technik" name="test" value="roh"><?= bw_e(bw_t('TEST.K_ROH')) ?></button>
+  <button data-role="none" class="sm-b sm-b-technik" name="selbsttest" value="1"><?= bw_e(bw_t('TEST.K_SELBSTTEST')) ?></button>
+  <button data-role="none" class="sm-b sm-b-aktion" name="test" value="rechnen"><?= bw_e(bw_t('TEST.K_RECHNEN')) ?></button>
 </form>
 <?php if ($bw_ausgabe !== '') { ?>
 <div class="sm-log"><?= bw_e($bw_ausgabe) ?></div>
@@ -775,7 +799,7 @@ foreach ($bw_liste as $bw_z2) { ?>
 </div>
 
 <!-- ============ Logdateien ============ -->
-<div class="sm-seite" id="tab-log">
+<div class="sm-seite<?= $bw_tab === 'tab-log' ? ' sm-active' : '' ?>" id="tab-log">
 <h2><?= bw_e(bw_t('LOG.H_TITEL')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('LOG.ERKLAERUNG') ?></p>
 <p class="sm-hilfe sm-mono"><?= bw_e($bw_p['log']) ?></p>
@@ -791,9 +815,9 @@ if (!$bw_zeilen) { ?>
 <div class="sm-log"><?= bw_e(implode("\n", $bw_zeilen)) ?></div>
 <?php } ?>
 <div class="sm-legende"><span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
-<form method="post">
-  <input type="hidden" name="activetab" value="tab-log">
-  <button class="sm-b sm-b-aktion" name="log_leeren" value="1"><?= bw_e(bw_t('LOG.K_LEEREN')) ?></button>
+<form action="index.php" method="post">
+  <input data-role="none" type="hidden" name="activetab" value="tab-log">
+  <button data-role="none" class="sm-b sm-b-aktion" name="log_leeren" value="1"><?= bw_e(bw_t('LOG.K_LEEREN')) ?></button>
 </form>
 </div>
 

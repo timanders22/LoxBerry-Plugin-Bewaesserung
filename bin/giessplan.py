@@ -46,6 +46,40 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
     """
     kc = float(zone.get("kc") or 1.0)
     zr = float(zone.get("zr") or 0.5)
+    # Mikroklima-Faktor (ab 0.9.1).
+    #
+    # ETc = Kc * ET0 unterstellt die Bedingungen der Grasreferenz: freie
+    # Fläche, freier Himmel, freier Wind. Ein Garten ist das selten. Hinter
+    # der Nordwand des Hauses fehlt die halbe Einstrahlung; unter einer Hecke
+    # fehlt sie fast ganz; im Kiesbeet vor einer Sued-Mauer kommt Waerme von
+    # der Wand dazu.
+    #
+    # [F] behandelt das in Kapitel 9 als Anpassung von Kc an nicht
+    # standardgemaesse Bedingungen. Hier steht es als eigener Faktor daneben,
+    # damit Kc weiterhin das ist, was in der Tabelle steht - wer beides
+    # vermischt, weiss spaeter nicht mehr, was er warum eingetragen hat.
+    #
+    # Der Bereich geht ausdruecklich auch NACH OBEN. Ein Faktor unter 1 fuer
+    # Schatten ist der bekannte Fall; die Hitzeecke ist der andere und wird
+    # regelmaessig vergessen. Beide Richtungen kommen vor, also lassen wir
+    # beide zu - 0,3 bis 1,5.
+    #
+    # Vorgabe 1,0: ohne Eintrag aendert sich nichts, und keine bestehende
+    # Anlage rechnet ab dieser Fassung anders.
+    # Die Null gilt als "nichts eingetragen", nicht als untere Grenze.
+    #
+    # Ein Faktor 0 wuerde bedeuten: diese Zone verdunstet nie. Sie braeuchte
+    # dann nie Wasser, und das Plugin wuerde das ohne ein Wort so melden - die
+    # gefaehrlichste Art von Fehleingabe. Sie auf 0,3 hochzuziehen waere
+    # genauso stillschweigend falsch. Also wird sie wie ein leeres Feld
+    # behandelt, so wie es kc, zr und p in denselben Zeilen darueber auch tun
+    # (dort mit 'or'). Wer wirklich 0,3 will, traegt 0,3 ein.
+    mikro = zone.get("mikroklima")
+    try:
+        mikro = float(mikro) if mikro not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        mikro = 0.0
+    mikro = 1.0 if mikro == 0.0 else max(0.3, min(1.5, mikro))
     p_tab = float(zone.get("p") or 0.4)
     fc = float(zone.get("theta_fc") or 0.25)
     wp = float(zone.get("theta_wp") or 0.12)
@@ -63,7 +97,10 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
     etc_letzter = 0.0
     for tag in verlauf:
         et0 = max(0.0, float(tag.get("et0") or 0.0))
-        etc_moeglich = kc * et0
+        # Der Faktor greift an ETc, nicht an ET0: ET0 ist die Verdunstung der
+        # Grasreferenz AM STANDORT und fuer alle Zonen dieselbe Zahl. Sie je
+        # Zone zu verbiegen waere eine Falschaussage ueber das Wetter.
+        etc_moeglich = kc * et0 * mikro
         # Trockenstress bremst die Verdunstung [FAO-56, Gl. 84]. Ohne das
         # waere der Bedarf in einer laengeren Trockenheit zu hoch gerechnet.
         p = fao56.p_angepasst(p_tab, etc_moeglich)
@@ -98,7 +135,7 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
     dr = max(0.0, min(taw_mm, dr))
 
     # --- Wo stehen wir? ---
-    p_jetzt = fao56.p_angepasst(p_tab, etc_letzter or kc * 3.0)
+    p_jetzt = fao56.p_angepasst(p_tab, etc_letzter or kc * mikro * 3.0)
     raw_mm = fao56.raw(taw_mm, p_jetzt)
 
     # --- Vorschau: was kommt an Verdunstung und Regen? ---
@@ -115,7 +152,7 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
             # Wahrscheinlichkeit gewichtet, bevor sie angerechnet wird.
             r = r * max(0.0, min(1.0, float(w) / 100.0))
         regen_kommend += r
-    etc_kommend = kc * et0_kommend
+    etc_kommend = kc * et0_kommend * mikro
     regen_angerechnet = regen_kommend * anteil
 
     # --- Bedarf ---
@@ -140,6 +177,7 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
         "regen_angerechnet": regen_angerechnet,
         "bedarf_mm": bedarf_mm,
         "noetig": 1 if noetig else 0,
+        "mikroklima": mikro,
         "sensor_benutzt": 1 if sensor is not None else 0,
         "sensor_hinweis": sensor_hinweis,
     }
@@ -200,29 +238,56 @@ def plan_bauen(zonen: list[dict], ergebnisse: dict, cfg: dict) -> dict:
         moeglich = max(0, min(grenze, moeglich))
 
     # Wie viele Durchlaeufe braucht die duerstigste Zone?
+    #
+    # Ohne Niederschlagsrate laesst sich das NICHT ausrechnen. Bis 0.9.0 kam
+    # in diesem Fall n = 0 heraus, und weil der Plan nur die groesste Zahl
+    # nimmt, endete das bei 'kein_bedarf' - also bei der Aussage, die Zone
+    # brauche kein Wasser. Das ist die schlimmste Art von Fehler: eine
+    # durstige Zone wird als versorgt gemeldet.
+    #
+    # Geraten wird trotzdem nicht. Eine erfundene Zahl waere hier genauso
+    # falsch, nur unauffaelliger: aus 'ein Durchlauf' wuerden je nach Regner
+    # 0,5 mm oder 8 mm. Der Plan benennt die Luecke stattdessen, und die
+    # Oberflaeche zeigt, welche Zone es betrifft.
     noetig = 0
     je_zone = {}
+    ohne_rate = []
     for z in im_zyklus:
         s = z["schluessel"]
         e = ergebnisse[s]
         rate = float(z.get("rate_mmh") or 0.0)
         mm_je_durchlauf = rate * wirkungsgrad * (dauer_s / 3600.0) if rate > 0 else 0.0
         n = 0
+        fehlt_rate = 0
         if e["bedarf_mm"] > 0 and mm_je_durchlauf > 0:
             n = int(math.ceil(e["bedarf_mm"] / mm_je_durchlauf))
-        je_zone[s] = {"mm_je_durchlauf": mm_je_durchlauf, "noetig": n}
+        elif e["bedarf_mm"] > 0:
+            # Bedarf ja, Rate nein: das ist keine Null, sondern eine Luecke.
+            fehlt_rate = 1
+            ohne_rate.append(str(z.get("name") or s))
+        je_zone[s] = {"mm_je_durchlauf": mm_je_durchlauf, "noetig": n,
+                      "rate_fehlt": fehlt_rate}
         noetig = max(noetig, n)
 
     durchlaeufe = min(noetig, moeglich)
     reicht = 1 if durchlaeufe >= noetig else 0
 
     grund = ""
-    if noetig == 0:
+    if fenster_min <= 0:
+        grund = "fenster_ungueltig"
+    elif ohne_rate and noetig == 0:
+        # Es GIBT Bedarf, er laesst sich nur nicht in Durchlaeufe umrechnen.
+        grund = "rate_fehlt"
+        reicht = 0
+    elif noetig == 0:
         grund = "kein_bedarf"
     elif moeglich == 0:
         grund = "fenster_zu_kurz"
     elif not reicht:
         grund = "anlage_am_limit"
+    elif ohne_rate:
+        # Ein Teil der Zonen laesst sich rechnen, ein anderer nicht.
+        grund = "rate_fehlt_teilweise"
 
     return {
         "durchlaeufe": durchlaeufe,
@@ -230,6 +295,7 @@ def plan_bauen(zonen: list[dict], ergebnisse: dict, cfg: dict) -> dict:
         "moegliche_durchlaeufe": moeglich,
         "reicht": reicht,
         "grund": grund,
+        "ohne_rate": ohne_rate,
         "fenster_minuten": fenster_min,
         "durchlauf_minuten": lauf_min,
         "takt_minuten": takt_min,
@@ -240,14 +306,33 @@ def plan_bauen(zonen: list[dict], ergebnisse: dict, cfg: dict) -> dict:
 
 
 def _fenster_minuten(von: str, bis: str) -> float:
-    """Laenge des Zeitfensters in Minuten, auch ueber Mitternacht."""
+    """Laenge des Zeitfensters in Minuten, auch ueber Mitternacht.
+
+    Gleiche Anfangs- und Endzeit ergibt 0, nicht 1440.
+
+    Bis 0.9.0 fiel '08:00 bis 08:00' in den Mitternachtszweig und kam als
+    volle 24 Stunden heraus. Gemeint ist das so gut wie nie - es ist der
+    Tippfehler, der entsteht, wenn jemand die zweite Zeit vergisst zu
+    aendern. Ein 24-Stunden-Fenster laesst sich weiterhin einstellen, nur
+    eben nicht aus Versehen: '00:00 bis 23:59' sagt dasselbe und meint es
+    auch.
+
+    Der Plan meldet fuer 0 den Grund 'fenster_ungueltig', und die
+    Oberflaeche weist die Eingabe schon beim Speichern zurueck. Es wird also
+    an keiner Stelle stillschweigend nicht gegossen.
+    """
     def m(s):
         try:
             h, mi = s.split(":")
-            return int(h) * 60 + int(mi)
+            h, mi = int(h), int(mi)
         except (ValueError, AttributeError):
-            return 0
+            return -1
+        if not (0 <= h <= 23 and 0 <= mi <= 59):
+            return -1
+        return h * 60 + mi
     a, b = m(von), m(bis)
+    if a < 0 or b < 0 or a == b:
+        return 0.0
     return float(b - a if b > a else 24 * 60 - a + b)
 
 
@@ -367,6 +452,95 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     e.append((2.0 < mm_nacht < 6.0,
               "Hoechstleistung der Anlage: %.1f mm je Nacht (8 Durchlaeufe a 4 min "
               "bei 10 mm/h) - ein heisser Sommertag verdunstet 4 bis 5 mm" % mm_nacht))
+
+    # --- Mikroklima-Faktor (neu in 0.9.1) ---
+    #
+    # Der Faktor muss zwei Dinge leisten: er muss wirken, UND er darf ohne
+    # Eintrag nichts aendern. Das zweite ist das wichtigere - sonst rechnet
+    # jede bestehende Anlage ab dieser Fassung anders.
+    vor7 = [{"et0": 5.0, "regen": 0.0} for _ in range(7)]
+    ohne_f = zone_rechnen(dict(zone, dr=0.0), vor7, [], cfg)
+    eins_f = zone_rechnen(dict(zone, dr=0.0, mikroklima=1.0), vor7, [], cfg)
+    leer_f = zone_rechnen(dict(zone, dr=0.0, mikroklima=""), vor7, [], cfg)
+    e.append((abs(ohne_f["dr"] - eins_f["dr"]) < 1e-9
+              and abs(ohne_f["dr"] - leer_f["dr"]) < 1e-9,
+              "Ohne Eintrag, mit 1,0 und mit leerem Feld: dasselbe Ergebnis (%.3f mm)"
+              % ohne_f["dr"]))
+    schatten = zone_rechnen(dict(zone, dr=0.0, mikroklima=0.6), vor7, [], cfg)
+    hitze = zone_rechnen(dict(zone, dr=0.0, mikroklima=1.4), vor7, [], cfg)
+    e.append((schatten["dr"] < ohne_f["dr"] < hitze["dr"],
+              "7 Tage trocken: Schatten %.1f mm < normal %.1f mm < Hitzeecke %.1f mm"
+              % (schatten["dr"], ohne_f["dr"], hitze["dr"])))
+    # Die Groessenordnung muss stimmen: 0,6 statt 1,0 heisst rund 40 Prozent
+    # weniger Verdunstung. Genau 40 sind es nicht, weil der Trockenstress
+    # (Ks) die Verdunstung zusaetzlich bremst - und zwar erst bei hoeherem
+    # Defizit, also beim unbeschatteten Beet frueher.
+    verhaeltnis = schatten["dr"] / ohne_f["dr"] if ohne_f["dr"] > 0 else 0.0
+    e.append((0.55 <= verhaeltnis <= 0.75,
+              "Faktor 0,6 senkt das Defizit auf %.0f %% - nicht genau 60 %%, weil "
+              "Ks unterschiedlich bremst" % (verhaeltnis * 100)))
+    # Grenzen: es wird begrenzt, nicht abgewiesen - und nicht ins Absurde.
+    e.append((zone_rechnen(dict(zone, mikroklima=99), [], [], cfg)["mikroklima"] == 1.5
+              and zone_rechnen(dict(zone, mikroklima=0), [], [], cfg)["mikroklima"] == 1.0
+              and zone_rechnen(dict(zone, mikroklima=-3), [], [], cfg)["mikroklima"] == 0.3
+              and zone_rechnen(dict(zone, mikroklima="0,6"), [], [], cfg)["mikroklima"] == 1.0,
+              "Faktor wird auf 0,3 bis 1,5 begrenzt; 0 und unlesbare Eingaben gelten "
+              "als 'nichts eingetragen' (1,0), nicht als 'verdunstet nie'"))
+    e.append((zone_rechnen(dict(zone, mikroklima=0.75), [], [], cfg)["mikroklima"] == 0.75,
+              "Der Faktor steht im Ergebnis, damit die Oberflaeche ihn zeigen kann"))
+
+    # --- Fehlende Niederschlagsrate wird BENANNT, nicht als "kein Bedarf"
+    #     durchgereicht (neu in 0.9.1) ---
+    #
+    # Das ist die heikelste Stelle des ganzen Moduls: bis 0.9.0 ergab eine
+    # Zone mit Bedarf, aber ohne Rate, null noetige Durchlaeufe - und weil der
+    # Plan nur die groesste Zahl nimmt, stand am Ende 'kein_bedarf'. Eine
+    # durstige Zone wurde also als versorgt gemeldet.
+    ohne = dict(zone, schluessel="ohne", name="Ohne Rate", dr=70.0)
+    ohne.pop("rate_mmh", None)
+    e_ohne = {"ohne": zone_rechnen(ohne, [], [{"et0": 5.0, "regen": 0.0}], cfg)}
+    pl_o = plan_bauen([ohne], e_ohne, cfg)
+    e.append((e_ohne["ohne"]["bedarf_mm"] > 0, "Zone ohne Rate hat trotzdem Bedarf: %.1f mm"
+              % e_ohne["ohne"]["bedarf_mm"]))
+    e.append((pl_o["grund"] == "rate_fehlt" and pl_o["reicht"] == 0
+              and pl_o["ohne_rate"] == ["Ohne Rate"],
+              "Ohne Rate: Grund '%s' statt 'kein_bedarf', Zone benannt (%s)"
+              % (pl_o["grund"], ", ".join(pl_o["ohne_rate"]))))
+    e.append((pl_o["je_zone"]["ohne"]["rate_fehlt"] == 1,
+              "Die Luecke steht auch je Zone im Plan"))
+    # Gemischt: eine Zone rechenbar, eine nicht - der Plan geht auf, sagt aber
+    # welche Zone fehlt.
+    a_z = dict(zone, schluessel="a", name="A", dr=52.0, rate_mmh=10.0)
+    b_z = dict(zone, schluessel="b", name="B", dr=52.0, rate_mmh=0.0)
+    e_mix = {"a": zone_rechnen(a_z, [], [{"et0": 2.0, "regen": 0.0}], dict(cfg, vorschautage=1)),
+             "b": zone_rechnen(b_z, [], [{"et0": 2.0, "regen": 0.0}], dict(cfg, vorschautage=1))}
+    pl_m = plan_bauen([a_z, b_z], e_mix, dict(cfg, vorschautage=1))
+    e.append((pl_m["grund"] == "rate_fehlt_teilweise" and pl_m["ohne_rate"] == ["B"],
+              "Teils rechenbar: Grund '%s', fehlende Rate bei %s"
+              % (pl_m["grund"], ", ".join(pl_m["ohne_rate"]))))
+    # Und: keine Division durch Null, bei keiner Schreibweise der Null.
+    ohne_absturz = True
+    for r in (0.0, -1.0, None, ""):
+        try:
+            zx = dict(zone, schluessel="x", dr=70.0, rate_mmh=r)
+            plan_bauen([zx], {"x": zone_rechnen(zx, [], [{"et0": 5.0, "regen": 0.0}], cfg)}, cfg)
+        except ZeroDivisionError:
+            ohne_absturz = False
+    e.append((ohne_absturz, "Rate 0, -1, None und '' fuehren zu keiner Division durch Null"))
+
+    # --- Zeitfenster (neu geprueft in 0.9.1) ---
+    for von, bis, soll, txt in (
+            ("22:00", "08:00", 600.0, "ueber Mitternacht"),
+            ("08:00", "20:00", 720.0, "am Tag"),
+            ("00:00", "23:59", 1439.0, "fast rund um die Uhr"),
+            ("08:00", "08:00", 0.0, "gleiche Zeit ergibt 0, nicht 1440"),
+            ("22:00", "22:00", 0.0, "gleiche Zeit auch abends"),
+            ("25:00", "08:00", 0.0, "unmoegliche Stunde"),
+            ("abc", "08:00", 0.0, "kein Zeitformat")):
+        p("Fenster %s-%s (%s)" % (von, bis, txt), _fenster_minuten(von, bis), soll, 0.001)
+    pl_f = plan_bauen(zonen, erg, dict(cfg, fenster_von="08:00", fenster_bis="08:00"))
+    e.append((pl_f["grund"] == "fenster_ungueltig" and pl_f["durchlaeufe"] == 0,
+              "Gleiche Anfangs- und Endzeit: 0 Durchlaeufe, Grund 'fenster_ungueltig'"))
 
     # Anlage am Limit -> benannt, nicht beschoenigt
     erg4 = {z["schluessel"]: zone_rechnen(dict(z, dr=100.0), [],

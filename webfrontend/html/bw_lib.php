@@ -13,6 +13,26 @@
  * Kompatibel mit PHP 7.4 und PHP 8.x (LoxBerry 3.x/4.x).
  */
 
+/* Zeitzone ausdruecklich setzen.
+ *
+ * Ohne das richtet sich date() nach date.timezone in der php.ini - und die
+ * steht auf manchen Systemen auf UTC. Der Python-Dienst schreibt seine
+ * Protokollzeilen dagegen in Ortszeit. Beide schreiben in DIESELBE Datei;
+ * mit zwei Stunden Versatz nebeneinander ist sie fuer die Fehlersuche
+ * wertlos, weil sich die Reihenfolge der Ereignisse nicht mehr ablesen
+ * laesst.
+ *
+ * Genommen wird die Zeitzone des Systems, nicht eine fest eingetragene:
+ * wer seinen LoxBerry auf Wien stellt, will Wien - nicht Berlin.
+ */
+if (!ini_get('date.timezone')) {
+    $bw_tz = @trim((string) @file_get_contents('/etc/timezone'));
+    if ($bw_tz === '' || @date_default_timezone_set($bw_tz) === false) {
+        @date_default_timezone_set('Europe/Berlin');
+    }
+    unset($bw_tz);
+}
+
 if (!function_exists('bw_e')) {
     function bw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 }
@@ -85,15 +105,33 @@ function bw_json_lesen($pfad)
     return is_array($d) ? $d : array();
 }
 
+/**
+ * JSON unteilbar schreiben.
+ *
+ * Der Name der Nebendatei traegt seit 0.9.1 die Prozessnummer und einen
+ * Zufallsanteil. '<datei>.tmp' war nicht eindeutig: die Oberflaeche und der
+ * Python-Dienst schreiben teils dieselben Dateien, und zwei gleichzeitige
+ * Schreibvorgaenge haetten sich in derselben Nebendatei ueberlagert.
+ *
+ * Dass json_encode geprueft wird, war schon richtig - bei ungueltigem UTF-8
+ * gibt es false zurueck, und file_put_contents machte daraus eine leere
+ * Datei mit der Rueckgabe 0, also nicht false.
+ */
 function bw_json_schreiben($pfad, $daten, $rechte = null)
 {
     $o = dirname($pfad);
     if (!is_dir($o) && !@mkdir($o, 0775, true) && !is_dir($o)) { return false; }
-    $tmp = $pfad . '.tmp';
     $j = json_encode($daten, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($j === false || @file_put_contents($tmp, $j) === false) { @unlink($tmp); return false; }
+    if ($j === false) {
+        bw_log('Schreibfehler ' . basename($pfad) . ': ' . json_last_error_msg()
+             . ' - die Datei bleibt unveraendert.');
+        return false;
+    }
+    $tmp = $pfad . '.tmp.' . getmypid() . '.' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, $j) !== strlen($j)) { @unlink($tmp); return false; }
     if ($rechte !== null) { @chmod($tmp, $rechte); }
-    return @rename($tmp, $pfad);
+    if (!@rename($tmp, $pfad)) { @unlink($tmp); return false; }
+    return true;
 }
 
 function bw_config()
@@ -110,8 +148,11 @@ function bw_config()
 function bw_config_speichern($cfg)
 {
     $p = bw_paths();
-    if (!bw_json_schreiben($p['config'], $cfg, 0644)) { return false; }
+    // 0600, nicht 0644: in dieser Datei steht das Aktionstoken, mit dem der
+    // Miniserver den unangemeldeten Endpunkt erreicht.
+    if (!bw_json_schreiben($p['config'], $cfg, 0600)) { return false; }
     @copy($p['config'], $p['sicherung']);
+    @chmod($p['sicherung'], 0600);
     return true;
 }
 
@@ -185,13 +226,54 @@ function bw_token_erzeugen($laenge = 24)
     return $t;
 }
 
+/**
+ * Das Aktionstoken holen, bei Bedarf erzeugen - hinter einer Dateisperre.
+ *
+ * Ohne Sperre koennen zwei gleichzeitige Aufrufe je ein eigenes Token
+ * erzeugen und nacheinander speichern. Der zuerst angezeigte Wert waere dann
+ * schon ueberholt, und die daraus gebaute Loxone-Vorlage traege ein Token,
+ * das nicht mehr gilt - der Miniserver bekaeme spaeter HTTP 403.
+ *
+ * Nach dem Sperren wird die Konfiguration ERNEUT gelesen: wer die Sperre vor
+ * uns hatte, hat womoeglich schon eines geschrieben.
+ *
+ * Zur Einordnung: der Endpunkt index.php ruft diese Funktion NIE auf. Er
+ * liest das Token aus der Konfiguration und antwortet mit 403, solange
+ * keines da ist. Das Rennen laeuft also zwischen zwei Aufrufen der
+ * angemeldeten Oberflaeche - zwei offene Reiter genuegen -, nicht zwischen
+ * Abfragen des Miniservers.
+ */
 function bw_token()
 {
     $cfg = bw_config();
-    if (trim((string) $cfg['aktionstoken']) === '') {
+    if (trim((string) $cfg['aktionstoken']) !== '') {
+        return (string) $cfg['aktionstoken'];
+    }
+    $p = bw_paths();
+    if (!is_dir($p['datadir'])) { @mkdir($p['datadir'], 0775, true); }
+    $fp = @fopen($p['datadir'] . '/token.lock', 'c+');
+    if ($fp === false) {
+        // Lieber ohne Sperre eines erzeugen als gar keines - ohne Token
+        // laeuft der Endpunkt ueberhaupt nicht.
+        bw_log('Die Sperrdatei fuer das Token liess sich nicht anlegen - '
+             . 'es wird ohne Sperre erzeugt.');
         $cfg['aktionstoken'] = bw_token_erzeugen();
         bw_config_speichern($cfg);
+        return (string) $cfg['aktionstoken'];
     }
+    if (@flock($fp, LOCK_EX)) {
+        $cfg = bw_config();                       // zweiter Blick unter der Sperre
+        if (trim((string) $cfg['aktionstoken']) === '') {
+            $cfg['aktionstoken'] = bw_token_erzeugen();
+            if (!bw_config_speichern($cfg)) {
+                bw_log('Das neu erzeugte Aktionstoken liess sich NICHT speichern. '
+                     . 'Beim naechsten Aufruf entsteht ein anderes - die Adressen '
+                     . 'in Loxone muessten dann erneut uebernommen werden.');
+            }
+        }
+        @flock($fp, LOCK_UN);
+    }
+    fclose($fp);
     return (string) $cfg['aktionstoken'];
 }
 
@@ -252,11 +334,48 @@ function bw_statuszeile()
         bw_alter());
 }
 
+/**
+ * Die Zeile fuer eine Zone - oder ein NAMED Grund, warum es keine gibt.
+ *
+ * Bis 0.9.0 gab diese Funktion in beiden Faellen null zurueck: wenn es die
+ * Zone nicht gibt UND wenn ihre Berechnung fehlgeschlagen ist. Der Endpunkt
+ * meldete daraufhin beide Male ZONE_UNBEKANNT. Wer das in Loxone sah, suchte
+ * einen Tippfehler im Zonennamen - waehrend in Wahrheit der Boden
+ * unmoeglich eingetragen war oder noch nie gerechnet wurde.
+ *
+ * Rueckgabe: die Zeile, oder array('_grund' => …) mit einem der Gruende
+ *   ZONE_UNBEKANNT       diesen Schluessel gibt es nicht
+ *   NOCH_NICHT_GERECHNET es liegt ueberhaupt kein Abbild vor
+ *   BERECHNUNGSFEHLER    die Zone gibt es, aber sie liess sich nicht rechnen
+ */
 function bw_zonenzeile($schluessel)
 {
     $a = bw_abbild();
     $z = isset($a['zonen'][$schluessel]) ? $a['zonen'][$schluessel] : null;
-    if (!is_array($z) || empty($z['ok'])) { return null; }
+    if (!is_array($z)) {
+        // Steht der Schluessel wenigstens in der Zonenliste? Dann ist es kein
+        // falscher Name, sondern ein fehlendes Ergebnis.
+        foreach (bw_zonen() as $bekannt) {
+            if ((string) $bekannt['schluessel'] === (string) $schluessel) {
+                return array('_grund' => empty($a['ts'])
+                    ? 'NOCH_NICHT_GERECHNET' : 'BERECHNUNGSFEHLER',
+                    '_text' => empty($a['ts'])
+                        ? 'Die Zone ist eingerichtet, aber es hat noch kein Rechengang '
+                          . 'stattgefunden. Reiter Test, Knopf "Jetzt rechnen".'
+                        : 'Die Zone ist eingerichtet, liess sich aber nicht rechnen. '
+                          . 'Der Grund steht im Reiter Logdateien.');
+            }
+        }
+        return array('_grund' => 'ZONE_UNBEKANNT',
+                     '_text' => 'Diesen Zonenschluessel gibt es nicht. Die gueltigen '
+                              . 'stehen im Reiter Zonen.');
+    }
+    if (empty($z['ok'])) {
+        return array('_grund' => 'BERECHNUNGSFEHLER',
+                     '_text' => trim((string) (isset($z['meldung']) ? $z['meldung'] : ''))
+                              ?: 'Die Zone liess sich nicht rechnen - Einzelheiten im '
+                               . 'Reiter Logdateien.');
+    }
     return sprintf('ZONE;OK=1;DEFIZIT=%.1f;FUELLSTAND=%.0f;BEDARF=%.1f;LITER=%.0f;MINUTEN=%.0f;GEMESSEN=%d',
         (float) $z['dr'], (float) $z['fuellstand'], (float) $z['bedarf_mm'],
         (float) (isset($z['liter']) ? $z['liter'] : 0),
@@ -270,7 +389,9 @@ function bw_selbsttest_ausgabe()
     $s = $p['bindir'] . '/dienst.sh';
     if (!is_file($s)) { return 'dienst.sh nicht gefunden: ' . $s; }
     $a = array(); $c = 0;
-    @exec(escapeshellcmd($s) . ' selbsttest 2>&1', $a, $c);
+    // escapeshellarg statt escapeshellcmd: letzteres laesst ein Leerzeichen
+    // im Pfad unangetastet, und der Aufruf zerfiele in zwei Worte.
+    @exec(escapeshellarg($s) . ' selbsttest 2>&1', $a, $c);
     return implode("\n", $a);
 }
 
@@ -280,7 +401,7 @@ function bw_jetzt_rechnen()
     $s = $p['bindir'] . '/dienst.sh';
     if (!is_file($s)) { return array(0, 'dienst.sh nicht gefunden.'); }
     $a = array(); $c = 0;
-    @exec(escapeshellcmd($s) . ' einmal 2>&1', $a, $c);
+    @exec(escapeshellarg($s) . ' einmal 2>&1', $a, $c);
     return array($c === 0 ? 1 : 0, implode("\n", $a));
 }
 
@@ -310,18 +431,47 @@ function bw_vorlage()
 }
 
 
+/**
+ * Eine Zeile ins Protokoll.
+ *
+ * LOCK_EX ist Pflicht: in diese eine Datei schreiben der Python-Dienst, die
+ * Oberflaeche und der Miniserver-Endpunkt. Ohne Sperre koennen sich zwei
+ * Zeilen ineinander schieben, und im Log stehen Bruchstuecke.
+ *
+ * Die Rotation macht dieses Skript nur dann, wenn der Dienst NICHT laeuft.
+ * Das ist kein Geiz, sondern notwendig: der Python-Dienst haelt die Datei
+ * ueber einen RotatingFileHandler dauerhaft geoeffnet und schreibt an eine
+ * gemerkte Stelle. Wuerde PHP die Datei unter ihm kuerzen, schriebe Python
+ * weiter an die alte Stelle - die Datei bekaeme davor ein Loch aus
+ * Null-Bytes und waere im Log-Betrachter unlesbar. Laeuft der Dienst, ist
+ * die Rotation ohnehin seine Aufgabe; er tut sie bei derselben Groesse.
+ */
 function bw_log($text)
 {
     $p = bw_paths();
     if (!is_dir($p['logdir'])) {
         @mkdir($p['logdir'], 0775, true);
     }
-    if (is_file($p['log']) && filesize($p['log']) > 512000) {
-        // Rotation: die letzten 400 Zeilen behalten
-        $rest = array_slice(file($p['log'], FILE_IGNORE_NEW_LINES) ?: array(), -400);
-        @file_put_contents($p['log'], implode("\n", $rest) . "\n");
+    if (is_file($p['log']) && filesize($p['log']) > 512000 && bw_dienst_pid() === 0) {
+        $fp = @fopen($p['log'], 'c+');
+        if ($fp !== false) {
+            if (@flock($fp, LOCK_EX)) {
+                clearstatcache(true, $p['log']);
+                if (filesize($p['log']) > 512000) {
+                    $inhalt = stream_get_contents($fp, -1, 0);
+                    $rest = array_slice(explode("\n", (string) $inhalt), -400);
+                    ftruncate($fp, 0);
+                    rewind($fp);
+                    fwrite($fp, implode("\n", $rest) . "\n");
+                    fflush($fp);
+                }
+                @flock($fp, LOCK_UN);
+            }
+            fclose($fp);
+        }
     }
-    @file_put_contents($p['log'], '[' . date('Y-m-d H:i:s') . '] ' . $text . "\n", FILE_APPEND);
+    @file_put_contents($p['log'], '[' . date('Y-m-d H:i:s') . '] ' . $text . "\n",
+                       FILE_APPEND | LOCK_EX);
 }
 
 /** Dieselbe Meldung hoechstens einmal je Zeitfenster - sonst wird die

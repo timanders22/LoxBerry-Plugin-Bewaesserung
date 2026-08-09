@@ -10,13 +10,44 @@ ARGV5=$5
 PFOLDER="${ARGV3:-bewaesserung}"
 BASE="${ARGV5:-$LBHOMEDIR}"
 
+# Anhalten ueber dienst.sh, nicht mit einem eigenen kill.
+#
+# Bis 0.9.0 stand hier: SIGTERM, zwei Sekunden warten, kill -9. Zwei Sekunden
+# reichen nicht. Der Dienst prueft sein Halte-Merkmal zwar alle 0,5 s, aber
+# ein laufender Rechengang blockiert die Schleife: die Abfrage bei Open-Meteo
+# hat allein eine Zeitgrenze von 20 Sekunden.
+#
+# Was dabei NICHT passieren kann - anders als oft vermutet: eine kaputte
+# verlauf.json. Der Dienst schreibt sie ueber eine Nebendatei und os.replace,
+# und das ist auf Dateisystemebene unteilbar. Ein kill -9 mitten im Schreiben
+# hinterlaesst die Nebendatei, nie eine halbe verlauf.json. Der Schaden eines
+# harten Abschusses ist deshalb ein verlorener Rechengang, kein verlorener
+# Wasserhaushalt.
+#
+# Trotzdem ist der harte Abschuss falsch, und dienst.sh stop laesst zehn
+# Sekunden Zeit. Es entfernt ausserdem den Sollmerker, damit der Waechter aus
+# dem Cron den Dienst nicht mitten im Update wieder hochzieht.
+DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
 PID="$BASE/data/plugins/$PFOLDER/dienst.pid"
-if [ -f "$PID" ]; then
-    kill "$(cat "$PID")" 2>/dev/null || true
-    sleep 2
-    kill -9 "$(cat "$PID")" 2>/dev/null || true
+if [ -x "$DIENST" ]; then
+    "$DIENST" stop >/dev/null 2>&1
+    echo "<INFO> Laufender Dienst ueber dienst.sh angehalten."
+elif [ -f "$PID" ]; then
+    P=$(cat "$PID" 2>/dev/null)
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
+        kill "$P" 2>/dev/null || true
+        i=0
+        while [ $i -lt 15 ] && kill -0 "$P" 2>/dev/null; do
+            sleep 1
+            i=$((i + 1))
+        done
+        # Nummernrecycling ausschliessen, bevor mit -9 nachgesetzt wird.
+        if kill -0 "$P" 2>/dev/null && grep -qa "bewaesserung_dienst.py" "/proc/$P/cmdline" 2>/dev/null; then
+            kill -9 "$P" 2>/dev/null || true
+        fi
+    fi
     rm -f "$PID"
-    echo "<INFO> Laufender Dienst angehalten."
+    echo "<INFO> Laufender Dienst angehalten (Rueckfallebene ohne dienst.sh)."
 fi
 
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do

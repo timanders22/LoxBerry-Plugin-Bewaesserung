@@ -98,9 +98,24 @@ def wind_auf_2m(u_z: float, hoehe_m: float) -> float:
 
 
 def tagesnummer(monat: int, tag: int, jahr: int = 2001) -> int:
-    """J, der laufende Tag im Jahr. [F, Gl. 24 benutzt ihn]"""
+    """J, der laufende Tag im Jahr. [F, Gl. 24 benutzt ihn]
+
+    Das Jahr gehoert uebergeben. Ohne Angabe wird 2001 genommen - ein Jahr
+    ohne Schalttag, damit das Rechenbeispiel aus [F] reproduzierbar bleibt.
+
+    Warum das nicht gleichgueltig ist: in einem Schaltjahr liegt jeder Tag ab
+    dem 1. Maerz um eine Nummer hoeher. Rechnet man mit dem Kalender von 2001
+    weiter, ist J um einen Tag zu klein, und Ra weicht dadurch um bis zu
+    1,6 Prozent ab. Das ist kein Absturz und faellt niemandem auf - genau
+    deshalb steht es hier.
+
+    NICHT geaendert wurde der Teiler 365 in Gleichung 24. [F] definiert ihn
+    so, fuer jedes Jahr. Ihn in Schaltjahren auf 366 zu setzen waere eine
+    Abweichung vom Standardwerk und wuerde das nachgerechnete Beispiel 18
+    verfehlen - der Fehler waere dann groesser, nicht kleiner.
+    """
     import datetime
-    return datetime.date(jahr, monat, tag).timetuple().tm_yday
+    return datetime.date(int(jahr), int(monat), int(tag)).timetuple().tm_yday
 
 
 def extraterrestrische_strahlung(breite_grad: float, j: int) -> tuple[float, float]:
@@ -198,6 +213,7 @@ def et0_aus_messwerten(m: dict) -> dict:
         breite, laenge    [Grad]     Pflicht
         hoehe             [m]        Vorgabe 0
         monat, tag                   Pflicht
+        jahr                         empfohlen (Schaltjahr, siehe tagesnummer)
 
     Rueckgabe: dict mit et0, allen Zwischenwerten und - wichtig - 'guete':
     'gemessen', 'sonnenschein' oder 'geschaetzt'. Die Guete wandert bis in die
@@ -209,7 +225,9 @@ def et0_aus_messwerten(m: dict) -> dict:
         tmin, tmax = tmax, tmin
     hoehe = float(m.get("hoehe") or 0.0)
     breite = float(m["breite"])
-    j = tagesnummer(int(m["monat"]), int(m["tag"]))
+    # Das Jahr wird durchgereicht, wenn es dasteht. Ohne Angabe gilt 2001 -
+    # in einem Schaltjahr waere J dann ab dem 1. Maerz um eins zu klein.
+    j = tagesnummer(int(m["monat"]), int(m["tag"]), int(m.get("jahr") or 2001))
 
     ea, ea_weg = dampfdruck_ist(
         tmin, tmax,
@@ -404,6 +422,26 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     pruefe("ET0 ueber et0_aus_messwerten()", erg["et0"], 3.88, 0.05)
     e.append((erg["guete"] == "sonnenschein",
               "Guete richtig als 'sonnenschein' gemeldet: %s" % erg["guete"]))
+
+    # --- Schaltjahr: der Tagesindex muss dem echten Kalender folgen ---
+    import datetime as _dt
+    versatz = 0
+    for _m in range(1, 13):
+        for _t in (1, 15, 28):
+            echt = _dt.date(2024, _m, _t).timetuple().tm_yday
+            if tagesnummer(_m, _t, 2024) != echt:
+                versatz += 1
+    e.append((versatz == 0,
+              "Schaltjahr: Tagesindex folgt dem echten Kalender (36 Stichtage 2024)"))
+    e.append((tagesnummer(12, 31, 2024) == 366 and tagesnummer(12, 31, 2025) == 365,
+              "31.12. ergibt 366 im Schaltjahr und 365 sonst"))
+    # Und der Fehler, den ein falsches Jahr anrichten wuerde - nachgemessen,
+    # damit die Groessenordnung belegt ist und nicht behauptet.
+    ra_richtig, _ = extraterrestrische_strahlung(48.5, tagesnummer(3, 1, 2024))
+    ra_falsch, _ = extraterrestrische_strahlung(48.5, tagesnummer(3, 1, 2001))
+    e.append((abs(ra_richtig - ra_falsch) > 0.01,
+              "Ein Tag Versatz aendert Ra messbar: %.3f gegen %.3f MJ/m2"
+              % (ra_richtig, ra_falsch)))
 
     # --- Boden: Beispiel aus [F], Kapitel 8 ---
     t = taw(0.32, 0.12, 0.8)

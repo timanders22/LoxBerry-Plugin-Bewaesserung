@@ -1,15 +1,51 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Bewaesserung vorausschauend - Plugin-Symbol.
-     Hausstandard: runde Scheibe in LoxBerry-Gruen #6dac20. Motiv: ein
-     Wassertropfen ueber einem Bodenprofil, dessen Fuellstand als Balken
-     sichtbar ist - genau das, was das Plugin rechnet. Bewusst KEINE fremden
-     Wortmarken oder Logos. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <circle cx="256" cy="256" r="256" fill="#6dac20"/>
-  <path d="M256 92 C 256 92, 168 202, 168 264 a 88 88 0 0 0 176 0 C 344 202, 256 92, 256 92 Z"
-        fill="#ffffff" stroke="#3d6412" stroke-width="12"/>
-  <path d="M212 258 a 44 44 0 0 0 44 44" fill="none" stroke="#6dac20"
-        stroke-width="16" stroke-linecap="round"/>
-  <rect x="104" y="368" width="304" height="72" rx="16" fill="#ffffff" stroke="#3d6412" stroke-width="12"/>
-  <rect x="120" y="384" width="180" height="40" rx="8" fill="#6dac20"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
+
+  <g filter="url(#shadow)" fill="#ffffff">
+    <!-- Main Water Drop / Irrigation Symbol -->
+    <path d="M 256 75 C 256 75 180 180 180 230 C 180 272 214 306 256 306 C 298 306 332 272 332 230 C 332 180 256 75 256 75 Z" fill="#ffffff" />
+
+    <!-- Leaf Sprout Cutout inside Drop -->
+    <path d="M 256 280 C 220 280 210 235 256 185 C 256 225 280 245 280 260 C 280 271 269 280 256 280 Z" fill="#6dac20" />
+    <path d="M 256 280 C 256 240 235 220 225 210 C 235 235 256 255 256 280 Z" fill="#ffffff" opacity="0.3" />
+
+    <!-- Left Symbol: Weather Data (Sun & Rain Cloud) -->
+    <g transform="translate(130, 170)">
+      <circle cx="0" cy="0" r="22" fill="#ffffff" />
+      <path d="M -8 2 C -8 -4 -3 -8 3 -8 C 7 -8 10 -5 11 -2 C 14 -2 15 1 14 4 C 13 7 10 8 7 8 L -5 8 C -8 8 -10 5 -8 2 Z" fill="#6dac20" />
+      <circle cx="-3" cy="12" r="2" fill="#6dac20" />
+      <circle cx="3" cy="14" r="2" fill="#6dac20" />
+      <circle cx="9" cy="12" r="2" fill="#6dac20" />
+    </g>
+
+    <!-- Right Symbol: Soil Moisture Sensor & Earth Wave -->
+    <g transform="translate(382, 170)">
+      <circle cx="0" cy="0" r="22" fill="#ffffff" />
+      <rect x="-10" y="-12" width="20" height="6" rx="2" fill="#6dac20" />
+      <rect x="-6" y="-6" width="4" height="18" rx="2" fill="#6dac20" />
+      <rect x="2" y="-6" width="4" height="18" rx="2" fill="#6dac20" />
+      <path d="M -12 15 Q -6 12 0 15 Q 6 18 12 15" fill="none" stroke="#6dac20" stroke-width="2.5" stroke-linecap="round" />
+    </g>
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+  </g>
+
+  <!-- Typography -->
+  <text x="256" y="388" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="29" letter-spacing="1">BEWÄSSERUNG</text>
+  <text x="256" y="424" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="20" letter-spacing="3">LOXBERRY</text>
 </svg>

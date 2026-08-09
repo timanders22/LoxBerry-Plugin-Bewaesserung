@@ -51,9 +51,35 @@ if (!in_array($bw_aktion, $bw_erlaubt, true)) {
     exit;
 }
 
+/**
+ * JSON ausgeben - und pruefen, ob es ueberhaupt eines geworden ist.
+ *
+ * json_encode gibt bei ungueltigem UTF-8 false zurueck. Ungeprueft waere die
+ * Antwort eine voellig leere Seite mit Status 200 - und eine leere Antwort
+ * mit Erfolgsmeldung ist das Schlechteste, was eine Schnittstelle liefern
+ * kann: die Gegenstelle haelt sie fuer gueltig. Solche Bytes koennen aus der
+ * Nutzlast einer Wetterstation stammen, die kein UTF-8 spricht.
+ */
+function bw_json_ausgeben($daten)
+{
+    $j = json_encode($daten, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($j === false) {
+        http_response_code(500);
+        echo json_encode(array(
+            'ok' => 0,
+            'fehler' => 'Die Antwort liess sich nicht als JSON ausgeben: '
+                      . json_last_error_msg(),
+            'hinweis' => 'Vermutlich steht in einem Messwert ein Byte, das kein UTF-8 '
+                       . 'ist. Der Reiter Logdateien zeigt, aus welcher Quelle es kam.',
+        ));
+        return;
+    }
+    echo $j;
+}
+
 if ($bw_aktion === 'roh') {
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(bw_abbild(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    bw_json_ausgeben(bw_abbild());
     exit;
 }
 
@@ -76,10 +102,12 @@ if ($bw_aktion === 'zonen') {
             // Ehrlichkeit bis in die Schnittstelle: ohne Becherprobe sind
             // Liter und Minuten geschaetzt, und das steht hier auch.
             'geschaetzt' => (int) empty($z['rate_gemessen']),
+            // Der Mikroklima-Faktor gehoert in die Antwort: er erklaert, warum
+            // zwei Zonen mit derselben Bepflanzung verschiedene Bedarfe haben.
+            'mikroklima' => isset($e['mikroklima']) ? (float) $e['mikroklima'] : 1.0,
         );
     }
-    echo json_encode(array('ok' => (int) (!empty($a['ok'])), 'zonen' => $aus),
-                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    bw_json_ausgeben(array('ok' => (int) (!empty($a['ok'])), 'zonen' => $aus));
     exit;
 }
 
@@ -93,9 +121,13 @@ if ($bw_aktion === 'zone') {
         exit;
     }
     $zeile = bw_zonenzeile($bw_z);
-    if ($zeile === null) {
-        http_response_code(404);
-        echo "FEHLER;OK=0;GRUND=ZONE_UNBEKANNT\n";
+    if (is_array($zeile)) {
+        // Der Grund wird benannt. 'Zone unbekannt' fuer einen Rechenfehler zu
+        // melden schickt den Anwender auf die Suche nach einem Tippfehler,
+        // den es nicht gibt.
+        http_response_code($zeile['_grund'] === 'ZONE_UNBEKANNT' ? 404 : 503);
+        echo 'ZONE;OK=0;GRUND=' . $zeile['_grund'] . "\n";
+        echo $zeile['_text'] . "\n";
         exit;
     }
     echo $zeile . "\n";
