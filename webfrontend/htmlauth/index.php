@@ -365,7 +365,7 @@ $bw_plan = isset($bw_a['plan']) && is_array($bw_a['plan']) ? $bw_a['plan'] : arr
 
 $bw_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
 if ($bw_rahmen) {
-    LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', '');
+    LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
 }
 ?>
 <style>

@@ -1,66 +1,35 @@
-<h2>Bew&auml;sserung vorausschauend</h2>
+<h2><TMPL_VAR HILFE.K01></h2>
 
-<p><b>Gie&szlig;en nach Wasserbilanz statt nach Zeitplan.</b> Das Plugin
-rechnet nach dem Standardverfahren <b>FAO-56</b> aus, wie viel Wasser der Boden
-je Zone verloren hat, zieht den erwarteten Regen der n&auml;chsten Tage ab und
-sagt Loxone, wie viele Durchl&auml;ufe heute Nacht n&ouml;tig sind.</p>
+<p><TMPL_VAR HILFE.K02></p>
 
-<h3>Es kennt keine Wetterstation &mdash; und das ist Absicht</h3>
-<p>Das Plugin kennt nur <i>Messgr&ouml;&szlig;en</i> und drei Wege: ein
-MQTT-Thema, eine JSON-Antwort per HTTP, oder Open-Meteo. Ob dahinter Ecowitt,
-WeeWX, Davis, WeatherFlow, ein Shelly oder ein selbstgebauter Sensor steckt,
-ist ihm gleich. Vorlagen f&uuml;r die g&auml;ngigen Systeme gibt es im Reiter
-<i>Quellen</i>; jedes Feld l&auml;sst sich danach von Hand &auml;ndern.</p>
-<p><b>Es f&auml;llt einzeln zur&uuml;ck, nicht als Ganzes:</b> wer nur einen
-Regenmesser hat, bekommt seinen echten Regen und die &uuml;brigen
-Gr&ouml;&szlig;en aus dem Modell. Die Spalte <i>Zuletzt von</i> zeigt je
-Gr&ouml;&szlig;e, woher sie wirklich kam.</p>
+<h3><TMPL_VAR HILFE.K03></h3>
+<p><TMPL_VAR HILFE.K04></p>
+<p><TMPL_VAR HILFE.K05></p>
 
-<h3>Ohne Standort geht nichts</h3>
-<p>Die Verdunstung h&auml;ngt an der Sonneneinstrahlung, und die h&auml;ngt am
-Sonnenstand. Ohne Koordinaten rechnet das Plugin nicht.</p>
+<h3><TMPL_VAR HILFE.K06></h3>
+<p><TMPL_VAR HILFE.K07></p>
 
-<h3>Die Becherprobe</h3>
-<p>Millimeter kann das Plugin rechnen. Liter und Minuten kann es nur, wenn es
-wei&szlig;, wie viel Wasser Ihre Regner in einer Stunde ausbringen. Diese Zahl
-steht in keinem Katalog verl&auml;sslich &mdash; sie h&auml;ngt an D&uuml;sen,
-Druck und Verlegeabstand und weicht regelm&auml;&szlig;ig um die H&auml;lfte
-ab.</p>
-<p>Deshalb: mehrere gerade Beh&auml;lter gleicher Gr&ouml;&szlig;e in der Zone
-verteilen, die Zone 15 Minuten laufen lassen, die H&ouml;he messen, Mittelwert
-im Reiter <i>Zonen</i> eintragen. Bis dahin sind alle Liter- und Minutenangaben
-mit einem Stern als gesch&auml;tzt gekennzeichnet.</p>
+<h3><TMPL_VAR HILFE.K08></h3>
+<p><TMPL_VAR HILFE.K09></p>
+<p><TMPL_VAR HILFE.K10></p>
 
-<h3>So gehen Sie vor</h3>
+<h3><TMPL_VAR HILFE.K11></h3>
 <ol>
-<li><b>Einstellungen:</b> Standort eintragen, Grenzen der Anlage (Zonendauer,
-Pause, Zeitfenster), Dienst starten.</li>
-<li><b>Quellen:</b> Vorlage w&auml;hlen oder bei Open-Meteo bleiben.</li>
-<li><b>Zonen:</b> je Kreis Fl&auml;che, Bepflanzung, Boden.</li>
-<li><b>Test:</b> <i>Jetzt rechnen</i> &mdash; danach steht in der Selbstpr&uuml;fung,
-woher jede Gr&ouml;&szlig;e kam.</li>
-<li><b>MQTT:</b> Abo im Gateway eintragen.</li>
-<li><b>Einbindung in Loxone:</b> virtueller Eingang, dann die Baustein-Liste.</li>
+<li><TMPL_VAR HILFE.K12></li>
+<li><TMPL_VAR HILFE.K13></li>
+<li><TMPL_VAR HILFE.K14></li>
+<li><TMPL_VAR HILFE.K15></li>
+<li><TMPL_VAR HILFE.K16></li>
+<li><TMPL_VAR HILFE.K17></li>
 </ol>
 
-<h3>Die Bilanz braucht Anlauf</h3>
-<p>Am ersten Tag kennt das Plugin nur einen Tag Verdunstung. Erst nach etwa
-einer Woche ist der Wasserhaushalt eingeschwungen. Solange lieber etwas mehr
-gie&szlig;en als zu wenig.</p>
-<p><b>Der Boden ist der beste Pr&uuml;fer:</b> nach zwei Wochen einmal mit dem
-Spaten nachsehen. Steht der F&uuml;llstand bei 60 Prozent und der Boden ist
-staubtrocken, stimmt die Bodenart nicht &mdash; im Reiter <i>Zonen</i>
-&auml;ndern.</p>
+<h3><TMPL_VAR HILFE.K18></h3>
+<p><TMPL_VAR HILFE.K19></p>
+<p><TMPL_VAR HILFE.K20></p>
 
-<h3>Was gepr&uuml;ft ist</h3>
-<p>Die Rechnung selbst: sie reproduziert das ver&ouml;ffentlichte
-<b>Rechenbeispiel 18 aus FAO-56</b> (Uccle, 6. Juli) auf drei Nachkommastellen
-&mdash; jeder Zwischenwert einzeln, nicht nur das Ergebnis.</p>
-<p><b>Nicht gepr&uuml;ft</b> ist, ob die Themen und Pfade zu Ihrer Station
-passen, ob Ihre Bodenfeuchtesensoren plausible Werte liefern und ob die
-Niederschlagsrate stimmt. Das zeigt nur der Betrieb.</p>
+<h3><TMPL_VAR HILFE.K21></h3>
+<p><TMPL_VAR HILFE.K22></p>
+<p><TMPL_VAR HILFE.K23></p>
 
-<h3>Grundlage</h3>
-<p>FAO Irrigation and Drainage Paper 56 (Allen, Pereira, Raes, Smith).
-Vorhersagedaten von Open-Meteo, kostenlos und ohne Schl&uuml;ssel f&uuml;r
-nicht gewerbliche Nutzung, ebenfalls nach FAO-56 Penman-Monteith gerechnet.</p>
+<h3><TMPL_VAR HILFE.K24></h3>
+<p><TMPL_VAR HILFE.K25></p>
