@@ -43,11 +43,47 @@ import giessplan                                    # noqa: E402
 import quellen                                      # noqa: E402
 
 
+def lb_wurzel_ermitteln():
+    """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+
+    Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+    config/plugins UND webfrontend enthaelt. Trifft die uebliche
+    Installation genauso wie eine an einem anderen Ort.
+    """
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(8):
+        if os.path.isdir(os.path.join(d, "config", "plugins")) \
+                and os.path.isdir(os.path.join(d, "webfrontend")):
+            return d
+        eltern = os.path.dirname(d)
+        if eltern == d:
+            break
+        d = eltern
+    return ""
+
+
+def mqtt_wert_saeubern(wert):
+    """Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
+
+    Das Gateway liest zeilenweise. Ein Zeilenumbruch im Wert zerlegt die
+    Uebertragung, und aus den Bruchstuecken bildet das Gateway erfundene
+    Themen. Ein Tabulator schadet ebenso, weil Leerzeichen Thema und Wert
+    trennt.
+    """
+    text = str(wert)
+    for zeichen in ("\r\n", "\r", "\n", "\t"):
+        text = text.replace(zeichen, " ")
+    while "  " in text:
+        text = text.replace("  ", " ")
+    return text.strip()
+
+
+
 def _home() -> str:
     h = os.environ.get("LBHOMEDIR", "")
     if h and os.path.isdir(h):
         return h
-    for k in ("/opt/loxberry", "/home/loxberry/loxberry"):
+    for k in (lb_wurzel_ermitteln(), "/home/loxberry/loxberry"):
         if os.path.isdir(k):
             return k
     return str(HIER.parent.parent)
@@ -227,7 +263,7 @@ def mqtt_senden(paare: dict, praefix: str) -> int:
             # einzigem Plugin.
             zeile = "publish %s/%s %s" % (
                 _mqtt_thema(praefix.strip("/")), _mqtt_thema(name),
-                _mqtt_sauber(wert))
+                mqtt_wert_saeubern(_mqtt_sauber(wert)))
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", int(g["udpport"])))
             gesendet += 1
         s.close()

@@ -23,113 +23,305 @@
     "sind NICHT an echter Hardware geprueft - das steht auch in der Uebergabe.",
     "Wer eine Vorlage waehlt, kann jedes Feld danach von Hand aendern."
   ],
-
   "groessen": {
-    "tmin":          { "einheit": "C",    "text": "Tagestiefstwert der Lufttemperatur", "pflicht": 1 },
-    "tmax":          { "einheit": "C",    "text": "Tageshoechstwert der Lufttemperatur", "pflicht": 1 },
-    "rh_min":        { "einheit": "%",    "text": "kleinste relative Luftfeuchte am Tag", "pflicht": 0 },
-    "rh_max":        { "einheit": "%",    "text": "groesste relative Luftfeuchte am Tag", "pflicht": 0 },
-    "rh_mittel":     { "einheit": "%",    "text": "mittlere relative Luftfeuchte", "pflicht": 0 },
-    "taupunkt":      { "einheit": "C",    "text": "Taupunkt (genauester Weg zu ea)", "pflicht": 0 },
-    "wind":          { "einheit": "m/s",  "text": "mittlere Windgeschwindigkeit", "pflicht": 0 },
-    "strahlung_wm2": { "einheit": "W/m2", "text": "Globalstrahlung im Tagesmittel", "pflicht": 0 },
-    "sonnenstunden": { "einheit": "h",    "text": "Sonnenscheindauer", "pflicht": 0 },
-    "regen_tag":     { "einheit": "mm",   "text": "Niederschlag des Tages", "pflicht": 0 },
-    "regen_stunde":  { "einheit": "mm/h", "text": "Niederschlag der letzten Stunde", "pflicht": 0 },
-    "bodenfeuchte":  { "einheit": "%",    "text": "Bodenfeuchte je Zone (volumetrisch oder Prozent)", "pflicht": 0 }
+    "tmin": {
+      "einheit": "C",
+      "text": "Tagestiefstwert der Lufttemperatur",
+      "pflicht": 1
+    },
+    "tmax": {
+      "einheit": "C",
+      "text": "Tageshoechstwert der Lufttemperatur",
+      "pflicht": 1
+    },
+    "rh_min": {
+      "einheit": "%",
+      "text": "kleinste relative Luftfeuchte am Tag",
+      "pflicht": 0
+    },
+    "rh_max": {
+      "einheit": "%",
+      "text": "groesste relative Luftfeuchte am Tag",
+      "pflicht": 0
+    },
+    "rh_mittel": {
+      "einheit": "%",
+      "text": "mittlere relative Luftfeuchte",
+      "pflicht": 0
+    },
+    "taupunkt": {
+      "einheit": "C",
+      "text": "Taupunkt (genauester Weg zu ea)",
+      "pflicht": 0
+    },
+    "wind": {
+      "einheit": "m/s",
+      "text": "mittlere Windgeschwindigkeit",
+      "pflicht": 0
+    },
+    "strahlung_wm2": {
+      "einheit": "W/m2",
+      "text": "Globalstrahlung im Tagesmittel",
+      "pflicht": 0
+    },
+    "sonnenstunden": {
+      "einheit": "h",
+      "text": "Sonnenscheindauer",
+      "pflicht": 0
+    },
+    "regen_tag": {
+      "einheit": "mm",
+      "text": "Niederschlag des Tages",
+      "pflicht": 0
+    },
+    "regen_stunde": {
+      "einheit": "mm/h",
+      "text": "Niederschlag der letzten Stunde",
+      "pflicht": 0
+    },
+    "bodenfeuchte": {
+      "einheit": "%",
+      "text": "Bodenfeuchte je Zone (volumetrisch oder Prozent)",
+      "pflicht": 0
+    }
   },
-
   "vorlagen": {
     "online": {
       "text": "Nur Open-Meteo, keine eigene Station",
       "hinweis": "Braucht nur Standort. Die Werte gelten fuer den Gitterpunkt, nicht fuer Ihren Garten - bei Wind und Strahlung ist der Unterschied im Einzelfall erheblich.",
       "felder": {}
     },
-
     "ecowitt_lokal": {
       "text": "Ecowitt-Gateway, oertlich abgefragt (GW1100, GW2000, GW3000)",
       "hinweis": "Das Gateway beantwortet im Heimnetz 'get_livedata_info' ohne Zugangsdaten. Die Werte stehen dort in Listen mit einer Kennung je Groesse; die Pfade unten treffen die uebliche Anordnung, sind aber NICHT an einem Geraet geprueft. Der Reiter Quellen zeigt die Rohantwort - daran laesst sich jeder Pfad in einer Minute richtigstellen.",
       "http_url": "http://GATEWAY-ADRESSE/get_livedata_info",
       "felder": {
-        "tmax":          { "weg": "http", "pfad": "common_list[0].val", "einheit_quelle": "F" },
-        "tmin":          { "weg": "http", "pfad": "common_list[0].val", "einheit_quelle": "F" },
-        "rh_mittel":     { "weg": "http", "pfad": "common_list[1].val" },
-        "strahlung_wm2": { "weg": "http", "pfad": "common_list[3].val" },
-        "wind":          { "weg": "http", "pfad": "wh25[0].wind", "einheit_quelle": "km/h" },
-        "regen_stunde":  { "weg": "http", "pfad": "rain[1].val", "einheit_quelle": "mm" },
-        "regen_tag":     { "weg": "http", "pfad": "rain[2].val", "einheit_quelle": "mm" }
+        "tmax": {
+          "weg": "http",
+          "pfad": "common_list[0].val",
+          "einheit_quelle": "F"
+        },
+        "tmin": {
+          "weg": "http",
+          "pfad": "common_list[0].val",
+          "einheit_quelle": "F"
+        },
+        "rh_mittel": {
+          "weg": "http",
+          "pfad": "common_list[1].val"
+        },
+        "strahlung_wm2": {
+          "weg": "http",
+          "pfad": "common_list[3].val"
+        },
+        "wind": {
+          "weg": "http",
+          "pfad": "wh25[0].wind",
+          "einheit_quelle": "km/h"
+        },
+        "regen_stunde": {
+          "weg": "http",
+          "pfad": "rain[1].val",
+          "einheit_quelle": "mm"
+        },
+        "regen_tag": {
+          "weg": "http",
+          "pfad": "rain[2].val",
+          "einheit_quelle": "mm"
+        }
       }
     },
-
     "ecowitt_mqtt": {
       "text": "Ecowitt oder Froggit ueber ecowitt2mqtt",
       "hinweis": "Themen nach dem Muster ecowitt2mqtt/<Geraet>/<Groesse>. Geraetenamen anpassen.",
       "felder": {
-        "tmax":          { "weg": "mqtt", "thema": "ecowitt2mqtt/GERAET/temperature" },
-        "tmin":          { "weg": "mqtt", "thema": "ecowitt2mqtt/GERAET/temperature" },
-        "rh_mittel":     { "weg": "mqtt", "thema": "ecowitt2mqtt/GERAET/humidity" },
-        "wind":          { "weg": "mqtt", "thema": "ecowitt2mqtt/GERAET/wind_speed", "einheit_quelle": "km/h" },
-        "strahlung_wm2": { "weg": "mqtt", "thema": "ecowitt2mqtt/GERAET/solar_radiation" },
-        "regen_tag":     { "weg": "mqtt", "thema": "ecowitt2mqtt/GERAET/daily_rain" },
-        "regen_stunde":  { "weg": "mqtt", "thema": "ecowitt2mqtt/GERAET/hourly_rain" }
+        "tmax": {
+          "weg": "mqtt",
+          "thema": "ecowitt2mqtt/GERAET/temperature"
+        },
+        "tmin": {
+          "weg": "mqtt",
+          "thema": "ecowitt2mqtt/GERAET/temperature"
+        },
+        "rh_mittel": {
+          "weg": "mqtt",
+          "thema": "ecowitt2mqtt/GERAET/humidity"
+        },
+        "wind": {
+          "weg": "mqtt",
+          "thema": "ecowitt2mqtt/GERAET/wind_speed",
+          "einheit_quelle": "km/h"
+        },
+        "strahlung_wm2": {
+          "weg": "mqtt",
+          "thema": "ecowitt2mqtt/GERAET/solar_radiation"
+        },
+        "regen_tag": {
+          "weg": "mqtt",
+          "thema": "ecowitt2mqtt/GERAET/daily_rain"
+        },
+        "regen_stunde": {
+          "weg": "mqtt",
+          "thema": "ecowitt2mqtt/GERAET/hourly_rain"
+        }
       }
     },
-
     "weewx_mqtt": {
       "text": "WeeWX ueber MQTT (Davis, Vantage, vieles andere)",
       "hinweis": "WeeWX veroeffentlicht mit der MQTT-Erweiterung je Groesse ein eigenes Thema. Einheiten haengen am eingestellten Einheitensystem - im Reiter Quellen pruefen.",
       "felder": {
-        "tmax":          { "weg": "mqtt", "thema": "weather/outTemp_C" },
-        "tmin":          { "weg": "mqtt", "thema": "weather/outTemp_C" },
-        "rh_mittel":     { "weg": "mqtt", "thema": "weather/outHumidity" },
-        "wind":          { "weg": "mqtt", "thema": "weather/windSpeed_mps" },
-        "strahlung_wm2": { "weg": "mqtt", "thema": "weather/radiation_Wpm2" },
-        "regen_tag":     { "weg": "mqtt", "thema": "weather/dayRain_mm" }
+        "tmax": {
+          "weg": "mqtt",
+          "thema": "weather/outTemp_C"
+        },
+        "tmin": {
+          "weg": "mqtt",
+          "thema": "weather/outTemp_C"
+        },
+        "rh_mittel": {
+          "weg": "mqtt",
+          "thema": "weather/outHumidity"
+        },
+        "wind": {
+          "weg": "mqtt",
+          "thema": "weather/windSpeed_mps"
+        },
+        "strahlung_wm2": {
+          "weg": "mqtt",
+          "thema": "weather/radiation_Wpm2"
+        },
+        "regen_tag": {
+          "weg": "mqtt",
+          "thema": "weather/dayRain_mm"
+        }
       }
     },
-
     "weatherflow": {
       "text": "WeatherFlow Tempest ueber MQTT",
       "hinweis": "Die gaengigen Bruecken veroeffentlichen unter weatherflow/... - Themen im Reiter Quellen abgleichen.",
       "felder": {
-        "tmax":          { "weg": "mqtt", "thema": "weatherflow/air_temperature" },
-        "tmin":          { "weg": "mqtt", "thema": "weatherflow/air_temperature" },
-        "rh_mittel":     { "weg": "mqtt", "thema": "weatherflow/relative_humidity" },
-        "wind":          { "weg": "mqtt", "thema": "weatherflow/wind_avg" },
-        "strahlung_wm2": { "weg": "mqtt", "thema": "weatherflow/solar_radiation" },
-        "regen_tag":     { "weg": "mqtt", "thema": "weatherflow/rain_accumulated" }
+        "tmax": {
+          "weg": "mqtt",
+          "thema": "weatherflow/air_temperature"
+        },
+        "tmin": {
+          "weg": "mqtt",
+          "thema": "weatherflow/air_temperature"
+        },
+        "rh_mittel": {
+          "weg": "mqtt",
+          "thema": "weatherflow/relative_humidity"
+        },
+        "wind": {
+          "weg": "mqtt",
+          "thema": "weatherflow/wind_avg"
+        },
+        "strahlung_wm2": {
+          "weg": "mqtt",
+          "thema": "weatherflow/solar_radiation"
+        },
+        "regen_tag": {
+          "weg": "mqtt",
+          "thema": "weatherflow/rain_accumulated"
+        }
       }
     },
-
     "eigenes_mqtt": {
       "text": "Eigene Themen von Hand eintragen",
       "hinweis": "Fuer alles andere: Zigbee2MQTT, ESPHome, Shelly, Tasmota, ein selbstgebauter Sensor. Steht der Wert in einem JSON-Objekt, hilft der Pfad - etwa 'value' oder 'result.temperature'.",
       "felder": {}
     },
-
     "loxberry_mqtt": {
       "text": "Werte, die schon im LoxBerry-Broker stehen",
       "hinweis": "Wer seine Wetterstation bereits ueber ein anderes Plugin in den Broker bringt, traegt hier einfach die vorhandenen Themen ein. Der Reiter Quellen zeigt, was zuletzt angekommen ist.",
       "felder": {}
+    },
+    "prognose_ghi": {
+      "text": "Einstrahlung aus einer fremden Quelle (echte W/m2, keine PV-Prognose)",
+      "hinweis": "BELEGT AM 10.08.2026 GEGEN DIE THEMENLISTE DES PLUGINS \"PV Solcast NG\": dieses Plugin liefert AUSSCHLIESSLICH Ertragswerte der eigenen PV-Anlage - total.td_kw, hourly_td_kw.0 bis .23, next.3_kw, daytime.morning_kw und so weiter, alle in kW, kWh, W oder Wh. Es veroeffentlicht KEINEN einzigen Einstrahlungswert. Damit ist es als Strahlungsquelle fuer FAO-56 UNBRAUCHBAR - nicht weil die Umrechnung fehlt, sondern weil die Groesse eine andere ist: zwischen Ertrag und Einstrahlung liegen Modulflaeche, Wirkungsgrad, Neigung, Ausrichtung und Verschattung. Wer total.td_kw hier eintraegt, bekommt eine ET0, die plausibel aussieht und um ein Vielfaches danebenliegt. Diese Vorlage passt nur zu einer Quelle, die echte Einstrahlung liefert: ghi (global horizontal irradiance) in W/m2 oder eine Tagessumme in kWh/m2. Eine Wetterstation mit Solarsensor kann das, eine PV-Ertragsprognose nicht. Zweiter Punkt: eine Prognose ist keine Messung. Der Reiter Quellen zeigt die Herkunft, und die Guete der ET0 wird auf \"modellstrahlung\" zurueckgestuft - das ist richtig so und kein Fehler.",
+      "felder": {
+        "strahlung_wm2": {
+          "weg": "mqtt",
+          "thema": "solcast/forecast/ghi",
+          "pfad": "",
+          "einheit_quelle": "W/m2",
+          "hinweis": "Thema und Pfad an das eigene Plugin anpassen. Liefert es eine Tagessumme, statt W/m2 die Einheit kWh/m2d waehlen."
+        }
+      }
     }
   },
-
   "einheiten": {
     "_hinweis": [
       "Umrechnung in die Einheiten, mit denen FAO-56 rechnet.",
       "Was hier nicht steht, wird unveraendert uebernommen."
     ],
-    "C":     { "ziel": "C",    "faktor": 1.0,      "offset": 0.0 },
-    "F":     { "ziel": "C",    "faktor": 0.555556, "offset": -17.777778 },
-    "K":     { "ziel": "C",    "faktor": 1.0,      "offset": -273.15 },
-    "m/s":   { "ziel": "m/s",  "faktor": 1.0,      "offset": 0.0 },
-    "km/h":  { "ziel": "m/s",  "faktor": 0.277778, "offset": 0.0 },
-    "mph":   { "ziel": "m/s",  "faktor": 0.44704,  "offset": 0.0 },
-    "kn":    { "ziel": "m/s",  "faktor": 0.514444, "offset": 0.0 },
-    "mm":    { "ziel": "mm",   "faktor": 1.0,      "offset": 0.0 },
-    "in":    { "ziel": "mm",   "faktor": 25.4,     "offset": 0.0 },
-    "W/m2":  { "ziel": "W/m2", "faktor": 1.0,      "offset": 0.0 },
-    "lux":   { "ziel": "W/m2", "faktor": 0.0079,   "offset": 0.0,
-               "_hinweis": "Grobe Faustzahl fuer Tageslicht. Wer nur Lux hat, bekommt eine Schaetzung - das Ergebnis wird als solche gekennzeichnet." }
+    "C": {
+      "ziel": "C",
+      "faktor": 1.0,
+      "offset": 0.0
+    },
+    "F": {
+      "ziel": "C",
+      "faktor": 0.555556,
+      "offset": -17.777778
+    },
+    "K": {
+      "ziel": "C",
+      "faktor": 1.0,
+      "offset": -273.15
+    },
+    "m/s": {
+      "ziel": "m/s",
+      "faktor": 1.0,
+      "offset": 0.0
+    },
+    "km/h": {
+      "ziel": "m/s",
+      "faktor": 0.277778,
+      "offset": 0.0
+    },
+    "mph": {
+      "ziel": "m/s",
+      "faktor": 0.44704,
+      "offset": 0.0
+    },
+    "kn": {
+      "ziel": "m/s",
+      "faktor": 0.514444,
+      "offset": 0.0
+    },
+    "mm": {
+      "ziel": "mm",
+      "faktor": 1.0,
+      "offset": 0.0
+    },
+    "in": {
+      "ziel": "mm",
+      "faktor": 25.4,
+      "offset": 0.0
+    },
+    "W/m2": {
+      "ziel": "W/m2",
+      "faktor": 1.0,
+      "offset": 0.0
+    },
+    "lux": {
+      "ziel": "W/m2",
+      "faktor": 0.0079,
+      "offset": 0.0,
+      "_hinweis": "Grobe Faustzahl fuer Tageslicht. Wer nur Lux hat, bekommt eine Schaetzung - das Ergebnis wird als solche gekennzeichnet."
+    },
+    "kWh/m2d": {
+      "faktor": 41.66667,
+      "offset": 0.0,
+      "nach": "W/m2",
+      "hinweis": "Tagessumme der Einstrahlung in kWh je Quadratmeter. Wird in das Tagesmittel in W/m2 umgerechnet, das die FAO-56-Rechnung braucht."
+    },
+    "MJ/m2d": {
+      "faktor": 11.57407,
+      "offset": 0.0,
+      "nach": "W/m2",
+      "hinweis": "Tagessumme der Einstrahlung in Megajoule je Quadratmeter."
+    }
   }
 }
