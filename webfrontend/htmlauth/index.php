@@ -122,13 +122,10 @@ if ($bw_post && isset($_POST['speichern'])) {
         && $bw_cfg['fenster_von'] === $bw_cfg['fenster_bis']) {
         $bw_fehler[] = bw_t('EINST.FEHLER_FENSTER_GLEICH');
     }
-    $bw_topic = $bw_sauber('mqtt_topic');
-    if ($bw_topic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $bw_topic)) {
-        $bw_fehler[] = bw_t('EINST.FEHLER_TOPIC');
-    } else {
-        $bw_cfg['mqtt_topic'] = trim($bw_topic, '/');
-    }
-    $bw_cfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    /* mqtt_ein und mqtt_topic werden hier NICHT mehr angefasst: sie
+     * wohnen im Reiter MQTT und haben dort ein eigenes Formular. Die
+     * Konfiguration kommt aus bw_config(), die Werte ueberleben also
+     * unveraendert. */
     $bw_cfg['kuestennah'] = isset($_POST['kuestennah']) ? 1 : 0;
 
     if (!$bw_fehler) {
@@ -136,6 +133,30 @@ if ($bw_post && isset($_POST['speichern'])) {
         else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['config']); }
     }
     $bw_tab = 'tab-settings';
+}
+
+/* ---------------- MQTT (eigener Reiter, eigenes Formular) ----------------
+ *
+ * Eigenes Formular UND eigener Handler gehoeren zusammen. Loesten beide
+ * Formulare denselben Handler aus, setzte dieser die Haken des jeweils
+ * nicht abgeschickten Formulars per isset() auf 0 - der Benutzer verloere
+ * Werte, die er nie gesehen hat. */
+if ($bw_post && isset($_POST['save_mqtt'])) {
+    $bw_mcfg = bw_config();
+    $bw_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    $bw_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
+        (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
+    if ($bw_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $bw_mtopic)) {
+        $bw_fehler[] = bw_t('EINST.FEHLER_TOPIC');
+    } else {
+        $bw_mcfg['mqtt_topic'] = trim($bw_mtopic, '/');
+    }
+    if (!$bw_fehler) {
+        if (bw_config_speichern($bw_mcfg)) {
+            $bw_meldungen[] = bw_t('EINST.GESPEICHERT');
+        }
+    }
+    $bw_tab = 'tab-mqtt';
 }
 
 /* ---------------- Dienst ---------------- */
@@ -502,13 +523,8 @@ if ($bw_rahmen) {
 </div>
 <?php } ?>
 
-<h2><?= bw_e(bw_t('EINST.H_MQTT')) ?></h2>
-<label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= !empty($bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
-  <?= bw_e(bw_t('EINST.L_MQTT_EIN')) ?></label>
-<div class="sm-feld">
-  <label for="mqtt_topic"><?= bw_e(bw_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" name="mqtt_topic" id="mqtt_topic" value="<?= bw_e($bw_cfg['mqtt_topic']) ?>">
-</div>
+<?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
+         vollstaendig im Reiter MQTT - eine Sache, eine Stelle. */ ?>
 <button data-role="none" class="sm-b sm-b-aktion" name="speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 </div>
@@ -673,6 +689,26 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 
 <!-- ============ MQTT ============ -->
 <div class="sm-seite<?= $bw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
+
+<h2>MQTT</h2>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="save_mqtt" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<h2><?= bw_e(bw_t('EINST.H_MQTT')) ?></h2>
+<label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= !empty($bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_MQTT_EIN')) ?></label>
+<div class="sm-feld">
+  <label for="mqtt_topic"><?= bw_e(bw_t('EINST.L_MQTT_TOPIC')) ?></label>
+  <input data-role="none" type="text" name="mqtt_topic" id="mqtt_topic" value="<?= bw_e($bw_cfg['mqtt_topic']) ?>">
+</div>
+<?php /* Schreibweise wie im uebrigen Plugin: Bewaesserung benutzt sm-b
+         (nicht sm-btn) und faerbt die Legendenpunkte unmittelbar - sm-punkt
+         und sm-knopfreihe gibt es hier nicht. */ ?>
+<div class="sm-legende">
+  <span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+</div>
+<button data-role="none" class="sm-b sm-b-aktion" type="submit"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
+</form>
 <h2><?= bw_e(bw_t('MQTT.H_TITEL')) ?></h2>
 <?php $bw_g = bw_mqtt_zustand(); ?>
 <table class="sm-tabelle" style="max-width:520px">
