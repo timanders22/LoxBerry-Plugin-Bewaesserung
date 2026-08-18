@@ -97,7 +97,10 @@
     "schluffiger_ton": { "text": "Schluffiger Ton",      "theta_fc": 0.35, "theta_wp": 0.23,
                          "quelle": "FAO-56 Kap. 8, Beispiel 34: Silty clay" },
     "ton":             { "text": "Ton",                  "theta_fc": 0.36, "theta_wp": 0.22, "geschaetzt": 1 },
-    "eigen":           { "text": "Eigene Werte eintragen", "theta_fc": 0.25, "theta_wp": 0.12, "geschaetzt": 1 }
+    "kiesig":          { "text": "Kiesig oder steinig (viel Grobanteil)", "theta_fc": 0.14, "theta_wp": 0.06,
+                         "quelle": "Kein FAO-56-Wert. Grobanteil traegt kein Bodenwasser; die Kennwerte sind die des Feinbodens, anteilig gemindert. GESCHAETZT - wer es genau braucht, traegt eigene Werte je Zone ein.",
+                         "geschaetzt": 1 },
+    "eigen":           { "text": "Eigene Werte eintragen (Spalten thetaFC und thetaWP je Zone)", "theta_fc": 0.25, "theta_wp": 0.12, "geschaetzt": 1 }
   },
 
   "regner": {

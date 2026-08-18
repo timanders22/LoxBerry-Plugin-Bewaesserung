@@ -14,6 +14,21 @@
  *   zonen               alle Zonen als JSON
  *   roh                 das vollstaendige Abbild als JSON
  *
+ * Dazu die Tokenprobe des Hausstandards:
+ *   ?selftest=1&token=<TOKEN>
+ *
+ *   richtiges Token:        SELFTEST;OK=1;TOKEN=OK
+ *   falsches Token:         HTTP 403, SELFTEST;OK=0;ERR=TOKEN
+ *   kein Token eingerichtet: HTTP 403, SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET
+ *
+ * Warum das eine Hausregel ist: am 15.08.2026 liess sich von sieben in
+ * Loxone eingetragenen Token nur bei zweien feststellen, ob sie noch
+ * stimmen. Hier waere das zwar harmlos - der Endpunkt liest ohnehin nur -,
+ * aber die Antwort 'status' laesst sich nicht von 'Token falsch'
+ * unterscheiden, wenn noch nie gerechnet wurde. Der Selbsttest beantwortet
+ * genau eine Frage: stimmt das Token. Sonst nichts: kein Dateizugriff ueber
+ * die Konfiguration hinaus, kein Protokolleintrag, keine Wirkung.
+ *
  * Es gibt hier bewusst KEINE schaltende Aktion. Das Plugin oeffnet kein
  * Ventil - das macht der Bewaesserungsbaustein im Miniserver. Ein Endpunkt,
  * der Wasser aufdrehen kann, waere eine Angriffsflaeche ohne Gegenwert.
@@ -27,9 +42,19 @@ header('Cache-Control: no-store');
 
 $bw_soll = (string) $bw_cfg['aktionstoken'];
 $bw_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
+
+/* Die Tokenprobe steht unmittelbar hinter dem Einlesen und VOR jeder
+ * Aktion. Sie benutzt dieselbe Pruefung wie alles andere - ein Selbsttest
+ * darf keine Abkuerzung an der Sicherheit vorbei sein. */
+$bw_selftest = isset($_GET['selftest']) && (string) $_GET['selftest'] === '1';
+
 if ($bw_soll === '') {
     http_response_code(403);
     header('Content-Type: text/plain; charset=utf-8');
+    if ($bw_selftest) {
+        echo "SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET\n";
+        exit;
+    }
     echo "FEHLER;OK=0;GRUND=KEIN_TOKEN_GESETZT\n";
     echo "Die Plugin-Oberflaeche wurde noch nie geoeffnet - es gibt noch kein Token.\n";
     exit;
@@ -37,7 +62,12 @@ if ($bw_soll === '') {
 if (!hash_equals($bw_soll, $bw_ist)) {
     http_response_code(403);
     header('Content-Type: text/plain; charset=utf-8');
-    echo "FEHLER;OK=0;GRUND=TOKEN\n";
+    echo $bw_selftest ? "SELFTEST;OK=0;ERR=TOKEN\n" : "FEHLER;OK=0;GRUND=TOKEN\n";
+    exit;
+}
+if ($bw_selftest) {
+    header('Content-Type: text/plain; charset=utf-8');
+    echo "SELFTEST;OK=1;TOKEN=OK\n";
     exit;
 }
 

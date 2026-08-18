@@ -134,6 +134,24 @@ fi
 echo "<INFO> Selbsttest:"
 "$PY3" "$PBIN/bewaesserung_dienst.py" --selbsttest 2>&1 | head -n 25 | sed 's/^/<INFO> /' || true
 
+# ---------- Dienst wieder starten, wenn er vorher lief ----------
+#
+# Nur dann. Eine Neuinstallation startet NICHTS von selbst: der Anwender
+# soll erst Standort, Quellen und Zonen eintragen. Wer den Dienst vorher
+# bewusst angehalten hatte, findet ihn nach dem Update ebenfalls angehalten.
+MERKER="$BASE/config/plugins/$PFOLDER.backup.lief_vorher"
+if [ -f "$MERKER" ]; then
+    rm -f "$MERKER"
+    if [ -x "$PBIN/dienst.sh" ]; then
+        if "$PBIN/dienst.sh" start >/dev/null 2>&1; then
+            echo "<OK> Der Dienst lief vor dem Update und wurde wieder gestartet."
+        else
+            echo "<INFO> Der Dienst liess sich nicht starten - Reiter Einstellungen,"
+            echo "<INFO> Knopf 'Dienst starten'. Der Grund steht im Reiter Logdateien."
+        fi
+    fi
+fi
+
 echo "<INFO> Naechste Schritte:"
 echo "<INFO>   1. Reiter Einstellungen: Standort eintragen (ohne ihn keine Strahlung)"
 echo "<INFO>   2. Reiter Quellen: Wetterstation zuordnen - oder bei Open-Meteo bleiben"

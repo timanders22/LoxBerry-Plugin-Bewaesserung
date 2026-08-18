@@ -275,6 +275,36 @@ def _f(x: Any) -> float | None:
 # Boden und Pflanze
 # --------------------------------------------------------------------------
 
+def kc_klimaanpassung(kc_tabelle: float, u2: float, rh_min: float,
+                      hoehe_pflanze_m: float) -> float:
+    """Kc an trockene Luft und Wind anpassen. [F, Gl. 62]
+
+        Kc = Kc_Tab + [0,04 (u2 - 2) - 0,004 (RHmin - 45)] (h/3)^0,3
+
+    Die Tabellenwerte in [F, Tab. 12] gelten fuer ein halbfeuchtes Klima mit
+    RHmin um 45 Prozent und Wind um 2 m/s. Bei trockener Luft oder viel Wind
+    liegen sie zu niedrig - die Pflanze verdunstet dann mehr, als die Tabelle
+    unterstellt.
+
+    [F] begrenzt die Gleichung ausdruecklich auf
+        1 m/s <= u2 <= 6 m/s  und  20 % <= RHmin <= 80 %.
+    Ausserhalb wird auf den Rand gesetzt, nicht extrapoliert: die Gleichung
+    ist dort nicht geeicht, und eine Zahl aus einer nicht geeichten Formel
+    sieht genauso aus wie eine gemessene.
+
+    Ohne Pflanzenhoehe gibt es keine Anpassung. Das ist Absicht und kein
+    Mangel: (h/3)^0,3 ist der Hebel der ganzen Gleichung, und ihn zu raten
+    hiesse, die Anpassung selbst zu raten. Wer die Hoehe nicht eintraegt,
+    bekommt den Tabellenwert - also genau das, was bis 0.9.6 galt.
+    """
+    if hoehe_pflanze_m is None or hoehe_pflanze_m <= 0:
+        return kc_tabelle
+    u = max(1.0, min(6.0, float(u2)))
+    r = max(20.0, min(80.0, float(rh_min)))
+    h = max(0.05, min(10.0, float(hoehe_pflanze_m)))
+    return kc_tabelle + (0.04 * (u - 2.0) - 0.004 * (r - 45.0)) * (h / 3.0) ** 0.3
+
+
 def taw(theta_fc: float, theta_wp: float, zr_m: float) -> float:
     """Nutzbare Feldkapazitaet im Wurzelraum [mm]. [F, Gl. 82]"""
     return 1000.0 * (theta_fc - theta_wp) * zr_m
@@ -442,6 +472,39 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     e.append((abs(ra_richtig - ra_falsch) > 0.01,
               "Ein Tag Versatz aendert Ra messbar: %.3f gegen %.3f MJ/m2"
               % (ra_richtig, ra_falsch)))
+
+    # --- Klimaanpassung von Kc [F, Gl. 62] ---
+    #
+    # Zuerst der Fall, der jede bestehende Anlage betrifft: OHNE Angabe der
+    # Pflanzenhoehe darf sich nichts aendern. Waere das nicht so, rechnete
+    # jede Zone ab dieser Fassung anders, ohne dass jemand etwas eingetragen
+    # haette.
+    for _h in (None, 0, 0.0, -1):
+        e.append((kc_klimaanpassung(0.95, 5.0, 20.0, _h) == 0.95,
+                  "Ohne Pflanzenhoehe (%r) bleibt Kc unveraendert" % (_h,)))
+    # Der Normfall der Tabelle (u2 = 2 m/s, RHmin = 45 %) aendert nichts.
+    pruefe("Kc bei Normbedingungen 2 m/s und 45 %",
+           kc_klimaanpassung(0.95, 2.0, 45.0, 0.10), 0.95, 0.0001)
+    # Trockene Luft und Wind heben Kc, feuchte Luft und Windstille senken ihn.
+    trocken = kc_klimaanpassung(0.95, 3.0, 25.0, 0.10)
+    feucht = kc_klimaanpassung(0.95, 1.0, 75.0, 0.10)
+    e.append((feucht < 0.95 < trocken,
+              "Kc steigt bei trocken/windig (%.3f) und faellt bei feucht/still (%.3f)"
+              % (trocken, feucht)))
+    # Gegen die Gleichung von Hand nachgerechnet: h = 0,60 m, u2 = 3, RHmin = 25
+    #   (0,60/3)^0,3 = 0,6170 ; 0,04*1 - 0,004*(-20) = 0,12 ; 0,12*0,6170 = 0,0740
+    pruefe("Kc 1,15 -> 1,224 bei h 0,60 m, 3 m/s, RHmin 25 % [Gl. 62]",
+           kc_klimaanpassung(1.15, 3.0, 25.0, 0.60), 1.224, 0.002)
+    # Die Groesse haengt an der Pflanzenhoehe - ein Rasen wird weniger
+    # angehoben als eine Tomate. Genau dafuer steht der Hoehenterm da.
+    e.append((kc_klimaanpassung(1.0, 3.0, 25.0, 0.10)
+              < kc_klimaanpassung(1.0, 3.0, 25.0, 0.60),
+              "Hohe Pflanze wird staerker angepasst als niedrige"))
+    # Ausserhalb des Geltungsbereichs wird auf den Rand gesetzt, nicht
+    # extrapoliert - sonst entstuende aus 20 m/s Sturm ein Kc von 1,7.
+    e.append((kc_klimaanpassung(1.0, 20.0, 5.0, 0.60)
+              == kc_klimaanpassung(1.0, 6.0, 20.0, 0.60),
+              "Ausserhalb 1-6 m/s und 20-80 % wird begrenzt, nicht extrapoliert"))
 
     # --- Boden: Beispiel aus [F], Kapitel 8 ---
     t = taw(0.32, 0.12, 0.8)

@@ -18,10 +18,40 @@ Open-Meteo ist kostenlos und ohne Schluessel nutzbar; der Anbieter nennt das
 ausdruecklich fuer nicht gewerbliche Nutzung. Die Felder heissen
 'et0_fao_evapotranspiration' (mm) und 'precipitation_sum' (mm) - dieselbe
 FAO-56-Rechnung, die auch bin/fao56.py macht.
+
+Neu in 0.9.7: **Tagesextremwerte.**
+
+Eine Wetterstation liefert einen Momentanwert. FAO-56 rechnet mit Tmin und
+Tmax des Tages - zwei verschiedene Dinge. Bis 0.9.6 zeigten deshalb ALLE
+vier mitgelieferten Stationsvorlagen tmin und tmax auf dieselbe Quelle, und
+in der Rechnung kam Tmax - Tmin = 0 heraus.
+
+Gemessen am 18.08.2026 fuer einen Sommertag von 12 bis 28 Grad ohne
+Strahlungsmesser:
+
+    richtige Spanne   ET0 = 5,40 mm   (Rs = 25,8 MJ)
+    tmin = tmax = 22  ET0 = 1,95 mm   (Rs =  0,0 MJ, denn sqrt(0) = 0)
+
+Die eigene Station machte die Rechnung also schlechter als gar keine - und
+zwar still, mit der Guete 'geschaetzt' statt einer Fehlermeldung.
+
+Die Auflösung braucht keine Einstellung und keine neue Zuordnung: der
+Sammler merkt sich je Groesse den Tagesverlauf und gibt fuer tmin das
+**Minimum** und fuer tmax das **Maximum** des Tages zurueck. Das ist in
+BEIDEN Faellen richtig:
+
+  * Liefert die Station einen Momentanwert, ist das Minimum des Tages
+    genau das gesuchte Tmin.
+  * Liefert sie einen echten Tagestiefstwert, faellt der im Tagesverlauf
+    monoton - sein Minimum ist derselbe Wert.
+
+Deshalb greift die Aenderung auch auf bestehenden Anlagen, ohne dass jemand
+etwas umstellen muss.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import re
@@ -40,6 +70,39 @@ OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
 _KAPUTT = object()
 
 
+# Wie eine Groesse ueber den Tag zusammengefasst wird.
+#
+#   min/max   Tagestiefst- bzw. Tageshoechstwert. Fuer tmin/tmax und die
+#             Luftfeuchte - das ist genau das, was FAO-56 verlangt.
+#   mittel    Tagesmittel. Die Globalstrahlung geht als MITTELWERT in
+#             Rs = Mittel * 0,0864 ein; ein Momentanwert um die Mittagszeit
+#             waere um ein Vielfaches zu hoch, einer am Abend zu niedrig.
+#             Beim Wind nennt [F] ebenfalls das Tagesmittel.
+#   letzt     Der zuletzt eingetroffene Wert. Fuer alles, was eine Lage
+#             beschreibt und keinen Tagesgang hat.
+#   summe_max Ein Tageszaehler, der um Mitternacht auf 0 springt. Das
+#             Maximum des Tages ist die Tagessumme; faellt der Wert, hat
+#             der Zaehler zurueckgesetzt.
+AGGREGAT = {
+    "tmin": "min", "tmax": "max",
+    "rh_min": "min", "rh_max": "max", "rh_mittel": "mittel",
+    "taupunkt": "letzt",
+    "wind": "mittel", "strahlung_wm2": "mittel",
+    "sonnenstunden": "summe_max", "regen_tag": "summe_max",
+    "regen_stunde": "letzt", "bodenfeuchte": "letzt",
+}
+
+# Ab wann gilt ein Tagesmittel als brauchbar?
+#
+# Die Globalstrahlung ueber einen halben Tag gemittelt ist keine
+# Tagesmittelstrahlung - sie ist um den Faktor zwei daneben, je nachdem
+# welche Haelfte. Deshalb wird ein Mittelwert erst herausgegeben, wenn die
+# Messreihe den Tag hinreichend abdeckt; sonst faellt die Groesse auf
+# Open-Meteo zurueck. Das ist dieselbe Regel wie ueberall hier: lieber das
+# Modell als eine Zahl, die aussieht wie eine Messung.
+MITTEL_MINDESTSTUNDEN = 18.0
+
+
 # --------------------------------------------------------------------------
 # Pfade in JSON
 # --------------------------------------------------------------------------
@@ -50,6 +113,19 @@ def json_pfad(daten: Any, pfad: str) -> Any:
     Beispiele:  'value'
                 'result.temperature'
                 'common_list[2].val'
+                'common_list[id=0x02].val'      <- Auswahl je Kennung
+
+    **Auswahl je Kennung, neu in 0.9.10.** Eine Stellungsangabe wie
+    'common_list[3]' zeigt auf den vierten Eintrag - und der ist ein anderer,
+    sobald ein Sensor dazukommt oder ausfaellt. Am 18.08.2026 zeigte deshalb
+    an einer echten Anlage die Globalstrahlung auf den Dampfdruck: die
+    mitgelieferte Vorlage traf die Anordnung eines anderen Geraets. Die
+    Kennung dagegen bleibt, was sie ist.
+
+    'common_list[id=0x02].val' sucht in der Liste den ersten Eintrag, dessen
+    Feld 'id' den Wert '0x02' hat. Der Vergleich ist zeichengenau, aber ohne
+    Beachtung von Gross- und Kleinschreibung - Gateways schreiben '0x02' und
+    '0X02' gemischt.
 
     Gibt None zurueck, wenn der Pfad ins Leere zeigt - und wirft nicht. Eine
     fehlende Groesse ist ein Normalfall, kein Fehler: sie faellt dann auf
@@ -61,21 +137,38 @@ def json_pfad(daten: Any, pfad: str) -> Any:
     for teil in pfad.split("."):
         if stelle is None:
             return None
-        m = re.match(r"^([^\[]*)((?:\[\d+\])*)$", teil.strip())
+        m = re.match(r"^([^\[]*)((?:\[[^\]]*\])*)$", teil.strip())
         if not m:
             return None
-        name, indizes = m.group(1), m.group(2)
+        name, klammern = m.group(1), m.group(2)
         if name:
             if not isinstance(stelle, dict) or name not in stelle:
                 return None
             stelle = stelle[name]
-        for i in re.findall(r"\[(\d+)\]", indizes):
+        for inhalt in re.findall(r"\[([^\]]*)\]", klammern):
+            if inhalt.isdigit():
+                if not isinstance(stelle, (list, tuple)):
+                    return None
+                k = int(inhalt)
+                if k >= len(stelle):
+                    return None
+                stelle = stelle[k]
+                continue
+            aw = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", inhalt)
+            if not aw:
+                return None
+            feld, wert = aw.group(1), aw.group(2).strip().strip('"\'')
             if not isinstance(stelle, (list, tuple)):
                 return None
-            k = int(i)
-            if k >= len(stelle):
+            treffer = None
+            for eintrag in stelle:
+                if (isinstance(eintrag, dict)
+                        and str(eintrag.get(feld, "")).lower() == wert.lower()):
+                    treffer = eintrag
+                    break
+            if treffer is None:
                 return None
-            stelle = stelle[k]
+            stelle = treffer
     return stelle
 
 
@@ -197,6 +290,47 @@ def open_meteo(breite: float, laenge: float, zeitzone: str = "auto",
 # Alles zusammentragen
 # --------------------------------------------------------------------------
 
+def _feldliste_lesen(text: str) -> dict | None:
+    """Eine Nutzlast im Ecowitt-Uploadformat in ein Verzeichnis wandeln.
+
+    Ein GW3000A, das ueber MQTT sendet, schickt **kein JSON**, sondern die
+    Feldliste des Ecowitt-Uploadprotokolls:
+
+        PASSKEY=...&stationtype=GW3000A_V1.2.2&tempf=63.50&humidity=88
+        &windspeedmph=2.91&solarradiation=0.00&dailyrainin=0.358&...
+
+    Ohne diese Umwandlung findet 'zahl()' darin die erste Zahl der ganzen
+    Zeichenkette - also irgendetwas aus dem Wortzeichen - und haelt sie fuer
+    einen Messwert. Das ist die stille Falschaussage in Reinform.
+
+    Gemessen am 18.08.2026, 22:27, an einem GW3000A_V1.2.2.
+
+    **Die Werte sind imperial, unabhaengig von den Einheiten-Einstellungen
+    des Geraets.** Belegt gegen die Hersteller-App zum selben Zeitpunkt:
+    dailyrainin 0,358 in = 9,09 mm gegen 9,1 mm in der App, eventrainin
+    1,059 in = 26,90 mm gegen 26,9 mm, yearlyrainin 2,992 in = 76,00 mm
+    gegen 76,0 mm. Die Einstellung 'Rain: mm' im Geraet gilt also nur fuer
+    seine eigene Oberflaeche. Einzige Ausnahme: 'solarradiation' steht schon
+    in W/m2.
+
+    Rueckgabe: das Verzeichnis, oder None wenn es keine Feldliste ist.
+    """
+    if "=" not in text or len(text) > 20000:
+        return None
+    teile = [t for t in text.strip().split("&") if "=" in t]
+    # Zwei Felder sind die Untergrenze: ein einzelnes 'a=1' kann alles sein.
+    if len(teile) < 2:
+        return None
+    aus: dict[str, str] = {}
+    for t in teile:
+        k, _, v = t.partition("=")
+        k = k.strip()
+        if not k or " " in k:
+            return None
+        aus[k] = urllib.parse.unquote_plus(v)
+    return aus
+
+
 class Sammler:
     """Traegt die Messgroessen aus allen eingerichteten Wegen zusammen.
 
@@ -212,7 +346,10 @@ class Sammler:
         self.mqtt: dict[str, tuple[str, float]] = {}     # thema -> (rohtext, ts)
         self._geparst: dict[str, Any] = {}               # thema -> zerlegtes JSON
         self.roh_http: Any = None
+        self.roh_http_ts: float = 0.0
         self.letzter_http_fehler = ""
+        # Tagesspeicher: datum -> groesse -> Kennzahlen (siehe beobachten()).
+        self.tag: dict[str, Any] = {"datum": "", "werte": {}}
 
     # ---- MQTT ----
 
@@ -256,7 +393,10 @@ class Sammler:
         try:
             d: Any = json.loads(nutzlast)
         except ValueError:
-            d = _KAPUTT
+            # Kein JSON? Dann vielleicht eine Feldliste.
+            d = _feldliste_lesen(nutzlast)
+            if d is None:
+                d = _KAPUTT
         self._geparst[thema] = d
         return d
 
@@ -267,9 +407,16 @@ class Sammler:
             return
         try:
             self.roh_http = http_holen(self.http_url)
+            self.roh_http_ts = time.time()
             self.letzter_http_fehler = ""
         except Exception as f:
+            # Die alte Antwort NICHT stehen lassen: bis 0.9.6 blieb
+            # 'roh_http' beim naechsten Fehlschlag einfach erhalten und
+            # wurde weiter als Stationswert ausgegeben - ohne jede
+            # Altersgrenze, anders als beim MQTT-Weg. Ein eingefrorener
+            # Endpunkt verdraengte damit das Modell auf Dauer.
             self.roh_http = None
+            self.roh_http_ts = 0.0
             self.letzter_http_fehler = str(f)
             _LOG.warning("HTTP-Quelle antwortet nicht: %s", f)
 
@@ -296,6 +443,8 @@ class Sammler:
         elif weg == "http":
             if self.roh_http is None:
                 return None, "http_nichts"
+            if time.time() - self.roh_http_ts > hoechstalter:
+                return None, "http_veraltet"
             roh = json_pfad(self.roh_http, str(f.get("pfad") or ""))
         else:
             return None, "fehlt"
@@ -306,12 +455,96 @@ class Sammler:
         return umrechnen(z, str(f.get("einheit_quelle") or ""), self.einheiten), weg
 
 
+    # ---- Tagesverlauf ----
+
+    def beobachten(self, datum: str, jetzt: float | None = None) -> int:
+        """Den aktuellen Stand jeder eingerichteten Groesse in den Tag eintragen.
+
+        Wird vom Dienst in jedem Takt gerufen. Je Groesse werden Kleinstwert,
+        Groesstwert, Summe, Anzahl und die Zeitspanne der Reihe gefuehrt -
+        daraus entstehen in 'tageswert' Tmin, Tmax und die Tagesmittel.
+
+        Bei einem Datumswechsel faengt der Tag von vorn an. Das ist
+        beabsichtigt: ein Tageshoechstwert, der den gestrigen mitschleppt,
+        waere schlimmer als gar keiner.
+
+        Rueckgabe: wie viele Groessen einen Wert beigesteuert haben.
+        """
+        jetzt = time.time() if jetzt is None else jetzt
+        if self.tag.get("datum") != datum:
+            self.tag = {"datum": datum, "werte": {}}
+        n = 0
+        for g in self.felder:
+            w, _woher = self.wert(g)
+            if w is None:
+                continue
+            n += 1
+            k = self.tag["werte"].setdefault(
+                g, {"min": w, "max": w, "summe": 0.0, "anzahl": 0,
+                    "letzt": w, "erste_ts": jetzt, "letzte_ts": jetzt})
+            k["min"] = min(k["min"], w)
+            k["max"] = max(k["max"], w)
+            k["summe"] += w
+            k["anzahl"] += 1
+            k["letzt"] = w
+            k["letzte_ts"] = jetzt
+        return n
+
+    def tageswert(self, groesse: str, datum: str) -> tuple[float | None, str]:
+        """Der Tageswert einer Groesse nach der Regel aus AGGREGAT.
+
+        Rueckgabe: (Wert, Grund). Der Grund ist leer, wenn ein Wert kommt,
+        sonst eine Kennung, die sagt WARUM keiner kommt - 'kein_tag',
+        'nichts_gesehen' oder 'abdeckung_zu_kurz'.
+        """
+        if self.tag.get("datum") != datum:
+            return None, "kein_tag"
+        k = (self.tag.get("werte") or {}).get(groesse)
+        if not k or not k.get("anzahl"):
+            return None, "nichts_gesehen"
+        art = AGGREGAT.get(groesse, "letzt")
+        if art == "min":
+            return k["min"], ""
+        if art in ("max", "summe_max"):
+            return k["max"], ""
+        if art == "mittel":
+            stunden = (k["letzte_ts"] - k["erste_ts"]) / 3600.0
+            if stunden < MITTEL_MINDESTSTUNDEN:
+                # Ein halber Tag Strahlung gemittelt ist kein Tagesmittel.
+                return None, "abdeckung_zu_kurz"
+            return k["summe"] / k["anzahl"], ""
+        return k["letzt"], ""
+
+    def abdeckung_stunden(self, groesse: str) -> float:
+        k = (self.tag.get("werte") or {}).get(groesse)
+        if not k:
+            return 0.0
+        return max(0.0, (k["letzte_ts"] - k["erste_ts"]) / 3600.0)
+
+    def tag_laden(self, gespeichert: dict | None) -> None:
+        """Den Tagesspeicher aus der Datei uebernehmen.
+
+        Ohne das verlöre ein Neustart um die Mittagszeit den Tagestiefstwert
+        der Nacht - und Tmin waere dann die Mittagstemperatur.
+        """
+        if isinstance(gespeichert, dict) and gespeichert.get("datum"):
+            werte = gespeichert.get("werte")
+            if isinstance(werte, dict):
+                self.tag = {"datum": str(gespeichert["datum"]), "werte": werte}
+
+
 def messwerte_zusammenstellen(sammler: Sammler, online_heute: dict | None,
-                              standort: dict) -> dict:
+                              standort: dict, datum: str = "") -> dict:
     """Die Eingangsgroessen fuer fao56.et0_aus_messwerten zusammenstellen.
 
     Je Groesse gilt: erst die eigene Station, sonst Open-Meteo, sonst gar
     nicht. Die Herkunft wird mitgefuehrt und wandert bis in die Oberflaeche.
+
+    Seit 0.9.7 wird zuerst der **Tageswert** genommen (Tagestiefstwert fuer
+    tmin, Tageshoechstwert fuer tmax, Tagesmittel fuer Wind und Strahlung).
+    Erst wenn es keinen gibt - etwa am ersten Tag nach dem Start, oder wenn
+    die Messreihe den Tag nicht hinreichend abdeckt - gilt der Momentanwert.
+    Ohne 'datum' verhaelt sich die Funktion wie bis 0.9.6.
     """
     herkunft: dict[str, str] = {}
     m: dict[str, Any] = {}
@@ -320,7 +553,13 @@ def messwerte_zusammenstellen(sammler: Sammler, online_heute: dict | None,
         "tmin": "tmin", "tmax": "tmax", "rh_min": "rh_min", "rh_max": "rh_max",
     }
     for g in ("tmin", "tmax", "rh_min", "rh_max", "rh_mittel", "taupunkt",
-              "wind", "strahlung_wm2", "sonnenstunden", "regen_tag"):
+              "wind", "strahlung_wm2", "sonnenstunden", "regen_tag",
+              "regen_stunde", "bodenfeuchte"):
+        w, woher = (sammler.tageswert(g, datum) if datum else (None, ""))
+        if w is not None:
+            m[g] = w
+            herkunft[g] = "station"
+            continue
         w, woher = sammler.wert(g)
         if w is not None:
             m[g] = w
@@ -373,6 +612,81 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     e.append((json_pfad(d, "common_list[9].val") is None, "Index ausserhalb ergibt None"))
     e.append((json_pfad(d, "leer.tiefer") is None, "Pfad durch None ergibt None"))
 
+    # --- Nutzlast im Ecowitt-Uploadformat (neu in 0.9.10) ---
+    #
+    # Woertlich die Nachricht eines GW3000A vom 18.08.2026, 22:27, gekuerzt.
+    eco = ("PASSKEY=XXX&stationtype=GW3000A_V1.2.2&dateutc=2026-08-18%2020%3A27%3A42"
+           "&tempinf=72.50&humidityin=40&tempf=63.50&humidity=88&winddir=197"
+           "&windspeedmph=2.91&windgustmph=4.25&solarradiation=0.00&uv=0"
+           "&rainratein=0.000&eventrainin=1.059&hourlyrainin=0.000"
+           "&dailyrainin=0.358&weeklyrainin=1.059&monthlyrainin=1.728"
+           "&yearlyrainin=2.992&freq=868M&model=GW3000A&interval=60")
+    fl = _feldliste_lesen(eco)
+    e.append((fl is not None and fl.get("tempf") == "63.50",
+              "Feldliste erkannt: tempf = %s" % (fl or {}).get("tempf")))
+    e.append((fl is not None and fl.get("dailyrainin") == "0.358",
+              "und dailyrainin = %s" % (fl or {}).get("dailyrainin")))
+    e.append((fl is not None and "2026-08-18 20:27:42" == fl.get("dateutc"),
+              "Prozentkodierung aufgeloest: %r" % (fl or {}).get("dateutc")))
+    # Der Grund, warum es diese Umwandlung braucht: ohne sie nimmt zahl()
+    # die erste Zahl der GANZEN Zeichenkette.
+    e.append((zahl(eco) == 3000.0,
+              "Ohne Umwandlung ergaebe die rohe Nutzlast %s - eine Zahl aus dem "
+              "Geraetenamen, die wie ein Messwert aussieht" % zahl(eco)))
+    # Und was KEINE Feldliste ist, wird auch nicht dazu gemacht.
+    for kein in ("einfach nur Text", "23.5", "", "a=1"):
+        e.append((_feldliste_lesen(kein) is None,
+                  "Keine Feldliste: %r" % kein))
+    # Der ganze Weg ueber den Sammler, mit Umrechnung.
+    s_eco = Sammler({"felder": {
+        "tmax": {"weg": "mqtt", "thema": "ecowitt/GERAET", "pfad": "tempf",
+                 "einheit_quelle": "F"},
+        "regen_tag": {"weg": "mqtt", "thema": "ecowitt/GERAET",
+                      "pfad": "dailyrainin", "einheit_quelle": "in"},
+        "strahlung_wm2": {"weg": "mqtt", "thema": "ecowitt/GERAET",
+                          "pfad": "solarradiation"}}},
+        {"einheiten": {"F": {"faktor": 0.555556, "offset": -17.777778},
+                       "in": {"faktor": 25.4, "offset": 0.0}}})
+    s_eco.mqtt_setzen("ecowitt/GERAET", eco)
+    t_wert = s_eco.wert("tmax")[0]
+    r_wert = s_eco.wert("regen_tag")[0]
+    e.append((t_wert is not None and abs(t_wert - 17.5) < 0.05,
+              "63,50 F werden zu %.2f C (die App zeigte 17,8 C)" % (t_wert or -99)))
+    e.append((r_wert is not None and abs(r_wert - 9.09) < 0.02,
+              "0,358 in werden zu %.2f mm (die App zeigte 9,1 mm)" % (r_wert or -99)))
+    e.append((s_eco.wert("strahlung_wm2")[0] == 0.0,
+              "solarradiation steht schon in W/m2 und bleibt unveraendert"))
+
+    # --- Auswahl je Kennung (neu in 0.9.10) ---
+    #
+    # Nachgebaut mit der Antwort eines GW3000A, wie sie am 18.08.2026
+    # vorlag: die Stellung eines Eintrags haengt daran, welche Sensoren
+    # angemeldet sind, die Kennung nicht.
+    gw = {"common_list": [{"id": "0x02", "val": "18.3", "unit": "C"},
+                          {"id": "0x07", "val": "89%"},
+                          {"id": "5", "val": "0.231 kPa"},
+                          {"id": "0x15", "val": "0.00 W/m2"}],
+          "rain": [{"id": "0x0E", "val": "0.6 mm/Hr"},
+                   {"id": "0x10", "val": "9.1 mm"}]}
+    e.append((json_pfad(gw, "common_list[id=0x02].val") == "18.3",
+              "Kennung 0x02 findet die Aussentemperatur, egal an welcher Stelle"))
+    e.append((json_pfad(gw, "common_list[id=0x15].val") == "0.00 W/m2",
+              "Kennung 0x15 findet die Globalstrahlung"))
+    e.append((json_pfad(gw, "rain[id=0x10].val") == "9.1 mm",
+              "Kennung 0x10 findet den Tagesregen"))
+    e.append((json_pfad(gw, "common_list[id=0X15].val") == "0.00 W/m2",
+              "Gross- und Kleinschreibung der Kennung ist gleichgueltig"))
+    e.append((json_pfad(gw, "common_list[id=0x99].val") is None,
+              "Eine Kennung, die es nicht gibt, ergibt None statt eines Nachbarn"))
+    e.append((json_pfad(gw, "common_list[2].val") == "0.231 kPa",
+              "Die Stellungsangabe funktioniert unveraendert weiter"))
+    # Und der Fall, um den es geht: kommt ein Sensor dazu, verschiebt sich
+    # die Stellung - die Kennung nicht.
+    gw2 = {"common_list": [{"id": "0x01", "val": "neu"}] + gw["common_list"]}
+    e.append((json_pfad(gw2, "common_list[id=0x15].val") == "0.00 W/m2"
+              and json_pfad(gw2, "common_list[3].val") == "0.231 kPa",
+              "Ein zusaetzlicher Sensor verschiebt die Stellung, nicht die Kennung"))
+
     e.append((zahl("21.4 C") == 21.4, "Zahl aus '21.4 C'"))
     e.append((zahl("21,4") == 21.4, "Komma als Dezimaltrenner"))
     e.append((zahl("-3.5hPa") == -3.5, "Negative Zahl mit Einheit"))
@@ -406,7 +720,71 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     s.mqtt[("w/t")] = ("23.5", time.time() - 9999)
     e.append((s.wert("tmax")[1] == "mqtt_veraltet", "Veralteter Wert wird verworfen"))
     s.roh_http = {"result": {"wind": 36.0}}
+    s.roh_http_ts = time.time()      # seit 0.9.7 altern auch HTTP-Werte
     e.append((abs(s.wert("wind")[0] - 10.0) < 0.001, "HTTP-Wert samt Umrechnung"))
+
+    # --- Tagesextremwerte (neu in 0.9.7) ---
+    #
+    # Der Fehler, den das aufloest: alle vier mitgelieferten Vorlagen zeigen
+    # tmin und tmax auf DIESELBE Quelle. Bis 0.9.6 kam damit Tmax - Tmin = 0
+    # heraus, und die Strahlungsnaeherung ueber die Temperaturspanne ergab
+    # glatt 0 (sqrt(0)).
+    st = Sammler({"felder": {"tmin": {"weg": "mqtt", "thema": "t"},
+                             "tmax": {"weg": "mqtt", "thema": "t"},
+                             "strahlung_wm2": {"weg": "mqtt", "thema": "s"}}},
+                 {"einheiten": tab})
+    # Ein Tag, wie ihn eine Station wirklich liefert: ein Momentanwert je Takt.
+    t0 = time.time() - 22 * 3600
+    for i, (grad, strahl) in enumerate([(12.0, 0.0), (15.0, 120.0), (22.0, 480.0),
+                                        (28.0, 700.0), (24.0, 250.0), (17.0, 0.0)]):
+        st.mqtt_setzen("t", str(grad))
+        st.mqtt_setzen("s", str(strahl))
+        st.beobachten("2026-07-15", t0 + i * 4 * 3600)
+    e.append((st.tageswert("tmin", "2026-07-15")[0] == 12.0,
+              "Tmin ist der Tagestiefstwert (12,0), nicht der letzte Messwert"))
+    e.append((st.tageswert("tmax", "2026-07-15")[0] == 28.0,
+              "Tmax ist der Tageshoechstwert (28,0)"))
+    e.append((st.wert("tmin")[0] == 17.0,
+              "Der Momentanwert bleibt daneben abrufbar (17,0)"))
+    mittel = st.tageswert("strahlung_wm2", "2026-07-15")[0]
+    e.append((mittel is not None and abs(mittel - 258.33) < 0.1,
+              "Strahlung wird gemittelt, nicht als Momentanwert genommen: %.1f W/m2"
+              % (mittel or -1)))
+    # Ein echter Tagestiefstwert der Station faellt im Tagesverlauf - sein
+    # Minimum ist derselbe Wert. Die Regel traegt also BEIDE Bauarten.
+    st2 = Sammler({"felder": {"tmin": {"weg": "mqtt", "thema": "n"}}}, {"einheiten": tab})
+    for i, grad in enumerate([18.0, 14.0, 12.0, 12.0]):
+        st2.mqtt_setzen("n", str(grad))
+        st2.beobachten("2026-07-15", t0 + i * 6 * 3600)
+    e.append((st2.tageswert("tmin", "2026-07-15")[0] == 12.0,
+              "Auch ein echter Tagestiefstwert der Station kommt richtig heraus"))
+    # Ein halber Tag Strahlung ist kein Tagesmittel - dann lieber Open-Meteo.
+    st3 = Sammler({"felder": {"strahlung_wm2": {"weg": "mqtt", "thema": "s"}}},
+                  {"einheiten": tab})
+    for i in range(4):
+        st3.mqtt_setzen("s", "600")
+        st3.beobachten("2026-07-15", t0 + i * 3600)
+    w3, grund3 = st3.tageswert("strahlung_wm2", "2026-07-15")
+    e.append((w3 is None and grund3 == "abdeckung_zu_kurz",
+              "Vier Stunden Strahlung ergeben KEIN Tagesmittel, sondern '%s'" % grund3))
+    # Der Tageswechsel raeumt auf.
+    st.beobachten("2026-07-16", time.time())
+    e.append((st.tageswert("tmax", "2026-07-15")[1] == "kein_tag",
+              "Am neuen Tag gilt der gestrige Hoechstwert nicht mehr"))
+    # Und der Neustart mitten am Tag verliert den Tiefstwert nicht.
+    st4 = Sammler({"felder": {"tmin": {"weg": "mqtt", "thema": "t"}}}, {"einheiten": tab})
+    st4.tag_laden(st2.tag)
+    e.append((st4.tageswert("tmin", "2026-07-15")[0] == 12.0,
+              "Nach einem Neustart steht der Tagestiefstwert wieder zur Verfuegung"))
+
+    # --- HTTP-Werte altern jetzt auch ---
+    s5 = Sammler({"felder": {"wind": {"weg": "http", "pfad": "w"}}}, {"einheiten": tab})
+    s5.roh_http = {"w": 10.0}
+    s5.roh_http_ts = time.time()
+    e.append((s5.wert("wind")[0] == 10.0, "Frischer HTTP-Wert wird genommen"))
+    s5.roh_http_ts = time.time() - 9999
+    e.append((s5.wert("wind")[1] == "http_veraltet",
+              "Veralteter HTTP-Wert wird verworfen statt endlos weitergereicht"))
 
     online = {"tmin": 11.0, "tmax": 24.0, "rh_min": 40, "rh_max": 90,
               "wind_kmh": 18.0, "strahlung_mj": 22.0, "regen": 3.2}
@@ -427,6 +805,32 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     e.append((z2["herkunft"]["tmin"] == "keine",
               "Ohne Station und ohne Netz: Herkunft 'keine', kein erfundener Wert"))
     e.append(("tmin" not in z2["messwerte"], "Fehlende Groesse wird nicht erfunden"))
+
+    # Die beiden Groessen, die bis 0.9.6 in der Oberflaeche zuordenbar waren
+    # und von keiner Zeile Code gelesen wurden.
+    s6 = Sammler({"felder": {"regen_stunde": {"weg": "mqtt", "thema": "r"},
+                             "bodenfeuchte": {"weg": "mqtt", "thema": "b"}}},
+                 {"einheiten": tab})
+    s6.mqtt_setzen("r", "2.4")
+    s6.mqtt_setzen("b", "31")
+    z6 = messwerte_zusammenstellen(s6, None, {"breite": 48.5})
+    e.append((z6["messwerte"].get("regen_stunde") == 2.4
+              and z6["herkunft"].get("regen_stunde") == "station",
+              "regen_stunde wird gelesen (bis 0.9.6 eine Eingabe ohne Wirkung)"))
+    e.append((z6["messwerte"].get("bodenfeuchte") == 31.0,
+              "bodenfeuchte wird gelesen und kann Zonen ohne eigenes Thema versorgen"))
+
+    # Und die Vorlagen selbst: dass tmin und tmax auf dieselbe Quelle zeigen,
+    # ist ab 0.9.7 richtig - der Tagesspeicher macht daraus Extremwerte.
+    st7 = Sammler({"felder": {"tmin": {"weg": "mqtt", "thema": "x"},
+                              "tmax": {"weg": "mqtt", "thema": "x"}}},
+                  {"einheiten": tab})
+    for i, grad in enumerate([11.0, 27.0, 19.0]):
+        st7.mqtt_setzen("x", str(grad))
+        st7.beobachten("2026-07-15", time.time() - (20 - i * 8) * 3600)
+    zz = messwerte_zusammenstellen(st7, None, {"breite": 48.5}, "2026-07-15")
+    e.append((zz["messwerte"]["tmin"] == 11.0 and zz["messwerte"]["tmax"] == 27.0,
+              "EIN Thema fuer tmin und tmax ergibt jetzt 11,0 und 27,0 statt zweimal 19,0"))
     return e
 
 

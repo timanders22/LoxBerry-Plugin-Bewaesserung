@@ -93,41 +93,86 @@
     },
     "ecowitt_lokal": {
       "text": "Ecowitt-Gateway, oertlich abgefragt (GW1100, GW2000, GW3000)",
-      "hinweis": "Das Gateway beantwortet im Heimnetz 'get_livedata_info' ohne Zugangsdaten. Die Werte stehen dort in Listen mit einer Kennung je Groesse; die Pfade unten treffen die uebliche Anordnung, sind aber NICHT an einem Geraet geprueft. Der Reiter Quellen zeigt die Rohantwort - daran laesst sich jeder Pfad in einer Minute richtigstellen.",
+      "hinweis": "Das Gateway beantwortet im Heimnetz 'get_livedata_info' ohne Zugangsdaten. Die Pfade unten waehlen je KENNUNG statt je Stellung - eine Stellungsangabe zeigt auf einen anderen Eintrag, sobald ein Sensor dazukommt. Die Kennungen sind am 18.08.2026 an einem GW3000A gegen die Hersteller-App gemessen. Der Knopf 'Antwort abholen und zuordnen' prueft sie gegen IHR Geraet.",
       "http_url": "http://GATEWAY-ADRESSE/get_livedata_info",
       "felder": {
         "tmax": {
           "weg": "http",
-          "pfad": "common_list[0].val",
-          "einheit_quelle": "F"
+          "pfad": "common_list[id=0x02].val"
         },
         "tmin": {
           "weg": "http",
-          "pfad": "common_list[0].val",
-          "einheit_quelle": "F"
+          "pfad": "common_list[id=0x02].val"
         },
         "rh_mittel": {
           "weg": "http",
-          "pfad": "common_list[1].val"
+          "pfad": "common_list[id=0x07].val"
         },
-        "strahlung_wm2": {
+        "taupunkt": {
           "weg": "http",
-          "pfad": "common_list[3].val"
+          "pfad": "common_list[id=0x03].val"
         },
         "wind": {
           "weg": "http",
-          "pfad": "wh25[0].wind",
-          "einheit_quelle": "km/h"
+          "pfad": "common_list[id=0x0B].val"
         },
-        "regen_stunde": {
+        "strahlung_wm2": {
           "weg": "http",
-          "pfad": "rain[1].val",
-          "einheit_quelle": "mm"
+          "pfad": "common_list[id=0x15].val"
         },
         "regen_tag": {
           "weg": "http",
-          "pfad": "rain[2].val",
-          "einheit_quelle": "mm"
+          "pfad": "rain[id=0x10].val"
+        },
+        "regen_stunde": {
+          "weg": "http",
+          "pfad": "rain[id=0x0E].val"
+        }
+      }
+    },
+    "ecowitt_mqtt_direkt": {
+      "text": "Ecowitt-Gateway sendet selbst ueber MQTT (ohne Bruecke)",
+      "hinweis": "Das Gateway schickt unter 'Weather Services' > 'Customized' > 'MQTT' EINE Nachricht mit allen Werten - keine JSON-Struktur, sondern die Feldliste des Ecowitt-Uploadprotokolls. Das Thema steht dort als 'Publish Topic' und muss unten ueberall eingetragen werden. ACHTUNG: die Werte sind IMPERIAL, unabhaengig von den Einheiten-Einstellungen des Geraets - das ist am 18.08.2026 an einem GW3000A_V1.2.2 gegen die Hersteller-App gemessen (0,358 in = 9,09 mm gegen 9,1 mm in der App). Die Einheiten unten sind deshalb gesetzt und gehoeren so. Einzige Ausnahme: solarradiation steht schon in W/m2.",
+      "felder": {
+        "tmax": {
+          "weg": "mqtt",
+          "thema": "ecowitt/GERAET",
+          "pfad": "tempf",
+          "einheit_quelle": "F"
+        },
+        "tmin": {
+          "weg": "mqtt",
+          "thema": "ecowitt/GERAET",
+          "pfad": "tempf",
+          "einheit_quelle": "F"
+        },
+        "rh_mittel": {
+          "weg": "mqtt",
+          "thema": "ecowitt/GERAET",
+          "pfad": "humidity"
+        },
+        "wind": {
+          "weg": "mqtt",
+          "thema": "ecowitt/GERAET",
+          "pfad": "windspeedmph",
+          "einheit_quelle": "mph"
+        },
+        "strahlung_wm2": {
+          "weg": "mqtt",
+          "thema": "ecowitt/GERAET",
+          "pfad": "solarradiation"
+        },
+        "regen_tag": {
+          "weg": "mqtt",
+          "thema": "ecowitt/GERAET",
+          "pfad": "dailyrainin",
+          "einheit_quelle": "in"
+        },
+        "regen_stunde": {
+          "weg": "mqtt",
+          "thema": "ecowitt/GERAET",
+          "pfad": "rainratein",
+          "einheit_quelle": "in"
         }
       }
     },
@@ -322,6 +367,171 @@
       "offset": 0.0,
       "nach": "W/m2",
       "hinweis": "Tagessumme der Einstrahlung in Megajoule je Quadratmeter."
+    }
+  },
+  "kennungen": {
+    "_hinweis": [
+      "Kennungen der Ecowitt-Gateways (GW1100, GW2000, GW3000, WS-Reihe).",
+      "",
+      "GEMESSEN am 18.08.2026 gegen ein GW3000A: die Antwort von",
+      "get_livedata_info wurde Feld fuer Feld gegen die Anzeige der",
+      "Hersteller-App gehalten. Jede Zeile unten hat dort ihr Gegenstueck",
+      "gefunden - nichts davon ist aus einer Dokumentation uebernommen und",
+      "nichts geraten.",
+      "",
+      "Belegkette je Kennung (App-Wert zum selben Zeitpunkt):",
+      "  0x02 18,3 C     = Aussentemperatur      App 'Aussen: Temperatur'",
+      "  0x07 89 %       = Aussenluftfeuchte     App 'Aussen: Luftfeuchte'",
+      "  0x03 16,5 C     = Taupunkt              App 'Taupunkt'",
+      "  5    0,231 kPa  = Dampfdruckdefizit     App 'VPD 0,224 kPa'",
+      "  0x0B 2,3 m/s    = Windgeschwindigkeit   App 'Windgeschwindigkeit'",
+      "  0x19 6,9 m/s    = groesste Boe des Tages App 'Windboee Hoechstwert 6,9'",
+      "  0x15 0,00 W/m2  = Globalstrahlung       App 'Solar 0,0'",
+      "  0x17 0          = UV-Index              App 'UVI 0'",
+      "  0x0D 26,9 mm    = Regen des Ereignisses App 'Ereignis 26,9 mm'",
+      "  0x0E 0,6 mm/Hr  = Regenrate             App 'Regenrate/Std'",
+      "  0x7D 0,2 mm     = Regen der Stunde      App 'Stunde 0,2 mm'",
+      "  0x10 9,1 mm     = Regen des Tages       App 'Tag 9,1'",
+      "  0x11 26,9 mm    = Regen der Woche       App 'Woche 26,9 mm'",
+      "  0x12 43,9 mm    = Regen des Monats      App 'Monat 43,9 mm'",
+      "  0x13 76,0 mm    = Regen des Jahres      App 'Jahr 76,0 mm'",
+      "",
+      "Die Stellung eines Eintrags in der Liste haengt daran, welche",
+      "Sensoren angemeldet sind - die Kennung nicht. Deshalb steht in den",
+      "Vorlagen 'common_list[id=0x02].val' und nicht 'common_list[0].val'.",
+      "",
+      "0x0C liefert an diesem Geraet denselben Wert wie 0x0B und wird",
+      "deshalb NICHT zugeordnet: was von beiden der Mittelwind ist, war an",
+      "diesem einen Geraet nicht zu unterscheiden. 0x0A (225) und 0x6D",
+      "(201) sind Winkelangaben ohne Einheit und bleiben ebenfalls offen.",
+      "",
+      "Der MQTT-Weg desselben Geraets benutzt KEINE Kennungen, sondern die Feldnamen des Ecowitt-Uploadprotokolls (tempf, dailyrainin, ...) - und imperiale Einheiten. Siehe die Vorlage 'ecowitt_mqtt_direkt'."
+    ],
+    "quelle": "Gemessen an einem GW3000A-WIFIBCD3 gegen die Hersteller-App",
+    "stand": "2026-08-18",
+    "ecowitt": {
+      "common_list": {
+        "0x02": {
+          "groesse": "temperatur",
+          "einheit": ""
+        },
+        "0x07": {
+          "groesse": "luftfeuchte",
+          "einheit": ""
+        },
+        "0x03": {
+          "groesse": "taupunkt",
+          "einheit": ""
+        },
+        "0x0B": {
+          "groesse": "wind",
+          "einheit": ""
+        },
+        "0x15": {
+          "groesse": "strahlung_wm2",
+          "einheit": ""
+        }
+      },
+      "rain": {
+        "0x0E": {
+          "groesse": "regen_stunde",
+          "einheit": ""
+        },
+        "0x10": {
+          "groesse": "regen_tag",
+          "einheit": ""
+        }
+      }
+    },
+    "zuordnung": {
+      "temperatur": [
+        "tmin",
+        "tmax"
+      ],
+      "luftfeuchte": [
+        "rh_mittel"
+      ],
+      "taupunkt": [
+        "taupunkt"
+      ],
+      "wind": [
+        "wind"
+      ],
+      "strahlung_wm2": [
+        "strahlung_wm2"
+      ],
+      "regen_tag": [
+        "regen_tag"
+      ],
+      "regen_stunde": [
+        "regen_stunde"
+      ]
+    },
+    "ecowitt_mqtt": {
+      "_hinweis": [
+        "Feldnamen des Ecowitt-Uploadprotokolls, wie sie ein GW3000A ueber",
+        "MQTT sendet. GEMESSEN am 18.08.2026, 22:27, gegen die Anzeige der",
+        "Hersteller-App zum selben Zeitpunkt:",
+        "",
+        "  tempf         63,50 F   -> 17,50 C    App 17,8 C (35 min frueher)",
+        "  dailyrainin    0,358 in ->  9,09 mm   App Tag 9,1 mm",
+        "  eventrainin    1,059 in -> 26,90 mm   App Ereignis 26,9 mm",
+        "  monthlyrainin  1,728 in -> 43,89 mm   App Monat 43,9 mm",
+        "  yearlyrainin   2,992 in -> 76,00 mm   App Jahr 76,0 mm",
+        "  humidity          88    -> 88 %       App Luftfeuchte 88",
+        "  solarradiation  0,00    -> 0,00 W/m2  App Solar 0,0",
+        "",
+        "Die Werte sind IMPERIAL, unabhaengig von den Einheiten-Einstellungen",
+        "des Geraets - die gelten nur fuer dessen eigene Oberflaeche und fuer",
+        "get_livedata_info. Einzige Ausnahme: solarradiation steht schon in",
+        "W/m2.",
+        "",
+        "NICHT zugeordnet werden 'tempinf' und 'humidityin': das sind die",
+        "INNENwerte. Sie sehen aus wie brauchbare Messwerte und waeren die",
+        "gefaehrlichste Fehlzuordnung - 22,5 C im Wohnzimmer statt 17,8 C",
+        "im Garten faellt niemandem auf."
+      ],
+      "quelle": "Gemessen an einem GW3000A_V1.2.2 gegen die Hersteller-App",
+      "stand": "2026-08-18",
+      "felder": {
+        "tempf": {
+          "groessen": [
+            "tmin",
+            "tmax"
+          ],
+          "einheit": "F"
+        },
+        "humidity": {
+          "groessen": [
+            "rh_mittel"
+          ],
+          "einheit": ""
+        },
+        "windspeedmph": {
+          "groessen": [
+            "wind"
+          ],
+          "einheit": "mph"
+        },
+        "solarradiation": {
+          "groessen": [
+            "strahlung_wm2"
+          ],
+          "einheit": ""
+        },
+        "dailyrainin": {
+          "groessen": [
+            "regen_tag"
+          ],
+          "einheit": "in"
+        },
+        "rainratein": {
+          "groessen": [
+            "regen_stunde"
+          ],
+          "einheit": "in"
+        }
+      }
     }
   }
 }

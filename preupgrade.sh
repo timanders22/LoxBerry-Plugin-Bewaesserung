@@ -29,6 +29,26 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 # dem Cron den Dienst nicht mitten im Update wieder hochzieht.
 DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
 PID="$BASE/data/plugins/$PFOLDER/dienst.pid"
+# NEBEN das Datenverzeichnis, nicht hinein: der Installer raeumt
+# data/plugins/<ordner>/ vollstaendig ab, bevor postinstall.sh laeuft.
+# Gemessen am Installationsprotokoll vom 18.08.2026 (Zeilen 1148/1152).
+MERKER="$BASE/config/plugins/$PFOLDER.backup.lief_vorher"
+
+# Merken, ob der Dienst lief - und zwar VOR dem Anhalten.
+#
+# Das ist die Berichtigung eines Fehlers, der seit 0.9.0 in jedem Update
+# steckte: 'dienst.sh stop' entfernt den Sollmerker (soll_laufen), und der
+# minuetliche Waechter startet nur, wenn dieser Merker liegt. postinstall.sh
+# ruft an keiner Stelle 'start' auf. Nach JEDEM Update stand das Plugin
+# also still, bis jemand die Oberflaeche oeffnete und den Knopf drueckte -
+# und weil der Endpunkt dann einfach den letzten Stand auslieferte, sah es
+# in Loxone nicht nach einem Defekt aus, sondern nach einem ruhigen Garten.
+rm -f "$MERKER"
+if [ -x "$DIENST" ] && "$DIENST" status >/dev/null 2>&1; then
+    : > "$MERKER"
+    echo "<INFO> Der Dienst lief - er wird nach dem Update wieder gestartet."
+fi
+
 if [ -x "$DIENST" ]; then
     "$DIENST" stop >/dev/null 2>&1
     echo "<INFO> Laufender Dienst ueber dienst.sh angehalten."

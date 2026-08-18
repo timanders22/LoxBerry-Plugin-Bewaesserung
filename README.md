@@ -5,9 +5,10 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.0 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.7 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
-> zu Ihrer Wetterstation passt, zeigt erst der Betrieb.
+> zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
+> 0.9.6 auf „0.9.0" — sechs Fassungen lang.
 
 ## Herstellerneutral — das ist der Kern
 
@@ -76,6 +77,198 @@ Kein Pflichtpaket. `paho-mqtt` ist freiwillig und nur für MQTT-Quellen nötig.
 Er liefert Werte und sonst nichts. Ein Endpunkt im unangemeldeten Bereich, der
 Wasser aufdrehen kann, wäre eine Angriffsfläche ohne Gegenwert — geschaltet
 wird vom Bewässerungsbaustein im Miniserver.
+
+## Neu in 0.9.7
+
+**Zuerst die einzige Änderung, die ohne Ihr Zutun greift.** Der neue Schalter
+*Fehlende Tage im Verlauf nachtragen* steht ab Werk auf **an**. Grund: eine
+Lücke im Verlauf ist kein Geschmack, sondern ein Messfehler. Der Dienst
+schrieb nur den jeweils heutigen Tag; war der LoxBerry aus oder das Netz weg,
+fehlte der Tag für immer, und die Fortschreibung übersprang ihn stillschweigend.
+
+Gemessen an einer Zone mit 105 mm Speicher, vierzehn Tage trocken bei
+ET0 5 mm/Tag: fehlen fünf Tage, sinkt der gemeldete Bedarf von **24,3 auf
+9,2 mm** — auf 200 m² sind das **3 000 Liter**, die niemand ausbringt, weil das
+Plugin sie nicht verlangt. Die Daten dafür holt der Dienst bei jedem Lauf
+ohnehin mit (`past_days=10`) und warf sie bis 0.9.6 weg. Nachgetragen werden
+nur Tage, die **gar nicht** dastehen; ein vorhandener Tag wird nie
+überschrieben. Abschalten im Reiter Einstellungen — die 0 überlebt jedes
+weitere Speichern, und der Reiter Test sagt, was gilt.
+
+Alle übrigen neuen Funktionen sind **ab Werk aus** und ändern an einer
+bestehenden Anlage nichts. Nachgemessen: 280 Werte aus vier Wetterlagen und
+vier FAO-Rechnungen sind gegenüber 0.9.6 unverändert.
+
+### Der schwerste Befund: die eigene Station machte die Rechnung schlechter
+
+**Alle vier mitgelieferten Stationsvorlagen** — Ecowitt lokal, ecowitt2mqtt,
+WeeWX und WeatherFlow — zeigten `tmin` und `tmax` auf **dieselbe Quelle**. Eine
+Wetterstation liefert einen Momentanwert; FAO-56 rechnet mit Tiefst- und
+Höchstwert des Tages. In der Rechnung kam damit Tmax − Tmin = 0 heraus.
+
+Gemessen für einen Sommertag von 12 bis 28 °C ohne Strahlungsmesser:
+
+    richtige Spanne     ET0 = 5,40 mm    (Rs = 25,8 MJ)
+    tmin = tmax = 22    ET0 = 1,95 mm    (Rs =  0,0 MJ, denn Wurzel aus 0 ist 0)
+
+Wer seine eigene Station nach Vorlage einrichtete, bekam eine dreifach zu
+kleine Verdunstung — und zwar still, gekennzeichnet als „geschätzt" statt als
+Fehler. Die Auflösung braucht keine Umstellung: der Dienst merkt sich den
+Tagesverlauf je Messgröße und gibt für `tmin` das Minimum und für `tmax` das
+Maximum des Tages zurück. Das ist in beiden Fällen richtig — auch wenn Ihre
+Station einen echten Tagestiefstwert liefert, denn dessen Minimum über den Tag
+ist derselbe Wert. Wind und Strahlung werden gemittelt; deckt die Messreihe
+weniger als 18 Stunden ab, gilt der Mittelwert als zu dünn und die Größe fällt
+auf Open-Meteo zurück.
+
+### Die Bilanz erfährt jetzt, was ausgebracht wurde
+
+Die Bilanzgleichung hatte seit jeher ein Feld für die Bewässerung — gefüllt
+hat es nichts. Das Plugin schrieb den Wasserhaushalt fort, als würde nie
+gegossen. Gemessen, vierzehn Tage trocken:
+
+| | Defizit | Füllstand | Bedarf | Plan |
+|---|---|---|---|---|
+| ohne Rückmeldung | 63,2 mm | 40 % | 24,3 mm | 8 von 49 — „die Anlage schafft es nicht" |
+| mit 4 mm je Nacht | 10,5 mm | 90 % | 0,0 mm | „kein Bedarf" |
+
+Tragen Sie im Reiter Zonen je Kreis ein **Rückmeldethema** ein und lassen Sie
+Loxone dorthin die Laufminuten oder die fertigen Durchläufe der Nacht
+schreiben. Kein neuer Endpunkt: der unangemeldete Bereich darf nichts
+schreiben, und ein Endpunkt, der die Wasserbilanz verstellen kann, wäre eine
+Angriffsfläche ohne Gegenwert. **Ohne Becherprobe bleibt die Rückmeldung
+wirkungslos** — aus Laufzeit wird nur mit gemessener Rate eine Höhe, und eine
+erfundene wäre je nach Regner um den Faktor sechzehn falsch.
+
+### Ventilzeit je Zone — die Zahl für Tv1 bis Tv8
+
+Bis 0.9.6 galt **eine** Zonendauer für alle Kreise, und der Plan gab **eine**
+Durchlaufzahl aus. Die mitgelieferte Regnertabelle reicht von 4 mm/h
+(Tropfer) bis 35 mm/h (Sprühdüsen) — Faktor neun. Gemessen an zwei Zonen mit
+je 13,9 mm Bedarf und 240 s Dauer:
+
+    Rasen (35 mm/h)          bekam 21,0 mm   ->  50 Prozent zu viel
+    Tropfschlauchbeet (5)    bekam  3,0 mm   ->  80 Prozent zu wenig
+
+Jede Zone kann jetzt eine eigene Dauer tragen, und der Plan rechnet je Zone
+eine **Ventilzeit**: die Sekunden je Durchlauf, mit denen genau diese Zone
+nach der geplanten Zahl von Durchläufen ihren Bedarf gedeckt hat. Für dasselbe
+Beispiel: 239 s für die Sprühdüsen, 1 674 s für den Tropfschlauch. Das ist die
+Zahl, die auf Tv1 bis Tv8 des Bewässerungsbausteins gehört. Reicht die längste
+erlaubte Ventilzeit nicht, wird die Zone **benannt** statt beschönigt.
+
+### Frost, Sturm, Starkregen — drei Sperren, alle ab Werk aus
+
+Jeder Vorschautag trug bereits Tiefsttemperatur und Wind; gelesen wurden nur
+Verdunstung und Regen. Die Messgröße *Regenrate* war im Reiter Quellen
+zuordenbar und wurde von **keiner Zeile Code** gelesen. Alle drei Sperren
+lassen sich jetzt einschalten; eingeschaltet setzen sie die Durchläufe auf
+null und nennen den Grund — was ohne die Sperre nötig gewesen wäre, steht
+daneben. **Ohne Daten wird nie gesperrt:** eine Sperre aus einem Netzausfall
+abzuleiten hieße, den Garten trockenzulegen.
+
+### Weiteres
+
+- **Der Dienst läuft nach einem Update wieder an.** `preupgrade.sh` hielt ihn
+  über `dienst.sh stop` an, und `stop` entfernt den Sollmerker, an dem der
+  minütliche Wächter hängt. `postinstall.sh` rief niemals `start`. Nach **jedem**
+  Update stand das Plugin still, bis jemand die Oberfläche öffnete — und weil
+  der Endpunkt weiter den letzten Stand auslieferte, sah das in Loxone nicht
+  nach einem Defekt aus, sondern nach einem ruhigen Garten. Ein bewusst
+  angehaltener Dienst bleibt angehalten.
+- **Reiter Verlauf.** Die Verlaufsdatei hält bis zu 400 Tage und wurde bis
+  0.9.6 an genau einer Stelle benutzt: um die Tage zu *zählen*. Jetzt stehen
+  Verdunstung, Regen und ausgebrachte Menge Tag für Tag da, mit Summen.
+- **`?selftest=1` am Endpunkt** — die Tokenprobe des Hausstandards, ohne jede
+  Wirkung. Und der **Reiter Test ruft den eigenen Endpunkt wirklich auf**, mit
+  drei Ausgängen: Haken, Kreuz mit Code, und *Hinweis* statt Kreuz, wenn gar
+  keine Antwort kommt — ein Webserver, der eine Anfrage zugleich bearbeitet,
+  kann sich beim Seitenaufbau nicht selbst aufrufen.
+- **Der Reiter Quellen zeigt, was zuletzt angekommen ist.** Zwei Vorlagen
+  sagten das seit jeher zu; die dafür vorgesehene Datei wurde nie geschrieben.
+- **Drei Gründe hatten keinen Satz.** `rate_fehlt`, `rate_fehlt_teilweise` und
+  `fenster_ungueltig` fehlten in **beiden** Sprachdateien — im Reiter Test
+  stand buchstäblich „GRUND.RATE_FEHLT". Ausgerechnet der Fall, den der
+  Quelltext als den gefährlichsten des Moduls bezeichnet. Und die Zonen ohne
+  Niederschlagsrate werden jetzt mit Namen genannt, wie es seit 0.9.1 zugesagt
+  war.
+- **Die feste Rechenzeit gibt es wirklich.** Der Schlüssel `rechenzeit` stand
+  seit 0.9.0 mit dem Kommentar „wann der Plan für die Nacht steht" in der
+  Vorgabeliste und wurde von keiner Zeile gelesen.
+- **Ein Bodenfeuchtefühler altert jetzt.** Er wurde am Verfallsdatum vorbei
+  gelesen, das für jede andere Messgröße gilt; ein bei „nass" stehengebliebener
+  Fühler hätte die Bewässerung auf Dauer abgeschaltet. Dasselbe für die
+  HTTP-Quelle, die gar keine Altersgrenze hatte.
+- **Zwei Eingaben ohne Wirkung sind jetzt erreichbar:** der
+  Oberflächenabfluss-Anteil je Zone (Hanglage) und das Sensorgewicht. Beide
+  wurden von der Rechnung gelesen und hatten kein Eingabefeld.
+- **Das Datum der Becherprobe überlebt das Speichern.** Es wurde geschrieben
+  und beim nächsten Speichern der Zonentabelle still gelöscht.
+- **MQTT:** `alter` stand fest auf 0 und meldete als retained-Wert für immer
+  „gerade eben gerechnet". `et0` wurde bei fehlgeschlagener Rechnung als 0
+  gesendet. Und `<zone>/defizit_mm` trug den *Bedarf*, während das gleichnamige
+  Feld am HTTP-Endpunkt das *Defizit* führt — gemessen lagen sie um den Faktor
+  5,4 auseinander. Das Thema behält seine Bedeutung; daneben stehen jetzt die
+  eindeutig benannten `bedarf_mm` und `dr_mm`.
+- **Der Pflanzenbeiwert lässt sich an trockene Luft und Wind anpassen**
+  (FAO-56, Gl. 62) — nur mit eingetragener Pflanzenhöhe, sonst ändert sich
+  nichts. Die Größenordnung, gerechnet: +4,6 % beim Rasen, +6,4 % bei Tomaten
+  an einem heißen, trockenen, windigen Tag.
+- **Meldungen** über den Benachrichtigungsbereich von LoxBerry, wenn die
+  Anlage mehrere Tage nicht nachkommt oder die Station schweigt. Ab Werk aus.
+- **Der Dienst liest Änderungen ohne Neustart.** Wer im Reiter Quellen ein
+  Thema änderte, änderte bis 0.9.6 nichts, bis jemand den Dienst neu startete.
+- **Das Protokoll stand doppelt in der Datei** — ein Aufnehmer auf die
+  Logdatei und einer auf die Standardausgabe, die `dienst.sh` in dieselbe
+  Datei umleitet.
+
+### Wie das geprüft wurde
+
+- Die Selbstprüfungen der drei Rechenmodule laufen durch (FAO-56 Beispiel 18
+  unverändert bei 3,88 mm/Tag).
+- 41 Wirkungsprüfungen gegen den vollständigen Rechengang, gegen einen
+  nachgebauten LoxBerry-Baum und mit fester statt echter Wetterantwort.
+- Acht Prüfungen für Installation und Update, samt der Gegenfälle.
+- **Und jede der sechzehn Korrekturen ist geeicht:** einzeln zurückgebaut,
+  und die zugehörige Prüfung wird rot. Eine Prüfung, die auch ohne die
+  Korrektur grün bleibt, prüft nichts — zwei Zeilen sind dabei aufgeflogen und
+  wieder entfernt worden, weil sie beweisbar wirkungslos waren.
+- 280 Werte aus 0.9.6 und 0.9.7 Zahl für Zahl verglichen: null Abweichungen.
+
+### Was diese Fassung *nicht* beantwortet
+
+Alles hier ist gegen Prüfstände gemessen, nicht an einer laufenden Anlage. Ob
+die Rückmeldung aus **Ihrem** Miniserver ankommt, ob die Themen zu **Ihrer**
+Wetterstation passen und ob die Ventilzeiten Ihre Regner richtig treffen, zeigt
+erst der Betrieb.
+
+## Die Fassungen dazwischen
+
+Diese Datei sprang bisher von 0.9.1 auf 0.9.7. Die Anmerkungen zu den
+Fassungen dazwischen stehen auf den Release-Seiten des Repositoriums; hier
+in Kurzform, damit die Reihe vollständig ist.
+
+**0.9.2 — übersetzbare Hilfe.** Die Hilfeseite trug ihren Text fest
+verdrahtet in `help.html`, auf Deutsch. Wer das Plugin auf Englisch benutzte,
+bekam die Hilfe trotzdem auf Deutsch. Jetzt stehen dort nur noch Platzhalter,
+der Text in `templates/lang/help_de.ini` und `help_en.ini`.
+
+**0.9.3 — Deinstallation ohne fest verdrahteten Systempfad.** Fand das
+Deinstallationsskript die LoxBerry-Wurzel weder über das fünfte Argument noch
+über die Umgebung, fiel es auf einen festen Pfad zurück — der ins Leere zeigt,
+sobald LoxBerry anderswo installiert ist, und zwar beim Aufräumen, also genau
+dann, wenn niemand mehr hinsieht.
+
+**0.9.4 wurde nie veröffentlicht.** Die Nummer fehlt in der Release-Reihe.
+
+**0.9.5 — Sprachdateien nach Hausstandard neu erzeugt.** Jeder Wert in
+doppelten Anführungszeichen, damit `parse_ini_file` an einem Semikolon nichts
+abschneidet, und kein Schlüssel doppelt im selben Abschnitt.
+
+**0.9.6 — Textpflege, keine Verhaltensänderung.** Umschreibungen wie `laeuft`
+und `heisst` durch echte Umlaute ersetzt; nur Sprachdateien. Dazu eine
+Richtigstellung in der `LICENSE`, die als Urheber „Sprache Plugin Authors"
+nannte — ein Übernahmefehler aus einer Vorlage.
 
 ## Neu in 0.9.1
 

@@ -113,7 +113,12 @@ function bw_paths()
     return $p;
 }
 
-/** Muss zu VORGABEN in bin/bewaesserung_dienst.py passen. */
+/** Muss zu VORGABEN in bin/bewaesserung_dienst.py passen.
+ *
+ * Der Reiter Test prueft die Uebereinstimmung nach - zwei Listen, die
+ * auseinanderlaufen, sind sonst erst dann zu bemerken, wenn ein Wert in der
+ * Oberflaeche anders aussieht als in der Rechnung.
+ */
 function bw_vorgaben()
 {
     return array(
@@ -124,6 +129,18 @@ function bw_vorgaben()
         'fenster_von' => '22:00', 'fenster_bis' => '08:00', 'max_durchlaeufe' => 8,
         'mqtt_ein' => 1, 'mqtt_topic' => 'bewaesserung',
         'aktionstoken' => '', 'takt' => 300,
+        // ---- neu in 0.9.7 ----
+        'zonendauer_max_s' => 1800,
+        // Der einzige neue Schalter, der ab Werk AN steht. Begruendung
+        // steht bei VORGABEN in bin/bewaesserung_dienst.py und im README:
+        // eine Luecke im Verlauf ist ein Messfehler, kein Geschmack.
+        'luecken_fuellen' => 1,
+        'frost_ein' => 0, 'frost_c' => 2.0,
+        'wind_ein' => 0, 'wind_kmh_max' => 40.0,
+        'regen_ein' => 0, 'regen_mmh_max' => 0.5,
+        'plan_festhalten' => 0,
+        'melden_ein' => 0, 'melden_limit_tage' => 3, 'melden_station_tage' => 2,
+        'hoechstalter' => 3600,
     );
 }
 
@@ -336,31 +353,79 @@ function bw_ungemessen()
 
 /* ---------------- Felder fuer Loxone ---------------- */
 
+/**
+ * Die Felder der Statuszeile.
+ *
+ * Neue Felder kommen ANS ENDE. Wer eine Zeile in der Mitte einschiebt,
+ * verschiebt nichts - die Befehlserkennung sucht nach Namen, nicht nach
+ * Stellung -, aber die Reihenfolge in der Loxone-Vorlage bleibt so lesbar
+ * wie die gewachsene Anlage.
+ *
+ * Textfelder gehoeren NICHT hierher: ein Semikolon oder Gleichheitszeichen
+ * im Wert zerlegt die Zeile, und der Miniserver sieht nur den Anfang. Der
+ * Sperrgrund im Klartext geht deshalb ueber MQTT und aktion=roh, nicht hier.
+ */
 function bw_status_felder()
 {
+    // Drittes Feld: der NAME, unter dem der Eingang in Loxone Config
+    // steht. Bis 0.9.9 hiess er 'BEW_' plus dem technischen Kuerzel -
+    // BEW_DECKT, BEW_PLANFEST, BEW_NOETIG. Am Bildschirm einer gewachsenen
+    // Anlage steht das zwischen 'Bewegungsmelderzeit' und
+    // 'Einfahrtstoroeffner', und niemand weiss ohne Nachschlagen, was
+    // 'DECKT' bedeutet. Das Suchmuster bleibt technisch, der Name wird
+    // lesbar - beides ist unabhaengig voneinander.
     return array(
-        'OK'           => array('',   'BW_FELD.OK'),
-        'ET0'          => array('mm', 'BW_FELD.ET0'),
-        'GIESSEN'      => array('',   'BW_FELD.GIESSEN'),
-        'DURCHLAEUFE'  => array('',   'BW_FELD.DURCHLAEUFE'),
-        'NOETIG'       => array('',   'BW_FELD.NOETIG'),
-        'REICHT'       => array('',   'BW_FELD.REICHT'),
-        'ALTER'        => array('s',  'BW_FELD.ALTER'),
+        'OK'           => array('',   'BW_FELD.OK',          'BW_TITEL.OK'),
+        'ET0'          => array('mm', 'BW_FELD.ET0',         'BW_TITEL.ET0'),
+        'GIESSEN'      => array('',   'BW_FELD.GIESSEN',     'BW_TITEL.GIESSEN'),
+        'DURCHLAEUFE'  => array('',   'BW_FELD.DURCHLAEUFE', 'BW_TITEL.DURCHLAEUFE'),
+        'NOETIG'       => array('',   'BW_FELD.NOETIG',      'BW_TITEL.NOETIG'),
+        'REICHT'       => array('',   'BW_FELD.REICHT',      'BW_TITEL.REICHT'),
+        'ALTER'        => array('s',  'BW_FELD.ALTER',       'BW_TITEL.ALTER'),
+        'GESPERRT'     => array('',   'BW_FELD.GESPERRT',    'BW_TITEL.GESPERRT'),
+        'DECKT'        => array('',   'BW_FELD.DECKT',       'BW_TITEL.DECKT'),
+        'PLANFEST'     => array('',   'BW_FELD.PLANFEST',    'BW_TITEL.PLANFEST'),
     );
+}
+
+/**
+ * Welche Durchlaufzahl gilt nach aussen?
+ *
+ * Ist der Nachtplan eingeschaltet und fuer heute festgehalten, gilt seine
+ * Zahl - sonst die des laufenden Rechengangs. EINE Funktion dafuer, weil
+ * Statuszeile, Zonenzeile und Oberflaeche sonst auseinanderlaufen: genau
+ * dieser Fehler steht in REGELN_1 unter "Wer eine Funktion ergaenzt, sucht
+ * die Saetze, die ihr Fehlen erklaert haben".
+ */
+function bw_durchlaeufe()
+{
+    $a = bw_abbild();
+    $plan = isset($a['plan']) && is_array($a['plan']) ? $a['plan'] : array();
+    $fest = isset($a['nachtplan']) && is_array($a['nachtplan']) ? $a['nachtplan'] : array();
+    if (!empty($fest)) {
+        return (int) (isset($fest['durchlaeufe']) ? $fest['durchlaeufe'] : 0);
+    }
+    return (int) (isset($plan['durchlaeufe']) ? $plan['durchlaeufe'] : 0);
 }
 
 function bw_statuszeile()
 {
     $a = bw_abbild();
     $plan = isset($a['plan']) && is_array($a['plan']) ? $a['plan'] : array();
-    return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2f;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d',
+    $sp = isset($a['sperre']) && is_array($a['sperre']) ? $a['sperre'] : array();
+    $fest = isset($a['nachtplan']) && is_array($a['nachtplan']) ? $a['nachtplan'] : array();
+    $durchlaeufe = bw_durchlaeufe();
+    return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2f;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d;GESPERRT=%d;DECKT=%d;PLANFEST=%d',
         (int) (!empty($a['ok'])),
         isset($a['et0']) && $a['et0'] !== null ? (float) $a['et0'] : 0.0,
-        (int) ((int) (isset($plan['durchlaeufe']) ? $plan['durchlaeufe'] : 0) > 0),
-        (int) (isset($plan['durchlaeufe']) ? $plan['durchlaeufe'] : 0),
+        (int) ($durchlaeufe > 0),
+        $durchlaeufe,
         (int) (isset($plan['noetige_durchlaeufe']) ? $plan['noetige_durchlaeufe'] : 0),
         (int) (isset($plan['reicht']) ? $plan['reicht'] : 0),
-        bw_alter());
+        bw_alter(),
+        (int) (isset($sp['aktiv']) ? $sp['aktiv'] : 0),
+        (int) (isset($plan['ventilzeit_deckt']) ? $plan['ventilzeit_deckt'] : 0),
+        (int) (!empty($fest)));
 }
 
 /**
@@ -405,11 +470,23 @@ function bw_zonenzeile($schluessel)
                               ?: 'Die Zone liess sich nicht rechnen - Einzelheiten im '
                                . 'Reiter Logdateien.');
     }
-    return sprintf('ZONE;OK=1;DEFIZIT=%.1f;FUELLSTAND=%.0f;BEDARF=%.1f;LITER=%.0f;MINUTEN=%.0f;GEMESSEN=%d',
+    // SEKUNDEN und DURCHLAEUFE sind neu in 0.9.7: sie gehoeren auf Tv1 bis
+    // Tv8 und MaxP des Bewaesserungsbausteins. GEGOSSEN meldet zurueck, was
+    // das Plugin fuer diese Zone verbucht hat - damit laesst sich die eigene
+    // Rueckmeldung gegenpruefen, ohne in Dateien zu sehen.
+    $a2 = bw_abbild();
+    $jz = isset($a2['plan']['je_zone'][$schluessel])
+        && is_array($a2['plan']['je_zone'][$schluessel])
+        ? $a2['plan']['je_zone'][$schluessel] : array();
+    return sprintf('ZONE;OK=1;DEFIZIT=%.1f;FUELLSTAND=%.0f;BEDARF=%.1f;LITER=%.0f;MINUTEN=%.0f;GEMESSEN=%d;SEKUNDEN=%d;DURCHLAEUFE=%d;GEGOSSEN=%.1f',
         (float) $z['dr'], (float) $z['fuellstand'], (float) $z['bedarf_mm'],
         (float) (isset($z['liter']) ? $z['liter'] : 0),
         (float) (isset($z['minuten']) ? $z['minuten'] : 0),
-        (int) (isset($z['rate_gemessen']) ? $z['rate_gemessen'] : 0));
+        (int) (isset($z['rate_gemessen']) ? $z['rate_gemessen'] : 0),
+        (int) (isset($jz['sekunden_soll']) ? $jz['sekunden_soll'] : 0),
+        (int) (isset($jz['durchlaeufe']) ? $jz['durchlaeufe'] : 0),
+        (float) (isset($z['gegossen_mm']) && $z['gegossen_mm'] !== null
+                 ? $z['gegossen_mm'] : 0));
 }
 
 function bw_selbsttest_ausgabe()
@@ -444,10 +521,15 @@ function bw_vorlage()
     $cmds = array();
     foreach (bw_status_felder() as $feld => $info) {
         $cmds[] = array(
-            'title'   => 'BEW_' . $feld,
+            'title'   => isset($info[2]) ? bw_t($info[2]) : ('BEW_' . $feld),
             'comment' => trim(strip_tags(html_entity_decode(bw_t($info[1]), ENT_QUOTES, 'UTF-8')))
                        . ($info[0] !== '' ? ' [' . $info[0] . ']' : ''),
-            'check'   => '\i' . $feld . '=\i\v',
+            // Das Semikolon gehoert ins Suchmuster: jedes Feld steht hinter
+            // einem ';', und ein kuenftiger Feldname, der auf einen
+            // bestehenden endet, traefe sonst die falsche Stelle. Gemessen
+            // kollidiert heute nichts - es ist Vorsorge fuer das naechste
+            // Feld, und drei Linien im Bestand halten es schon so.
+            'check'   => '\i;' . $feld . '=\i\v',
         );
     }
     return array('bewaesserung_status.xml', bw_xml_virtual_in_http(array(
@@ -515,7 +597,243 @@ function bw_log_gebremst($schluessel, $text, $sekunden = 3600)
     }
 }
 
-/* ---------------- Dienst ---------------- */
+/**
+ * Eine Zeile in den LoxBerry-Benachrichtigungsbereich legen.
+ *
+ * Geprueft wird die AUFRUFFORM 'notify_ext(', nicht der blosse Name - ein
+ * Kommentar, der die Funktion erwaehnt, ist kein Beleg dafuer, dass es sie
+ * gibt. Fehlt sie, wird nichts abgelegt und nichts behauptet.
+ *
+ * Rueckgabe: true, wenn die Meldung wirklich abgelegt wurde.
+ */
+/**
+ * Eine Nutzlast im Ecowitt-Uploadformat in ein Verzeichnis wandeln.
+ *
+ * Zwilling von _feldliste_lesen() in bin/quellen.py - dieselbe Regel, damit
+ * Oberflaeche und Dienst dasselbe sehen. Ein GW3000A sendet ueber MQTT kein
+ * JSON, sondern 'PASSKEY=...&tempf=63.50&humidity=88&...'.
+ */
+function bw_feldliste_lesen($text)
+{
+    $text = trim((string) $text);
+    if (strpos($text, '=') === false || strlen($text) > 20000) { return null; }
+    $teile = array();
+    foreach (explode('&', $text) as $t) {
+        if (strpos($t, '=') === false) { continue; }
+        $teile[] = $t;
+    }
+    if (count($teile) < 2) { return null; }
+    $aus = array();
+    foreach ($teile as $t) {
+        list($k, $v) = array_pad(explode('=', $t, 2), 2, '');
+        $k = trim($k);
+        if ($k === '' || strpos($k, ' ') !== false) { return null; }
+        $aus[$k] = urldecode($v);
+    }
+    return $aus;
+}
+
+/**
+ * Aus dem, was zuletzt im Broker ankam, einen Zuordnungsvorschlag bilden.
+ *
+ * Quelle ist roh.json - die Datei, die der Dienst bei jedem Rechengang mit
+ * den zuletzt empfangenen Nutzlasten schreibt. Vorgeschlagen wird nur, was
+ * die gemessene Feldtabelle hergibt; alles Uebrige wird aufgelistet, damit
+ * man es von Hand zuordnen kann.
+ *
+ * Der Vorschlag traegt das WIRKLICHE Thema, nicht den Platzhalter der
+ * Vorlage - genau die Handarbeit, die er ersparen soll.
+ */
+function bw_broker_erkennen()
+{
+    $roh = bw_json_lesen(bw_paths()['datadir'] . '/roh.json');
+    $mqtt = isset($roh['mqtt']) && is_array($roh['mqtt']) ? $roh['mqtt'] : array();
+    $vor = bw_vorlagen();
+    $tab = isset($vor['kennungen']['ecowitt_mqtt']['felder'])
+        ? $vor['kennungen']['ecowitt_mqtt']['felder'] : array();
+
+    $felder = array();
+    $blaetter = array();
+    foreach ($mqtt as $thema => $eintrag) {
+        $last = (string) (isset($eintrag['nutzlast']) ? $eintrag['nutzlast'] : '');
+        if ($last === '') { continue; }
+        $fl = bw_feldliste_lesen($last);
+        if ($fl !== null) {
+            foreach ($fl as $k => $v) {
+                $blaetter[] = array('thema' => $thema, 'pfad' => $k,
+                                    'wert' => $v, 'einheit' => '');
+                if (!isset($tab[$k])) { continue; }
+                foreach ((array) $tab[$k]['groessen'] as $g) {
+                    $felder[$g] = array('thema' => $thema, 'pfad' => $k,
+                                        'wert' => $v,
+                                        'einheit' => (string) $tab[$k]['einheit']);
+                }
+            }
+            continue;
+        }
+        $j = json_decode($last, true);
+        if (is_array($j)) {
+            foreach (bw_blaetter($j) as $b) {
+                $blaetter[] = array('thema' => $thema, 'pfad' => $b['pfad'],
+                                    'wert' => $b['wert'], 'einheit' => $b['einheit']);
+            }
+            continue;
+        }
+        // Eine blanke Zahl: das Thema selbst ist der Wert.
+        $blaetter[] = array('thema' => $thema, 'pfad' => '',
+                            'wert' => $last, 'einheit' => '');
+    }
+    return array('felder' => $felder, 'blaetter' => $blaetter,
+                 'themen' => count($mqtt));
+}
+
+function bw_melden($schwere, $text)
+{
+    $p = bw_paths();
+    if ($p['home'] === '') { return false; }
+    $sdk = $p['home'] . '/libs/phplib/loxberry_log.php';
+    if (!is_file($sdk)) { return false; }
+    require_once $p['home'] . '/libs/phplib/loxberry_system.php';
+    require_once $sdk;
+    if (!function_exists('notify_ext')) { return false; }
+    $s = (int) $schwere;
+    if ($s < 1 || $s > 7) { $s = 4; }
+    notify_ext(array(
+        'PACKAGE'  => $p['plugin'],
+        'NAME'     => 'Bewaesserung',
+        'MESSAGE'  => (string) $text,
+        'SEVERITY' => $s,
+    ));
+    return true;
+}
+
+/**
+ * Der Verlauf als Liste - juengster Tag zuerst.
+ *
+ * Die Datei haelt bis zu 400 Tage, und bis 0.9.6 wurde sie an genau einer
+ * Stelle benutzt: um die Tage zu ZAEHLEN. Der Reiter Verlauf zeigt sie
+ * jetzt, samt der Bewaesserung je Zone und der Kennzeichnung, welche Tage
+ * nachgetragen wurden.
+ */
+function bw_verlauf_tage($hoechstens = 60)
+{
+    $v = bw_verlauf();
+    $tage = isset($v['tage']) && is_array($v['tage']) ? $v['tage'] : array();
+    krsort($tage);
+    $aus = array();
+    foreach ($tage as $datum => $t) {
+        if (count($aus) >= (int) $hoechstens) { break; }
+        $bew = isset($t['bewaesserung']) && is_array($t['bewaesserung'])
+            ? $t['bewaesserung'] : array();
+        $aus[] = array(
+            'datum'   => (string) $datum,
+            'et0'     => isset($t['et0']) ? (float) $t['et0'] : null,
+            'regen'   => isset($t['regen']) ? (float) $t['regen'] : null,
+            'quelle'  => (string) (isset($t['quelle']) ? $t['quelle'] : ''),
+            'guete'   => (string) (isset($t['guete']) ? $t['guete'] : ''),
+            'nachgetragen' => !empty($t['nachgetragen']) ? 1 : 0,
+            'bewaesserung' => $bew,
+            'bew_summe'    => array_sum(array_map('floatval', $bew)),
+        );
+    }
+    return $aus;
+}
+
+/** Fehlt im Verlauf ein Tag zwischen dem aeltesten und heute? */
+function bw_verlauf_luecken()
+{
+    $v = bw_verlauf();
+    $tage = isset($v['tage']) && is_array($v['tage']) ? array_keys($v['tage']) : array();
+    if (count($tage) < 2) { return 0; }
+    sort($tage);
+    $von = strtotime($tage[0]);
+    $bis = strtotime(date('Y-m-d'));
+    if ($von === false || $bis === false || $bis < $von) { return 0; }
+    $soll = (int) round(($bis - $von) / 86400) + 1;
+    return max(0, $soll - count($tage));
+}
+
+/**
+ * Jedes Blatt einer JSON-Antwort mit Pfad, Wert und erkannter Einheit.
+ *
+ * Das ist die Antwort auf die Frage "was soll ich hier eintragen": statt
+ * einen Pfad zu raten, sieht man die Antwort des eigenen Geraets mit den
+ * Pfaden daneben, die dorthin fuehren.
+ *
+ * Wo eine Liste Eintraege mit einem Feld 'id' enthaelt, wird der Pfad je
+ * KENNUNG gebildet ('rain[id=0x10].val') statt je Stellung - die Stellung
+ * verschiebt sich, sobald ein Sensor dazukommt.
+ */
+function bw_blaetter($daten, $pfad = '', &$aus = array(), $tiefe = 0)
+{
+    if ($tiefe > 6) { return $aus; }
+    if (is_array($daten)) {
+        $liste = array_keys($daten) === range(0, count($daten) - 1);
+        foreach ($daten as $k => $w) {
+            if ($liste) {
+                $kennung = (is_array($w) && isset($w['id'])) ? (string) $w['id'] : null;
+                $teil = $kennung !== null
+                    ? '[id=' . $kennung . ']' : '[' . (int) $k . ']';
+                bw_blaetter($w, $pfad . $teil, $aus, $tiefe + 1);
+            } else {
+                bw_blaetter($w, ($pfad === '' ? '' : $pfad . '.') . $k, $aus, $tiefe + 1);
+            }
+        }
+        return $aus;
+    }
+    $wert = (string) $daten;
+    // Die Einheit steht bei Ecowitt im Wert selbst ('2.3 m/s', '0.00 W/m2').
+    $einheit = '';
+    if (preg_match('#-?[0-9]+(?:[.,][0-9]+)?\s*([A-Za-z%/0-9]+)$#', trim($wert), $m)) {
+        $einheit = $m[1];
+    }
+    $aus[] = array('pfad' => $pfad, 'wert' => $wert, 'einheit' => $einheit);
+    return $aus;
+}
+
+/**
+ * Aus einer abgeholten Antwort einen Zuordnungsvorschlag bilden.
+ *
+ * Vorgeschlagen wird NUR, was belegt ist: die Kennungstabelle in
+ * templates/quellen.json ist an einem Geraet gegen die Hersteller-App
+ * gemessen und traegt Quelle und Stand. Was dort nicht steht, bleibt offen -
+ * geraten wird nichts.
+ *
+ * Rueckgabe: array(felder => [groesse => [pfad, wert]], blaetter => [...])
+ */
+function bw_antwort_erkennen($daten)
+{
+    $vor = bw_vorlagen();
+    $ken = isset($vor['kennungen']) && is_array($vor['kennungen'])
+        ? $vor['kennungen'] : array();
+    $eco = isset($ken['ecowitt']) && is_array($ken['ecowitt']) ? $ken['ecowitt'] : array();
+    $zu  = isset($ken['zuordnung']) && is_array($ken['zuordnung']) ? $ken['zuordnung'] : array();
+
+    $felder = array();
+    foreach ($eco as $liste => $eintraege) {
+        if (!isset($daten[$liste]) || !is_array($daten[$liste])) { continue; }
+        foreach ($eintraege as $kennung => $was) {
+            foreach ($daten[$liste] as $e) {
+                if (!is_array($e) || !isset($e['id'])) { continue; }
+                if (strcasecmp((string) $e['id'], (string) $kennung) !== 0) { continue; }
+                $name = (string) $was['groesse'];
+                $ziele = isset($zu[$name]) ? (array) $zu[$name] : array($name);
+                foreach ($ziele as $g) {
+                    $felder[$g] = array(
+                        'pfad'    => $liste . '[id=' . $kennung . '].val',
+                        'wert'    => (string) (isset($e['val']) ? $e['val'] : ''),
+                        'einheit' => (string) $was['einheit'],
+                        'kennung' => (string) $kennung,
+                    );
+                }
+                break;
+            }
+        }
+    }
+    return array('felder' => $felder, 'blaetter' => bw_blaetter($daten));
+}
+
+/* ---------------- Dienst ---------------- *//* ---------------- Dienst ---------------- */
 
 
 
@@ -767,8 +1085,9 @@ function bw_t($schluessel)
     return isset($texte[$teile[0]][$teile[1]]) ? $texte[$teile[0]][$teile[1]] : $schluessel;
 }
 
-/* ==================================================================
- * Dashboard-eigene Teile
- * ================================================================== */
-
-/** Die Adresse, die auf das Wandtablet gehoert. */
+/* Hier stand bis 0.9.6 die Ueberschrift "Dashboard-eigene Teile" und
+ * darunter der angefangene Kommentar "Die Adresse, die auf das Wandtablet
+ * gehoert." - und dann nichts mehr. Ein Dashboard gibt es in diesem Plugin
+ * nicht; der Rest stammt aus einer Vorlage. Entfernt, damit niemand nach
+ * einer Funktion sucht, die es nie gab.
+ */

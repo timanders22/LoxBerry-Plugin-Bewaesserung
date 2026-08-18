@@ -35,7 +35,7 @@ if ($bw_p['home'] !== '' && is_file($bw_p['home'] . '/libs/phplib/loxberry_syste
 
 /* Positivliste: jeder Reiter MUSS hier stehen, sonst springt die Seite nach
  * jedem Absenden zurueck auf Einstellungen. */
-$bw_muster = '/^tab-(settings|sources|zones|mqtt|loxone|test|log)$/';
+$bw_muster = '/^tab-(settings|sources|zones|history|mqtt|loxone|test|log)$/';
 $bw_tab = 'tab-settings';
 if (isset($_POST['activetab']) && preg_match($bw_muster, (string) $_POST['activetab'])) {
     $bw_tab = (string) $_POST['activetab'];
@@ -128,6 +128,55 @@ if ($bw_post && isset($_POST['speichern'])) {
      * unveraendert. */
     $bw_cfg['kuestennah'] = isset($_POST['kuestennah']) ? 1 : 0;
 
+    /* ---- neu in 0.9.7 ---- */
+
+    // Rechenzeit: dieselbe Pruefung wie beim Giessfenster.
+    $bw_rz = $bw_sauber('rechenzeit');
+    if (!preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', $bw_rz)) {
+        $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_ZEIT'), bw_t('EINST.L_RECHENZEIT'));
+    } else {
+        $bw_cfg['rechenzeit'] = $bw_rz;
+    }
+
+    foreach (array('zonendauer_max_s' => array(60, 7200),
+                   'hoechstalter' => array(300, 86400),
+                   'melden_limit_tage' => array(1, 30),
+                   'melden_station_tage' => array(1, 30)) as $bw_f => $bw_g) {
+        $bw_w = $bw_sauber($bw_f);
+        if (!preg_match('/^[0-9]+$/', $bw_w)) {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_ZAHL'), bw_t('EINST.L_' . strtoupper($bw_f)));
+        } elseif ((int) $bw_w < $bw_g[0] || (int) $bw_w > $bw_g[1]) {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_BEREICH'),
+                                   bw_t('EINST.L_' . strtoupper($bw_f)), $bw_g[0], $bw_g[1]);
+        } else {
+            $bw_cfg[$bw_f] = (int) $bw_w;
+        }
+    }
+
+    // Die drei Sperrgrenzen. Sie duerfen negativ sein - Frost bei -3 Grad
+    // ist der Regelfall, nicht die Ausnahme.
+    foreach (array('frost_c' => array(-20, 15),
+                   'wind_kmh_max' => array(5, 150),
+                   'regen_mmh_max' => array(0.1, 50)) as $bw_f => $bw_g) {
+        $bw_w = $bw_kommazahl($bw_sauber($bw_f));
+        if (!preg_match('/^-?[0-9]+(\.[0-9]+)?$/', $bw_w)) {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_ZAHL'), bw_t('EINST.L_' . strtoupper($bw_f)));
+        } elseif ((float) $bw_w < $bw_g[0] || (float) $bw_w > $bw_g[1]) {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_BEREICH'),
+                                   bw_t('EINST.L_' . strtoupper($bw_f)), $bw_g[0], $bw_g[1]);
+        } else {
+            $bw_cfg[$bw_f] = (float) $bw_w;
+        }
+    }
+
+    // Die Haken. Sie stehen alle im SELBEN Formular wie der Speichern-Knopf -
+    // sonst setzte isset() sie beim Absenden eines anderen Formulars auf 0,
+    // und der Benutzer verloere Werte, die er nie gesehen hat.
+    foreach (array('luecken_fuellen', 'plan_festhalten', 'frost_ein',
+                   'wind_ein', 'regen_ein', 'melden_ein') as $bw_f) {
+        $bw_cfg[$bw_f] = isset($_POST[$bw_f]) ? 1 : 0;
+    }
+
     if (!$bw_fehler) {
         if (bw_config_speichern($bw_cfg)) { $bw_meldungen[] = bw_t('EINST.GESPEICHERT'); }
         else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['config']); }
@@ -179,15 +228,166 @@ if ($bw_post && isset($_POST['vorlage_waehlen'])) {
     if (!isset($bw_alle['vorlagen'][$bw_v])) {
         $bw_fehler[] = bw_t('QUELL.FEHLER_VORLAGE');
     } else {
+        /* Eine Vorlage ERGAENZT, sie loescht nicht.
+         *
+         * Bis 0.9.10 stand hier '$bw_q['felder'] = <Vorlage>' - das hat beim
+         * Wechsel der Vorlage JEDE bestehende Zuordnung weggeworfen, auch die
+         * eines anderen Weges. Und die Adresse wurde durch den Platzhalter
+         * der Vorlage ersetzt: aus einer funktionierenden 192.168.178.16
+         * wurde 'http://GATEWAY-ADRESSE/get_livedata_info', und der naechste
+         * Abruf endete mit 'Name or service not known'.
+         *
+         * Am Geraet gemeldet am 18.08.2026. Es ist derselbe Satz wie in
+         * REGELN_2 unter 'Speichern-Handler: uebernehmen, was das Formular
+         * nicht mitschickt' - hier nur mit einer Vorlage als Taeter.
+         *
+         * Ab jetzt: nur Groessen fuellen, die noch keinen Weg haben. Was
+         * dasteht, bleibt stehen, und die Meldung sagt beide Zahlen.
+         */
         $bw_q = bw_quellen();
         $bw_q['vorlage'] = $bw_v;
-        $bw_q['felder'] = isset($bw_alle['vorlagen'][$bw_v]['felder'])
-            ? $bw_alle['vorlagen'][$bw_v]['felder'] : array();
-        if (isset($bw_alle['vorlagen'][$bw_v]['http_url'])) {
-            $bw_q['http_url'] = $bw_alle['vorlagen'][$bw_v]['http_url'];
+        $bw_vorl_f = isset($bw_alle['vorlagen'][$bw_v]['felder'])
+            ? (array) $bw_alle['vorlagen'][$bw_v]['felder'] : array();
+        $bw_hat = isset($bw_q['felder']) && is_array($bw_q['felder'])
+            ? $bw_q['felder'] : array();
+        $bw_neu_n = 0; $bw_behalten = 0;
+        foreach ($bw_vorl_f as $bw_g => $bw_f) {
+            if (!empty($bw_hat[$bw_g]['weg'])) { $bw_behalten++; continue; }
+            $bw_hat[$bw_g] = $bw_f;
+            $bw_neu_n++;
         }
-        if (bw_quellen_speichern($bw_q)) { $bw_meldungen[] = bw_t('QUELL.VORLAGE_UEBERNOMMEN'); }
-        else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']); }
+        $bw_q['felder'] = $bw_hat;
+
+        /* Die Adresse: ein Platzhalter wird NIE gespeichert, und eine
+         * vorhandene Adresse wird nie ueberschrieben. Der Platzhalter steht
+         * ohnehin schon im Eingabefeld. */
+        $bw_url_neu = (string) (isset($bw_alle['vorlagen'][$bw_v]['http_url'])
+            ? $bw_alle['vorlagen'][$bw_v]['http_url'] : '');
+        $bw_url_alt = trim((string) (isset($bw_q['http_url']) ? $bw_q['http_url'] : ''));
+        $bw_ist_platzhalter = ($bw_url_neu !== ''
+            && preg_match('/GATEWAY-ADRESSE|GERAET|BEISPIEL/i', $bw_url_neu));
+        if ($bw_url_neu !== '' && !$bw_ist_platzhalter && $bw_url_alt === '') {
+            $bw_q['http_url'] = $bw_url_neu;
+        }
+
+        if (bw_quellen_speichern($bw_q)) {
+            $bw_meldungen[] = sprintf(bw_t('QUELL.VORLAGE_ERGAENZT'),
+                                      $bw_neu_n, $bw_behalten);
+            if ($bw_url_alt !== '') {
+                $bw_meldungen[] = sprintf(bw_t('QUELL.VORLAGE_ADRESSE_BEHALTEN'),
+                                          bw_e($bw_url_alt));
+            }
+        } else {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']);
+        }
+    }
+    $bw_tab = 'tab-sources';
+}
+
+/* ---------------- Antwort abholen und zuordnen ----------------
+ *
+ * Die Antwort auf "ich weiss nicht, was in die Felder gehoert". Geholt wird
+ * die eingetragene Adresse, aufgelistet wird JEDES Blatt der Antwort mit
+ * seinem Pfad, und vorgeschlagen wird nur, was die gemessene
+ * Kennungstabelle hergibt. Uebernommen wird nichts ohne den zweiten Klick.
+ */
+$bw_erk = null;
+$bw_erk_fehler = '';
+if ($bw_post && (isset($_POST['quellen_erkennen']) || isset($_POST['quellen_uebernehmen']))) {
+    $bw_q = bw_quellen();
+    $bw_url = trim((string) (isset($bw_q['http_url']) ? $bw_q['http_url'] : ''));
+    if ($bw_url === '') {
+        $bw_erk_fehler = bw_t('QUELL.ERK_KEINE_ADRESSE');
+    } else {
+        // Eigener Fehler-Aufnehmer statt @: ein eingehaengter Behandler wird
+        // vom @-Zeichen nicht aufgehalten (gemessen mit rendern.py).
+        $bw_ctx = stream_context_create(array('http' => array(
+            'method' => 'GET', 'timeout' => 10, 'ignore_errors' => true,
+            'follow_location' => 0, 'max_redirects' => 1)));
+        set_error_handler(function () { return true; });
+        $bw_roh_neu = file_get_contents($bw_url, false, $bw_ctx);
+        restore_error_handler();
+        if ($bw_roh_neu === false) {
+            $bw_erk_fehler = sprintf(bw_t('QUELL.ERK_NICHT_ERREICHBAR'), bw_e($bw_url));
+        } else {
+            $bw_dek = json_decode($bw_roh_neu, true);
+            if (!is_array($bw_dek)) {
+                $bw_erk_fehler = sprintf(bw_t('QUELL.ERK_KEIN_JSON'),
+                    bw_e(substr(trim($bw_roh_neu), 0, 200)));
+            } else {
+                $bw_erk = bw_antwort_erkennen($bw_dek);
+            }
+        }
+    }
+    if ($bw_erk_fehler !== '') { $bw_fehler[] = $bw_erk_fehler; }
+    if ($bw_erk && isset($_POST['quellen_uebernehmen'])) {
+        // Uebernommen wird NUR, was die Erkennung gerade gefunden hat, und
+        // nur in die betroffenen Groessen. Alles andere bleibt stehen.
+        $bw_qf = isset($bw_q['felder']) && is_array($bw_q['felder']) ? $bw_q['felder'] : array();
+        $bw_n = 0;
+        foreach ($bw_erk['felder'] as $bw_g => $bw_f) {
+            $bw_qf[$bw_g] = array('weg' => 'http', 'pfad' => $bw_f['pfad']);
+            if ($bw_f['einheit'] !== '') { $bw_qf[$bw_g]['einheit_quelle'] = $bw_f['einheit']; }
+            $bw_n++;
+        }
+        $bw_q['felder'] = $bw_qf;
+        if (bw_quellen_speichern($bw_q)) {
+            $bw_meldungen[] = sprintf(bw_t('QUELL.ERK_UEBERNOMMEN'), $bw_n);
+        } else {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']);
+        }
+    }
+    $bw_tab = 'tab-sources';
+}
+
+/* ---------------- Woher kommen die Werte? ---------------- */
+if ($bw_post && isset($_POST['weg_speichern'])) {
+    $bw_q = bw_quellen();
+    $bw_u = trim((string) (isset($_POST['http_url']) ? $_POST['http_url'] : ''));
+    if ($bw_u !== '' && !preg_match('#^https?://\S{3,200}$#', $bw_u)) {
+        $bw_fehler[] = bw_t('QUELL.FEHLER_URL');
+    } else {
+        $bw_q['http_url'] = $bw_u;
+    }
+    $bw_th = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
+        (string) (isset($_POST['mqtt_thema']) ? $_POST['mqtt_thema'] : '')));
+    if ($bw_th !== '' && !preg_match('#^[A-Za-z0-9_/\#+.\-]{1,128}$#', $bw_th)) {
+        $bw_fehler[] = bw_t('QUELL.FEHLER_HORCHTHEMA');
+    } else {
+        $bw_q['mqtt_thema'] = $bw_th;
+    }
+    if (!$bw_fehler && bw_quellen_speichern($bw_q)) {
+        $bw_meldungen[] = bw_t('QUELL.WEG_GESPEICHERT');
+    }
+    $bw_tab = 'tab-sources';
+}
+
+/* ---------------- Aus dem Broker vorschlagen ---------------- */
+$bw_bro = null;
+if ($bw_post && (isset($_POST['broker_erkennen']) || isset($_POST['broker_uebernehmen']))) {
+    $bw_bro = bw_broker_erkennen();
+    if ($bw_bro['themen'] === 0) {
+        $bw_fehler[] = bw_t('QUELL.BRO_NICHTS');
+    } elseif (isset($_POST['broker_uebernehmen'])) {
+        // Wie bei der Vorlage: ERGAENZEN, nicht loeschen.
+        $bw_q = bw_quellen();
+        $bw_hat = isset($bw_q['felder']) && is_array($bw_q['felder'])
+            ? $bw_q['felder'] : array();
+        $bw_n = 0;
+        foreach ($bw_bro['felder'] as $bw_g => $bw_f) {
+            $bw_hat[$bw_g] = array('weg' => 'mqtt', 'thema' => $bw_f['thema'],
+                                   'pfad' => $bw_f['pfad']);
+            if ($bw_f['einheit'] !== '') {
+                $bw_hat[$bw_g]['einheit_quelle'] = $bw_f['einheit'];
+            }
+            $bw_n++;
+        }
+        $bw_q['felder'] = $bw_hat;
+        if (bw_quellen_speichern($bw_q)) {
+            $bw_meldungen[] = sprintf(bw_t('QUELL.BRO_UEBERNOMMEN'), $bw_n);
+        } else {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']);
+        }
     }
     $bw_tab = 'tab-sources';
 }
@@ -287,6 +487,65 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             continue;
         }
         $bw_alt = bw_zone($bw_s);
+
+        /* ---- neu in 0.9.7 ----
+         *
+         * Diese Felder werden ZURECHTGERUECKT und nicht abgewiesen: eine
+         * unlesbare Pflanzenhoehe darf nicht dazu fuehren, dass die ganze
+         * Zonentabelle ungespeichert bleibt. Was nicht als Zahl lesbar ist,
+         * gilt als 'nichts eingetragen' - und das heisst bei jedem dieser
+         * Felder 'verhaelt sich wie bis 0.9.6'.
+         */
+        $bw_zahl_oder_leer = function ($roh, $min, $max) {
+            if ($roh === '' || !is_numeric($roh)) { return null; }
+            $w = (float) $roh;
+            if ($w < $min || $w > $max) { return null; }
+            return $w;
+        };
+        $bw_dauer = $bw_zahl_oder_leer($bw_hol('z_dauer'), 30, 3600);
+        $bw_hpf   = $bw_zahl_oder_leer($bw_hol('z_hoehe_pflanze'), 0.05, 10);
+        $bw_abf   = $bw_zahl_oder_leer($bw_hol('z_abfluss'), 0, 1);
+        $bw_sgw   = $bw_zahl_oder_leer($bw_hol('z_sensor_gewicht'), 0, 1);
+        // Eigene Bodenwerte aus einer Bodenprobe. pflanzen.json sagt seit
+        // jeher zu: "wer es genau will, laesst eine Bodenprobe untersuchen
+        // und traegt die Werte von Hand ein - das Feld dafuer gibt es". Es
+        // gab es nicht. Jetzt gibt es zwei, und sie schlagen die Bodenart.
+        $bw_tfc = $bw_zahl_oder_leer($bw_hol('z_theta_fc'), 0.05, 0.60);
+        $bw_twp = $bw_zahl_oder_leer($bw_hol('z_theta_wp'), 0.01, 0.45);
+        if ($bw_tfc !== null && $bw_twp !== null && $bw_twp >= $bw_tfc) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_THETA'), bw_e($bw_name));
+            $bw_tfc = null; $bw_twp = null;
+        }
+        $bw_gart  = (string) (isset($_POST['z_giess_art'][$bw_i])
+            ? $_POST['z_giess_art'][$bw_i] : 'minuten');
+        if (!in_array($bw_gart, array('minuten', 'durchlaeufe', 'mm'), true)) {
+            $bw_gart = 'minuten';
+        }
+        $bw_gth = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
+            (string) (isset($_POST['z_giess_thema'][$bw_i]) ? $_POST['z_giess_thema'][$bw_i] : '')));
+        // Ein Rueckmeldethema ohne Becherprobe kann nicht wirken - die Hoehe
+        // entsteht aus Laufzeit MAL gemessener Rate. Gemeldet, nicht
+        // blockiert: der Anwender traegt die Becherprobe gleich danach ein.
+        if ($bw_gth !== '' && $bw_gart !== 'mm' && empty($bw_alt['rate_gemessen'])) {
+            // HINWEIS, nicht Beanstandung.
+            //
+            // Bis 0.9.8 landete dieser Satz in $bw_fehler - und weil der
+            // Handler nur speichert, wenn diese Liste leer ist, verhinderte
+            // ein blosser Hinweis das Speichern der GANZEN Zonentabelle. Der
+            // Anwender haette das Rueckmeldethema nie eintragen koennen, ohne
+            // vorher die Becherprobe zu machen, obwohl beides in beliebiger
+            // Reihenfolge geht. REGELN_2: melden, nicht blockieren.
+            $bw_meldungen[] = sprintf(bw_t('ZONE.HINWEIS_GIESS_OHNE_RATE'), bw_e($bw_name));
+        }
+        $bw_regner = preg_replace('/[^a-z_]/', '', strtolower($bw_hol('z_regner')));
+        // Regnertyp: nur ein STARTWERT, und nur wenn noch keine Rate dasteht.
+        // Er ueberschreibt niemals eine Becherprobe - der Katalogwert weicht
+        // je nach Duesen und Druck regelmaessig um die Haelfte ab.
+        if ($bw_rate === '' && $bw_regner !== ''
+            && isset($bw_pf['regner'][$bw_regner]['mmh'])) {
+            $bw_rate = (string) (float) $bw_pf['regner'][$bw_regner]['mmh'];
+        }
+
         $bw_neu[] = array(
             'schluessel'   => $bw_s,
             'name'         => $bw_name,
@@ -296,16 +555,34 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             'kc'           => (float) $bw_bepd['kc'],
             'zr'           => (float) $bw_bepd['zr'],
             'p'            => (float) $bw_bepd['p'],
-            'theta_fc'     => (float) $bw_bodd['theta_fc'],
-            'theta_wp'     => (float) $bw_bodd['theta_wp'],
+            'theta_fc'     => $bw_tfc !== null ? $bw_tfc : (float) $bw_bodd['theta_fc'],
+            'theta_wp'     => $bw_twp !== null ? $bw_twp : (float) $bw_bodd['theta_wp'],
+            'theta_fc_eigen' => $bw_tfc !== null ? $bw_tfc : 0.0,
+            'theta_wp_eigen' => $bw_twp !== null ? $bw_twp : 0.0,
             'rate_mmh'     => $bw_rate !== '' ? (float) $bw_rate : 0.0,
             'mikroklima'   => $bw_mk !== '' ? (float) $bw_mk : 1.0,
             'rate_gemessen' => (int) (isset($bw_alt['rate_gemessen']) ? $bw_alt['rate_gemessen'] : 0),
             'im_zyklus'    => !empty($_POST['z_zyklus'][$bw_i]) ? 1 : 0,
             'feuchte_thema' => trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
                 (string) (isset($_POST['z_feuchte'][$bw_i]) ? $_POST['z_feuchte'][$bw_i] : ''))),
-            'sensor_gewicht' => (float) (isset($bw_alt['sensor_gewicht']) ? $bw_alt['sensor_gewicht'] : 0.5),
+            'sensor_gewicht' => $bw_sgw !== null ? $bw_sgw
+                : (float) (isset($bw_alt['sensor_gewicht']) ? $bw_alt['sensor_gewicht'] : 0.5),
             'dr'           => (float) (isset($bw_alt['dr']) ? $bw_alt['dr'] : 0.0),
+            // ---- neu in 0.9.7 ----
+            'regner'        => $bw_regner,
+            'dauer_s'       => $bw_dauer !== null ? (int) $bw_dauer : 0,
+            'hoehe_pflanze' => $bw_hpf !== null ? $bw_hpf : 0.0,
+            'abfluss'       => $bw_abf !== null ? $bw_abf : 0.0,
+            'giess_thema'   => $bw_gth,
+            'giess_art'     => $bw_gart,
+            // Das Datum der Becherprobe stand bis 0.9.6 zwar in der Datei,
+            // fehlte hier aber - und dieser Handler baut die Zone von Grund
+            // auf neu. Jedes Speichern der Zonentabelle hat es also still
+            // geloescht. Genau die Fehlerklasse, die in REGELN_2 unter
+            // "Speichern-Handler: uebernehmen, was das Formular nicht
+            // mitschickt" steht.
+            'rate_gemessen_am' => (string) (isset($bw_alt['rate_gemessen_am'])
+                ? $bw_alt['rate_gemessen_am'] : ''),
         );
     }
     if (!$bw_fehler) {
@@ -406,6 +683,22 @@ if ($bw_rahmen) {
     width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px;
     box-sizing: border-box; font-size: 0.95em; background: #fff; color: #333; }
 .sm-hilfe { font-size: 0.84em; color: #777; margin: 3px 0 0; line-height: 1.45; }
+/* Ein Auswahlfeld muss man als Auswahlfeld erkennen.
+ *
+ * Am Gerät gemeldet: die Vorlagenliste im Reiter Quellen sah aus wie ein
+ * Textfeld - der eingebaute Pfeil sitzt am rechten Rand eines Feldes, das
+ * ueber die ganze Breite geht, und faellt dort nicht auf. Wer nicht
+ * hineinklickt, erfaehrt nie, dass es acht Vorlagen gibt.
+ *
+ * Der Pfeil wird deshalb selbst gezeichnet und sitzt sichtbar am Feldende.
+ * Die Raute im SVG ist als %23 kodiert - eine rohe Raute beendet in einer
+ * CSS-Adresse den Wert. */
+.sm-wrap select {
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' fill='none' stroke='%234f7d17' stroke-width='2'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 32px; cursor: pointer; }
+.sm-tabelle select { padding-right: 28px; background-position: right 7px center; }
 .sm-hinweis { border: 1px solid #a5d6a7; background: #e8f5e9; border-radius: 6px; padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-warnung { border: 1px solid #f0c9a0; background: #fdf4ec; border-radius: 6px; padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-fehler { border: 1px solid #ef9a9a; background: #ffebee; border-radius: 6px; padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
@@ -415,6 +708,12 @@ if ($bw_rahmen) {
 .sm-log { background: #1e1e1e; color: #d4d4d4; font-family: Consolas, 'Courier New', monospace;
     font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
 .sm-tabelle { border-collapse: collapse; width: 100%; font-size: 0.88em; margin: 10px 0; }
+/* Eine Tabelle, die breiter ist als das Fenster, braucht eine eigene
+ * Bildlaufleiste. Am Geraet gemeldet: die Spalte "im Zyklus" stand rechts
+ * ausserhalb, und es gab keinen Weg, dorthin zu scrollen - der Haken, ohne
+ * den keine Zone mitlaeuft, war schlicht unerreichbar. */
+.sm-breit { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; }
+.sm-breit .sm-tabelle { margin: 0; min-width: 760px; }
 .sm-tabelle th, .sm-tabelle td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
 .sm-tabelle th { background: #f5f5f5; font-weight: 600; }
 .sm-b { border: 0; border-radius: 6px; padding: 9px 18px; font-size: 0.93em; cursor: pointer; color: #fff; margin: 4px 6px 4px 0; }
@@ -468,6 +767,7 @@ if ($bw_rahmen) {
   <a href="index.php?form=settings" class="sm-tab<?= $bw_tab === 'tab-settings' ? ' sm-active' : '' ?>" data-ziel="tab-settings"><?= bw_e(bw_t('REITER.EINSTELLUNGEN')) ?></a>
   <a href="index.php?form=sources" class="sm-tab<?= $bw_tab === 'tab-sources' ? ' sm-active' : '' ?>" data-ziel="tab-sources"><?= bw_e(bw_t('REITER.QUELLEN')) ?></a>
   <a href="index.php?form=zones" class="sm-tab<?= $bw_tab === 'tab-zones' ? ' sm-active' : '' ?>" data-ziel="tab-zones"><?= bw_e(bw_t('REITER.ZONEN')) ?></a>
+  <a href="index.php?form=history" class="sm-tab<?= $bw_tab === 'tab-history' ? ' sm-active' : '' ?>" data-ziel="tab-history"><?= bw_e(bw_t('REITER.VERLAUF')) ?></a>
   <a href="index.php?form=mqtt" class="sm-tab<?= $bw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" data-ziel="tab-mqtt"><?= bw_e(bw_t('REITER.MQTT')) ?></a>
   <a href="index.php?form=loxone" class="sm-tab<?= $bw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" data-ziel="tab-loxone"><?= bw_e(bw_t('REITER.LOXONE')) ?></a>
   <a href="index.php?form=test" class="sm-tab<?= $bw_tab === 'tab-test' ? ' sm-active' : '' ?>" data-ziel="tab-test"><?= bw_e(bw_t('REITER.TEST')) ?></a>
@@ -523,6 +823,67 @@ if ($bw_rahmen) {
 </div>
 <?php } ?>
 
+<div class="sm-feld">
+  <label for="zonendauer_max_s"><?= bw_t('EINST.L_ZONENDAUER_MAX_S') ?></label>
+  <input data-role="none" type="text" name="zonendauer_max_s" id="zonendauer_max_s" value="<?= bw_e($bw_cfg['zonendauer_max_s']) ?>">
+  <p class="sm-hilfe"><?= bw_t('EINST.H_ZONENDAUER_MAX_S') ?></p>
+</div>
+
+<h2><?= bw_e(bw_t('EINST.H_NACHTPLAN')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('EINST.NACHTPLAN_ERKLAERUNG') ?></p>
+<label><input data-role="none" type="checkbox" name="plan_festhalten" value="1"<?= !empty($bw_cfg['plan_festhalten']) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_PLAN_FESTHALTEN')) ?></label>
+<div class="sm-feld">
+  <label for="rechenzeit"><?= bw_t('EINST.L_RECHENZEIT') ?></label>
+  <input data-role="none" type="text" name="rechenzeit" id="rechenzeit" value="<?= bw_e($bw_cfg['rechenzeit']) ?>">
+  <p class="sm-hilfe"><?= bw_t('EINST.H_RECHENZEIT') ?></p>
+</div>
+
+<h2><?= bw_e(bw_t('EINST.H_SPERREN')) ?></h2>
+<div class="sm-warnung"><?= bw_t('EINST.SPERREN_ERKLAERUNG') ?></div>
+<label><input data-role="none" type="checkbox" name="frost_ein" value="1"<?= !empty($bw_cfg['frost_ein']) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_FROST_EIN')) ?></label>
+<div class="sm-feld">
+  <label for="frost_c"><?= bw_t('EINST.L_FROST_C') ?></label>
+  <input data-role="none" type="text" name="frost_c" id="frost_c" value="<?= bw_e($bw_cfg['frost_c']) ?>">
+  <p class="sm-hilfe"><?= bw_t('EINST.H_FROST_C') ?></p>
+</div>
+<label><input data-role="none" type="checkbox" name="wind_ein" value="1"<?= !empty($bw_cfg['wind_ein']) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_WIND_EIN')) ?></label>
+<div class="sm-feld">
+  <label for="wind_kmh_max"><?= bw_t('EINST.L_WIND_KMH_MAX') ?></label>
+  <input data-role="none" type="text" name="wind_kmh_max" id="wind_kmh_max" value="<?= bw_e($bw_cfg['wind_kmh_max']) ?>">
+  <p class="sm-hilfe"><?= bw_t('EINST.H_WIND_KMH_MAX') ?></p>
+</div>
+<label><input data-role="none" type="checkbox" name="regen_ein" value="1"<?= !empty($bw_cfg['regen_ein']) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_REGEN_EIN')) ?></label>
+<div class="sm-feld">
+  <label for="regen_mmh_max"><?= bw_t('EINST.L_REGEN_MMH_MAX') ?></label>
+  <input data-role="none" type="text" name="regen_mmh_max" id="regen_mmh_max" value="<?= bw_e($bw_cfg['regen_mmh_max']) ?>">
+  <p class="sm-hilfe"><?= bw_t('EINST.H_REGEN_MMH_MAX') ?></p>
+</div>
+
+<h2><?= bw_e(bw_t('EINST.H_WEITERES')) ?></h2>
+<label><input data-role="none" type="checkbox" name="luecken_fuellen" value="1"<?= !empty($bw_cfg['luecken_fuellen']) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_LUECKEN_FUELLEN')) ?></label>
+<p class="sm-hilfe"><?= bw_t('EINST.H_LUECKEN_FUELLEN') ?></p>
+<div class="sm-feld">
+  <label for="hoechstalter"><?= bw_t('EINST.L_HOECHSTALTER') ?></label>
+  <input data-role="none" type="text" name="hoechstalter" id="hoechstalter" value="<?= bw_e($bw_cfg['hoechstalter']) ?>">
+  <p class="sm-hilfe"><?= bw_t('EINST.H_HOECHSTALTER') ?></p>
+</div>
+<label><input data-role="none" type="checkbox" name="melden_ein" value="1"<?= !empty($bw_cfg['melden_ein']) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_MELDEN_EIN')) ?></label>
+<p class="sm-hilfe"><?= bw_t('EINST.H_MELDEN_EIN') ?></p>
+<div class="sm-feld">
+  <label for="melden_limit_tage"><?= bw_t('EINST.L_MELDEN_LIMIT_TAGE') ?></label>
+  <input data-role="none" type="text" name="melden_limit_tage" id="melden_limit_tage" value="<?= bw_e($bw_cfg['melden_limit_tage']) ?>">
+</div>
+<div class="sm-feld">
+  <label for="melden_station_tage"><?= bw_t('EINST.L_MELDEN_STATION_TAGE') ?></label>
+  <input data-role="none" type="text" name="melden_station_tage" id="melden_station_tage" value="<?= bw_e($bw_cfg['melden_station_tage']) ?>">
+</div>
+
 <?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
          vollstaendig im Reiter MQTT - eine Sache, eine Stelle. */ ?>
 <button data-role="none" class="sm-b sm-b-aktion" name="speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
@@ -533,6 +894,7 @@ if ($bw_rahmen) {
 <div class="sm-seite<?= $bw_tab === 'tab-sources' ? ' sm-active' : '' ?>" id="tab-sources">
 <h2><?= bw_e(bw_t('QUELL.H_TITEL')) ?></h2>
 <div class="sm-hinweis"><?= bw_t('QUELL.ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= bw_t('QUELL.WEG_ERKLAERUNG') ?></div>
 
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="activetab" value="tab-sources">
@@ -553,12 +915,15 @@ if ($bw_rahmen) {
 
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="activetab" value="tab-sources">
-<div class="sm-feld">
-  <label for="http_url"><?= bw_e(bw_t('QUELL.L_URL')) ?></label>
-  <input data-role="none" type="text" name="http_url" id="http_url"
-         value="<?= bw_e(isset($bw_q['http_url']) ? $bw_q['http_url'] : '') ?>"
-         placeholder="http://192.0.2.10/get_livedata_info">
-</div>
+<?php /* Die Adresse steht in Schritt 1. Zwei Eingabefelder fuer denselben
+         Wert auf einer Seite sind eine Fehlerquelle: welches gilt? Das
+         Formular hier schickt sie als verstecktes Feld mit, damit der
+         Speichern-Handler sie nicht als leer liest und loescht. */ ?>
+<input data-role="none" type="hidden" name="http_url"
+       value="<?= bw_e(isset($bw_q['http_url']) ? $bw_q['http_url'] : '') ?>">
+<h2><?= bw_e(bw_t('QUELL.S3_TITEL')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('QUELL.S3_TEXT') ?></p>
+<div class="sm-breit">
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('QUELL.T_GROESSE')) ?></th><th><?= bw_e(bw_t('QUELL.T_WEG')) ?></th>
     <th><?= bw_e(bw_t('QUELL.T_THEMA')) ?></th><th><?= bw_e(bw_t('QUELL.T_PFAD')) ?></th>
@@ -587,9 +952,191 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 </tr>
 <?php } ?>
 </table>
+</div>
 <p class="sm-hilfe"><?= bw_t('QUELL.FUSSNOTE') ?></p>
+<p class="sm-hilfe"><?= bw_t('QUELL.FUSSNOTE_THEMA') ?></p>
+<p class="sm-hilfe"><?= bw_t('QUELL.FUSSNOTE_TMINMAX') ?></p>
 <button data-role="none" class="sm-b sm-b-aktion" name="quellen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
+
+<h2><?= bw_e(bw_t('QUELL.H_ERKENNEN')) ?></h2>
+<div class="sm-step">
+<h3><?= bw_e(bw_t('QUELL.S1_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('QUELL.S1_TEXT') ?></p>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-sources">
+<div class="sm-feld">
+  <label for="http_url2"><?= bw_e(bw_t('QUELL.S1_L_HTTP')) ?></label>
+  <?php $bw_u2 = (string) (isset($bw_q['http_url']) ? $bw_q['http_url'] : '');
+        if (preg_match('/GATEWAY-ADRESSE|GERAET|BEISPIEL/i', $bw_u2)) { $bw_u2 = ''; } ?>
+  <input data-role="none" type="text" name="http_url" id="http_url2"
+         value="<?= bw_e($bw_u2) ?>" placeholder="http://192.0.2.10/get_livedata_info">
+</div>
+<div class="sm-feld">
+  <label for="mqtt_thema"><?= bw_e(bw_t('QUELL.S1_L_MQTT')) ?></label>
+  <input data-role="none" type="text" name="mqtt_thema" id="mqtt_thema"
+         value="<?= bw_e(isset($bw_q['mqtt_thema']) ? $bw_q['mqtt_thema'] : '') ?>"
+         placeholder="ecowitt/FCE8C0F0BCD3">
+  <p class="sm-hilfe"><?= bw_t('QUELL.S1_H_MQTT') ?></p>
+</div>
+<button data-role="none" class="sm-b sm-b-aktion" name="weg_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
+</form>
+</div>
+
+<div class="sm-step">
+<h3><?= bw_e(bw_t('QUELL.S2_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('QUELL.S2_TEXT') ?></p>
+<table class="sm-tabelle" style="max-width:700px">
+<tr><th><?= bw_e(bw_t('QUELL.S2_T_WEG')) ?></th><th><?= bw_e(bw_t('QUELL.S2_T_KNOPF')) ?></th>
+    <th><?= bw_e(bw_t('QUELL.S2_T_VORAUS')) ?></th></tr>
+<tr><td><b>HTTP</b></td>
+    <td><form action="index.php" method="post" style="margin:0">
+      <input data-role="none" type="hidden" name="activetab" value="tab-sources">
+      <button data-role="none" class="sm-b sm-b-lesen" name="quellen_erkennen" value="1"><?= bw_e(bw_t('QUELL.K_ERKENNEN')) ?></button>
+    </form></td>
+    <td class="sm-hilfe"><?= bw_t('QUELL.S2_V_HTTP') ?></td></tr>
+<tr><td><b>MQTT</b></td>
+    <td><form action="index.php" method="post" style="margin:0">
+      <input data-role="none" type="hidden" name="activetab" value="tab-sources">
+      <button data-role="none" class="sm-b sm-b-lesen" name="broker_erkennen" value="1"><?= bw_e(bw_t('QUELL.K_BROKER')) ?></button>
+    </form></td>
+    <td class="sm-hilfe"><?= bw_t('QUELL.S2_V_MQTT') ?></td></tr>
+</table>
+<div class="sm-hinweis"><?= bw_t('QUELL.S2_RECHNEN') ?></div>
+<?php if ($bw_bro !== null && $bw_bro['themen'] > 0) { ?>
+<h3><?= sprintf(bw_e(bw_t('QUELL.BRO_VORSCHLAG')), (int) $bw_bro['themen']) ?></h3>
+<?php if (!$bw_bro['felder']) { ?>
+<div class="sm-warnung"><?= bw_t('QUELL.BRO_NICHTS_ERKANNT') ?></div>
+<?php } else { ?>
+<div class="sm-breit">
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('QUELL.T_GROESSE')) ?></th><th><?= bw_e(bw_t('MQTT.T_THEMA')) ?></th>
+    <th><?= bw_e(bw_t('QUELL.T_PFAD')) ?></th><th><?= bw_e(bw_t('QUELL.ERK_T_WERT')) ?></th>
+    <th><?= bw_e(bw_t('QUELL.T_EINHEIT')) ?></th></tr>
+<?php foreach ($bw_bro['felder'] as $bw_g => $bw_f) { ?>
+<tr><td><?= bw_e($bw_g) ?></td><td class="sm-mono"><?= bw_e($bw_f['thema']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_f['pfad']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_f['wert']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_f['einheit'] !== '' ? $bw_f['einheit'] : '—') ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<form action="index.php" method="post">
+  <input data-role="none" type="hidden" name="activetab" value="tab-sources">
+  <button data-role="none" class="sm-b sm-b-aktion" name="broker_uebernehmen" value="1"><?= bw_e(bw_t('QUELL.K_UEBERNEHMEN')) ?></button>
+</form>
+<p class="sm-hilfe"><?= bw_t('QUELL.BRO_FUSSNOTE') ?></p>
+<?php } ?>
+<h4><?= bw_e(bw_t('QUELL.BRO_ALLE')) ?></h4>
+<div class="sm-breit">
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('MQTT.T_THEMA')) ?></th><th><?= bw_e(bw_t('QUELL.T_PFAD')) ?></th>
+    <th><?= bw_e(bw_t('QUELL.ERK_T_WERT')) ?></th></tr>
+<?php foreach ($bw_bro['blaetter'] as $bw_bl) { ?>
+<tr><td class="sm-mono"><?= bw_e($bw_bl['thema']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_bl['pfad']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_bl['wert']) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php } ?>
+
+<?php if ($bw_erk !== null) { ?>
+<h3><?= bw_e(bw_t('QUELL.ERK_VORSCHLAG')) ?></h3>
+<?php if (!$bw_erk['felder']) { ?>
+<div class="sm-warnung"><?= bw_t('QUELL.ERK_NICHTS_ERKANNT') ?></div>
+<?php } else { ?>
+<div class="sm-breit">
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('QUELL.T_GROESSE')) ?></th><th><?= bw_e(bw_t('QUELL.T_PFAD')) ?></th>
+    <th><?= bw_e(bw_t('QUELL.ERK_T_WERT')) ?></th><th><?= bw_e(bw_t('QUELL.ERK_T_KENNUNG')) ?></th></tr>
+<?php foreach ($bw_erk['felder'] as $bw_g => $bw_f) { ?>
+<tr><td><?= bw_e($bw_g) ?></td><td class="sm-mono"><?= bw_e($bw_f['pfad']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_f['wert']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_f['kennung']) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<form action="index.php" method="post">
+  <input data-role="none" type="hidden" name="activetab" value="tab-sources">
+  <button data-role="none" class="sm-b sm-b-aktion" name="quellen_uebernehmen" value="1"><?= bw_e(bw_t('QUELL.K_UEBERNEHMEN')) ?></button>
+</form>
+<p class="sm-hilfe"><?= bw_t('QUELL.ERK_FUSSNOTE') ?></p>
+<?php } ?>
+<h3><?= bw_e(bw_t('QUELL.ERK_ALLE')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('QUELL.ERK_ALLE_TEXT') ?></p>
+<div class="sm-breit">
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('QUELL.T_PFAD')) ?></th><th><?= bw_e(bw_t('QUELL.ERK_T_WERT')) ?></th>
+    <th><?= bw_e(bw_t('QUELL.T_EINHEIT')) ?></th></tr>
+<?php foreach ($bw_erk['blaetter'] as $bw_bl) { ?>
+<tr><td class="sm-mono"><?= bw_e($bw_bl['pfad']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_bl['wert']) ?></td>
+    <td class="sm-mono"><?= bw_e($bw_bl['einheit']) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php } ?>
+
+</div>
+
+<?php
+/* Was zuletzt wirklich angekommen ist.
+ *
+ * Zwei Vorlagen sagen das seit jeher zu ("Der Reiter Quellen zeigt die
+ * Rohantwort - daran laesst sich jeder Pfad in einer Minute richtigstellen"),
+ * und bis 0.9.6 zeigte er es nicht. Ohne diese Anzeige muss man Pfade raten. */
+$bw_roh = bw_json_lesen(bw_paths()['datadir'] . '/roh.json');
+?>
+<h2><?= bw_e(bw_t('QUELL.H_ROH')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('QUELL.ROH_ERKLAERUNG') ?></p>
+<?php if (!$bw_roh) { ?>
+<div class="sm-hinweis"><?= bw_t('QUELL.ROH_LEER') ?></div>
+<?php } else { ?>
+<p class="sm-hilfe"><?= sprintf(bw_t('QUELL.ROH_STAND'),
+    date('d.m.Y H:i', (int) (isset($bw_roh['ts']) ? $bw_roh['ts'] : 0))) ?></p>
+<?php
+/* Eine leere Anzeige ohne Begruendung ist keine Anzeige.
+ *
+ * Am Gerät gemeldet: unter der Ueberschrift stand nur das Datum und sonst
+ * nichts. Der Grund war harmlos - die Adresse war nach dem letzten
+ * Rechengang eingetragen worden -, aber ablesbar war er nirgends. Jetzt
+ * sagt der Abschnitt in jedem Fall, WAS er hat und was fehlt. */
+$bw_roh_url = (string) (isset($bw_roh['http_url']) ? $bw_roh['http_url'] : '');
+$bw_roh_hat = !empty($bw_roh['http']) || !empty($bw_roh['mqtt']);
+$bw_url_jetzt = (string) (isset($bw_q['http_url']) ? $bw_q['http_url'] : '');
+if (!$bw_roh_hat) { ?>
+<div class="sm-warnung"><?php
+    if ($bw_url_jetzt !== '' && $bw_roh_url === '') {
+        echo bw_t('QUELL.ROH_NOCH_NICHT');
+    } elseif ($bw_url_jetzt !== '' && $bw_roh_url !== $bw_url_jetzt) {
+        echo bw_t('QUELL.ROH_ANDERE_ADRESSE');
+    } elseif ($bw_url_jetzt === '') {
+        echo bw_t('QUELL.ROH_KEINE_ADRESSE');
+    } else {
+        echo bw_t('QUELL.ROH_NICHTS');
+    }
+?></div>
+<?php }
+if (!empty($bw_roh['http_fehler'])) { ?>
+<div class="sm-fehler"><?= sprintf(bw_t('QUELL.ROH_FEHLER'), bw_e($bw_roh['http_fehler'])) ?></div>
+<?php }
+if (!empty($bw_roh['http'])) { ?>
+<h3><?= bw_e(bw_t('QUELL.ROH_HTTP')) ?> <span class="sm-mono"><?= bw_e($bw_roh['http_url']) ?></span></h3>
+<div class="sm-log"><?= bw_e($bw_roh['http']) ?></div>
+<?php }
+if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
+<h3><?= bw_e(bw_t('QUELL.ROH_MQTT')) ?></h3>
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('MQTT.T_THEMA')) ?></th><th><?= bw_e(bw_t('QUELL.T_NUTZLAST')) ?></th>
+    <th><?= bw_e(bw_t('QUELL.T_ALTER')) ?></th></tr>
+<?php foreach ($bw_roh['mqtt'] as $bw_th => $bw_mw) { ?>
+<tr><td class="sm-mono"><?= bw_e($bw_th) ?></td>
+    <td class="sm-mono"><?= bw_e((string) (isset($bw_mw['nutzlast']) ? $bw_mw['nutzlast'] : '')) ?></td>
+    <td><?= (int) (isset($bw_mw['alter_s']) ? $bw_mw['alter_s'] : 0) ?> s</td></tr>
+<?php } ?>
+</table>
+<?php } } ?>
 </div>
 
 <!-- ============ Zonen ============ -->
@@ -598,6 +1145,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <p class="sm-hilfe"><?= bw_t('ZONE.ERKLAERUNG') ?></p>
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="activetab" value="tab-zones">
+<div class="sm-breit">
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_SCHLUESSEL')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_FLAECHE')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEPFLANZUNG')) ?></th>
@@ -624,9 +1172,17 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
       <?php } ?></select></td>
   <td><input data-role="none" type="text" name="z_rate[<?= $bw_i ?>]" size="5"
              value="<?= bw_e(isset($bw_z['rate_mmh']) ? $bw_z['rate_mmh'] : '') ?>">
+      <select data-role="none" name="z_regner[<?= $bw_i ?>]" style="margin-top:3px">
+      <option value=""><?= bw_e(bw_t('ZONE.REGNER_KEINER')) ?></option>
+      <?php foreach (($bw_pf['regner'] ?: array()) as $bw_rk => $bw_rv) {
+          if ($bw_rk === '_hinweis') { continue; } ?>
+      <option value="<?= bw_e($bw_rk) ?>"<?= (isset($bw_z['regner']) ? $bw_z['regner'] : '') === $bw_rk ? ' selected' : '' ?>><?= bw_e($bw_rv['text']) ?> (<?= bw_e($bw_rv['mmh']) ?>)</option>
+      <?php } ?></select>
       <?php if (!empty($bw_z['schluessel'])) { ?>
       <div class="sm-hilfe"><?= !empty($bw_z['rate_gemessen'])
-          ? '<span class="sm-an">' . bw_e(bw_t('ZONE.GEMESSEN')) . '</span>'
+          ? '<span class="sm-an">' . bw_e(bw_t('ZONE.GEMESSEN'))
+            . (!empty($bw_z['rate_gemessen_am'])
+               ? ' ' . bw_e($bw_z['rate_gemessen_am']) : '') . '</span>'
           : '<span class="sm-schaetz">' . bw_e(bw_t('ZONE.GESCHAETZT')) . '</span>' ?></div>
       <?php } ?></td>
   <td><input data-role="none" type="text" name="z_mikroklima[<?= $bw_i ?>]" size="4"
@@ -639,8 +1195,62 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 </tr>
 <?php } ?>
 </table>
+</div>
 <p class="sm-hilfe"><?= bw_t('ZONE.FUSSNOTE') ?></p>
 <p class="sm-hilfe"><?= bw_t('ZONE.HILFE_MIKRO') ?></p>
+
+<h3><?= bw_e(bw_t('ZONE.H_FEIN')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('ZONE.FEIN_ERKLAERUNG') ?></p>
+<div class="sm-breit">
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_DAUER')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_HOEHE_PFLANZE')) ?></th><th><?= bw_e(bw_t('ZONE.T_ABFLUSS')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_SENSOR_GEWICHT')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_THETA_FC')) ?></th><th><?= bw_e(bw_t('ZONE.T_THETA_WP')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_GIESS_THEMA')) ?></th><th><?= bw_e(bw_t('ZONE.T_GIESS_ART')) ?></th></tr>
+<?php for ($bw_j = 0; $bw_j < 8; $bw_j++) {
+    $bw_z = isset($bw_zonen[$bw_j]) ? $bw_zonen[$bw_j] : array(); ?>
+<tr>
+  <?php /* NICHT bw_e('&mdash;') - die Maskierfunktion macht daraus
+             '&amp;mdash;', und auf dem Bildschirm steht dann der Quelltext.
+             Genau der Befund mit 40 Fundstellen in 13 Plugins, hier von mir
+             selbst neu eingeschleppt und am Geraet gesehen. Der Name geht
+             durch bw_e(), das Zeichen daneben nicht. */ ?>
+  <td class="sm-hilfe"><?= !empty($bw_z['name']) ? bw_e($bw_z['name']) : '&mdash;' ?></td>
+  <td><input data-role="none" type="text" name="z_dauer[<?= $bw_j ?>]" size="5"
+             value="<?= bw_e(!empty($bw_z['dauer_s']) ? $bw_z['dauer_s'] : '') ?>"
+             placeholder="<?= bw_e($bw_cfg['zonendauer_s']) ?>"></td>
+  <td><input data-role="none" type="text" name="z_hoehe_pflanze[<?= $bw_j ?>]" size="5"
+             value="<?= bw_e(!empty($bw_z['hoehe_pflanze']) ? $bw_z['hoehe_pflanze'] : '') ?>"></td>
+  <td><input data-role="none" type="text" name="z_abfluss[<?= $bw_j ?>]" size="5"
+             value="<?= bw_e(!empty($bw_z['abfluss']) ? $bw_z['abfluss'] : '') ?>" placeholder="0"></td>
+  <td><input data-role="none" type="text" name="z_sensor_gewicht[<?= $bw_j ?>]" size="5"
+             value="<?= bw_e(isset($bw_z['sensor_gewicht'])
+                 ? str_replace('.', ',', (string) $bw_z['sensor_gewicht']) : '') ?>" placeholder="0,5"></td>
+  <td><input data-role="none" type="text" name="z_theta_fc[<?= $bw_j ?>]" size="5"
+             value="<?= bw_e(!empty($bw_z['theta_fc_eigen'])
+                 ? str_replace('.', ',', (string) $bw_z['theta_fc_eigen']) : '') ?>"
+             placeholder="<?= bw_e(isset($bw_z['theta_fc'])
+                 ? str_replace('.', ',', (string) $bw_z['theta_fc']) : '') ?>"></td>
+  <td><input data-role="none" type="text" name="z_theta_wp[<?= $bw_j ?>]" size="5"
+             value="<?= bw_e(!empty($bw_z['theta_wp_eigen'])
+                 ? str_replace('.', ',', (string) $bw_z['theta_wp_eigen']) : '') ?>"
+             placeholder="<?= bw_e(isset($bw_z['theta_wp'])
+                 ? str_replace('.', ',', (string) $bw_z['theta_wp']) : '') ?>"></td>
+  <td><input data-role="none" type="text" name="z_giess_thema[<?= $bw_j ?>]" size="18"
+             value="<?= bw_e(isset($bw_z['giess_thema']) ? $bw_z['giess_thema'] : '') ?>"
+             placeholder="<?= bw_e(bw_t('ZONE.P_GIESS')) ?>"></td>
+  <td><select data-role="none" name="z_giess_art[<?= $bw_j ?>]">
+      <?php foreach (array('minuten' => bw_t('ZONE.GIESS_MINUTEN'),
+                           'durchlaeufe' => bw_t('ZONE.GIESS_DURCHLAEUFE'),
+                           'mm' => bw_t('ZONE.GIESS_MM')) as $bw_gk => $bw_gv) { ?>
+      <option value="<?= bw_e($bw_gk) ?>"<?= (isset($bw_z['giess_art']) ? $bw_z['giess_art'] : 'minuten') === $bw_gk ? ' selected' : '' ?>><?= bw_e($bw_gv) ?></option>
+      <?php } ?></select></td>
+</tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= bw_t('ZONE.FEIN_FUSSNOTE') ?></p>
 <button data-role="none" class="sm-b sm-b-aktion" name="zonen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 
@@ -668,7 +1278,8 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_FUELLSTAND')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_DEFIZIT')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEDARF')) ?></th>
-    <th><?= bw_e(bw_t('ZONE.T_LITER')) ?></th><th><?= bw_e(bw_t('ZONE.T_MINUTEN')) ?></th></tr>
+    <th><?= bw_e(bw_t('ZONE.T_LITER')) ?></th><th><?= bw_e(bw_t('ZONE.T_MINUTEN')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_VENTILZEIT')) ?></th><th><?= bw_e(bw_t('ZONE.T_GEGOSSEN')) ?></th></tr>
 <?php foreach ($bw_zonen as $bw_z) {
     $bw_s = (string) $bw_z['schluessel'];
     $bw_e = isset($bw_a['zonen'][$bw_s]) ? $bw_a['zonen'][$bw_s] : null;
@@ -680,14 +1291,112 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
     <td><?= number_format((float) $bw_e['dr'], 1, ',', '.') ?> mm</td>
     <td><?= number_format((float) $bw_e['bedarf_mm'], 1, ',', '.') ?> mm</td>
     <td><?= number_format((float) (isset($bw_e['liter']) ? $bw_e['liter'] : 0), 0, ',', '.') ?><?= $bw_ges ? ' <span class="sm-schaetz">*</span>' : '' ?></td>
-    <td><?= number_format((float) (isset($bw_e['minuten']) ? $bw_e['minuten'] : 0), 0, ',', '.') ?><?= $bw_ges ? ' <span class="sm-schaetz">*</span>' : '' ?></td></tr>
+    <td><?= number_format((float) (isset($bw_e['minuten']) ? $bw_e['minuten'] : 0), 0, ',', '.') ?><?= $bw_ges ? ' <span class="sm-schaetz">*</span>' : '' ?></td>
+<?php   $bw_jz = isset($bw_plan['je_zone'][$bw_s]) && is_array($bw_plan['je_zone'][$bw_s])
+            ? $bw_plan['je_zone'][$bw_s] : array();
+        $bw_ged = in_array((string) $bw_z['name'],
+            isset($bw_plan['ventilzeit_gedeckelt']) && is_array($bw_plan['ventilzeit_gedeckelt'])
+                ? $bw_plan['ventilzeit_gedeckelt'] : array(), true); ?>
+    <td><?= (int) (isset($bw_jz['sekunden_soll']) ? $bw_jz['sekunden_soll'] : 0) ?> s<?php
+        if ($bw_ged) { echo ' <span class="sm-aus">' . bw_e(bw_t('ZONE.GEDECKELT')) . '</span>'; } ?></td>
+    <td><?= isset($bw_e['gegossen_mm']) && $bw_e['gegossen_mm'] !== null
+        ? number_format((float) $bw_e['gegossen_mm'], 1, ',', '.') . ' mm'
+        : '<span class="sm-hilfe">&mdash;</span>' ?></td></tr>
 <?php } ?>
 </table>
 <p class="sm-hilfe"><?= bw_t('ZONE.STAND_FUSSNOTE') ?></p>
+<?php
+/* Die Zonen ohne Niederschlagsrate BENENNEN.
+ *
+ * README und Quelltext sagen seit 0.9.1 zu: "der Grund lautet rate_fehlt,
+ * und die Oberflaeche zeigt, welche Zone es betrifft". Der Plan liefert die
+ * Namensliste in 'ohne_rate' - angezeigt wurde sie nirgends. Ausgerechnet
+ * der Fall, den der Quelltext als den gefaehrlichsten des Moduls bezeichnet,
+ * war damit unsichtbar. */
+$bw_or = isset($bw_plan['ohne_rate']) && is_array($bw_plan['ohne_rate'])
+    ? $bw_plan['ohne_rate'] : array();
+if ($bw_or) { ?>
+<div class="sm-fehler"><?= sprintf(bw_t('ZONE.OHNE_RATE'), bw_e(implode(', ', $bw_or))) ?></div>
+<?php }
+$bw_gd = isset($bw_plan['ventilzeit_gedeckelt']) && is_array($bw_plan['ventilzeit_gedeckelt'])
+    ? $bw_plan['ventilzeit_gedeckelt'] : array();
+if ($bw_gd) { ?>
+<div class="sm-warnung"><?= sprintf(bw_t('ZONE.GEDECKELT_TEXT'), bw_e(implode(', ', $bw_gd))) ?></div>
+<?php }
+/* Und der Sensorhinweis, der bis 0.9.6 sorgfaeltig formuliert und niemandem
+ * gezeigt wurde. */
+foreach ($bw_zonen as $bw_z) {
+    $bw_s = (string) $bw_z['schluessel'];
+    $bw_e2 = isset($bw_a['zonen'][$bw_s]) ? $bw_a['zonen'][$bw_s] : null;
+    if (is_array($bw_e2) && !empty($bw_e2['sensor_hinweis'])) { ?>
+<div class="sm-warnung"><b><?= bw_e($bw_z['name']) ?>:</b> <?= bw_e($bw_e2['sensor_hinweis']) ?></div>
+<?php }
+} ?>
 <?php } ?>
 </div>
 
-<!-- ============ MQTT ============ -->
+<!-- ============ Verlauf ============ -->
+<div class="sm-seite<?= $bw_tab === 'tab-history' ? ' sm-active' : '' ?>" id="tab-history">
+<h2><?= bw_e(bw_t('VERL.H_TITEL')) ?></h2>
+<div class="sm-hinweis"><?= bw_t('VERL.ERKLAERUNG') ?></div>
+<?php
+$bw_vt = bw_verlauf_tage(60);
+$bw_luecken = bw_verlauf_luecken();
+if ($bw_luecken > 0) { ?>
+<div class="sm-warnung"><?= sprintf(bw_t('VERL.LUECKEN'), (int) $bw_luecken) ?></div>
+<?php }
+if (!$bw_vt) { ?>
+<div class="sm-hinweis"><?= bw_t('VERL.LEER') ?></div>
+<?php } else {
+    // Summen ueber den gezeigten Zeitraum - die Zahl, nach der man wirklich
+    // sucht: wie viel ist verdunstet, wie viel ist gefallen, wie viel wurde
+    // ausgebracht.
+    $bw_s_et0 = 0.0; $bw_s_reg = 0.0; $bw_s_bew = 0.0;
+    foreach ($bw_vt as $bw_t2) {
+        $bw_s_et0 += (float) $bw_t2['et0'];
+        $bw_s_reg += (float) $bw_t2['regen'];
+        $bw_s_bew += (float) $bw_t2['bew_summe'];
+    }
+    $bw_max = 1.0;
+    foreach ($bw_vt as $bw_t2) {
+        $bw_max = max($bw_max, (float) $bw_t2['et0'], (float) $bw_t2['regen']);
+    }
+?>
+<table class="sm-tabelle" style="max-width:560px">
+<tr><th><?= bw_e(bw_t('VERL.T_ZEITRAUM')) ?></th><td><?= count($bw_vt) ?> <?= bw_e(bw_t('VERL.TAGE')) ?></td></tr>
+<tr><th><?= bw_e(bw_t('VERL.T_S_ET0')) ?></th><td><?= number_format($bw_s_et0, 1, ',', '.') ?> mm</td></tr>
+<tr><th><?= bw_e(bw_t('VERL.T_S_REGEN')) ?></th><td><?= number_format($bw_s_reg, 1, ',', '.') ?> mm</td></tr>
+<tr><th><?= bw_e(bw_t('VERL.T_S_BEW')) ?></th><td><?= number_format($bw_s_bew, 1, ',', '.') ?> mm</td></tr>
+</table>
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('VERL.T_DATUM')) ?></th><th><?= bw_e(bw_t('VERL.T_ET0')) ?></th>
+    <th><?= bw_e(bw_t('VERL.T_REGEN')) ?></th><th><?= bw_e(bw_t('VERL.T_BEW')) ?></th>
+    <th><?= bw_e(bw_t('VERL.T_QUELLE')) ?></th></tr>
+<?php foreach ($bw_vt as $bw_t2) { ?>
+<tr>
+  <td class="sm-mono"><?= bw_e($bw_t2['datum']) ?></td>
+  <td><?= $bw_t2['et0'] === null ? '&mdash;' : number_format((float) $bw_t2['et0'], 2, ',', '.') ?>
+      <div class="sm-balken" style="max-width:70px"><i style="width:<?= (int) (100 * (float) $bw_t2['et0'] / $bw_max) ?>%"></i></div></td>
+  <td><?= $bw_t2['regen'] === null ? '&mdash;' : number_format((float) $bw_t2['regen'], 1, ',', '.') ?></td>
+  <td><?php if ($bw_t2['bew_summe'] > 0) {
+          echo number_format((float) $bw_t2['bew_summe'], 1, ',', '.');
+          echo ' <span class="sm-hilfe">(';
+          $bw_teile = array();
+          foreach ($bw_t2['bewaesserung'] as $bw_zk => $bw_zw) {
+              $bw_teile[] = bw_e($bw_zk) . ' ' . number_format((float) $bw_zw, 1, ',', '.');
+          }
+          echo implode(', ', $bw_teile) . ')</span>';
+      } else { echo '<span class="sm-hilfe">&mdash;</span>'; } ?></td>
+  <td class="sm-hilfe"><?= bw_e($bw_t2['quelle']) ?><?= $bw_t2['nachgetragen']
+      ? ' <span class="sm-schaetz">' . bw_e(bw_t('VERL.NACHGETRAGEN')) . '</span>' : '' ?></td>
+</tr>
+<?php } ?>
+</table>
+<p class="sm-hilfe"><?= bw_t('VERL.FUSSNOTE') ?></p>
+<?php } ?>
+</div>
+
+<!-- ============ MQTT ============ --><!-- ============ MQTT ============ -->
 <div class="sm-seite<?= $bw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
 
 <h2>MQTT</h2>
@@ -718,6 +1427,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <tr><td><?= bw_e(bw_t('MQTT.T_UDP')) ?></td><td class="sm-mono"><?= (int) (isset($bw_g['udpport']) ? $bw_g['udpport'] : 0) ?></td></tr>
 </table>
 <div class="sm-warnung"><?= bw_t('MQTT.ABO_WARNUNG') ?></div>
+<div class="sm-hinweis"><?= bw_t('MQTT.RUECKKANAL') ?></div>
 <p class="sm-hilfe"><?= bw_t('MQTT.ABO_TEXT') ?></p>
 <p><span class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/#</span></p>
 
@@ -726,13 +1436,20 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <tr><th><?= bw_e(bw_t('MQTT.T_THEMA')) ?></th><th><?= bw_e(bw_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
 <?php foreach (array('ok' => 'MQTT.B_OK', 'et0' => 'MQTT.B_ET0', 'giessen' => 'MQTT.B_GIESSEN',
                      'durchlaeufe' => 'MQTT.B_DURCHLAEUFE', 'noetige_durchlaeufe' => 'MQTT.B_NOETIG',
-                     'reicht' => 'MQTT.B_REICHT') as $bw_k => $bw_v) { ?>
+                     'reicht' => 'MQTT.B_REICHT', 'alter' => 'MQTT.B_ALTER',
+                     'gesperrt' => 'MQTT.B_GESPERRT', 'sperrgrund' => 'MQTT.B_SPERRGRUND',
+                     'plan_fest' => 'MQTT.B_PLANFEST') as $bw_k => $bw_v) { ?>
 <tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?></td></tr>
 <?php } ?>
-<?php foreach ($bw_zonen as $bw_z) { $bw_s = bw_e($bw_z['schluessel']); ?>
-<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/<?= $bw_s ?>/defizit_mm</td><td><?= sprintf(bw_t('MQTT.B_ZONE_DEFIZIT'), bw_e($bw_z['name'])) ?></td></tr>
-<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/<?= $bw_s ?>/liter</td><td><?= sprintf(bw_t('MQTT.B_ZONE_LITER'), bw_e($bw_z['name'])) ?></td></tr>
-<?php } ?>
+<?php foreach ($bw_zonen as $bw_z) { $bw_s = bw_e($bw_z['schluessel']);
+    foreach (array('defizit_mm' => 'MQTT.B_ZONE_DEFIZIT', 'bedarf_mm' => 'MQTT.B_ZONE_BEDARF',
+                   'dr_mm' => 'MQTT.B_ZONE_DR', 'fuellstand' => 'MQTT.B_ZONE_FUELLSTAND',
+                   'liter' => 'MQTT.B_ZONE_LITER', 'minuten' => 'MQTT.B_ZONE_MINUTEN',
+                   'sekunden' => 'MQTT.B_ZONE_SEKUNDEN',
+                   'durchlaeufe' => 'MQTT.B_ZONE_DURCHLAEUFE',
+                   'gegossen_mm' => 'MQTT.B_ZONE_GEGOSSEN') as $bw_zk => $bw_zv) { ?>
+<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/<?= $bw_s ?>/<?= bw_e($bw_zk) ?></td><td><?= sprintf(bw_t($bw_zv), bw_e($bw_z['name'])) ?></td></tr>
+<?php } } ?>
 </table>
 </div>
 
