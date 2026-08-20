@@ -253,7 +253,6 @@ function bw_zone($schluessel)
 function bw_quellen()      { return bw_json_lesen(bw_paths()['quellen']); }
 function bw_quellen_speichern($q) { return bw_json_schreiben(bw_paths()['quellen'], $q); }
 function bw_abbild()       { return bw_json_lesen(bw_paths()['datadir'] . '/abbild.json'); }
-function bw_zustand()      { return bw_json_lesen(bw_paths()['datadir'] . '/zustand.json'); }
 function bw_verlauf()      { return bw_json_lesen(bw_paths()['datadir'] . '/verlauf.json'); }
 
 function bw_alter()
@@ -585,27 +584,6 @@ function bw_log($text)
                        FILE_APPEND | LOCK_EX);
 }
 
-/** Dieselbe Meldung hoechstens einmal je Zeitfenster - sonst wird die
- *  Logdatei durch eine Dauerstoerung unlesbar. */
-function bw_log_gebremst($schluessel, $text, $sekunden = 3600)
-{
-    $f = bw_paths()['datadir'] . '/.meld_' . preg_replace('/[^a-z0-9_]/i', '', $schluessel);
-    $letzte = is_file($f) ? (int) @file_get_contents($f) : 0;
-    if (time() - $letzte >= $sekunden) {
-        @file_put_contents($f, (string) time());
-        bw_log($text);
-    }
-}
-
-/**
- * Eine Zeile in den LoxBerry-Benachrichtigungsbereich legen.
- *
- * Geprueft wird die AUFRUFFORM 'notify_ext(', nicht der blosse Name - ein
- * Kommentar, der die Funktion erwaehnt, ist kein Beleg dafuer, dass es sie
- * gibt. Fehlt sie, wird nichts abgelegt und nichts behauptet.
- *
- * Rueckgabe: true, wenn die Meldung wirklich abgelegt wurde.
- */
 /**
  * Eine Nutzlast im Ecowitt-Uploadformat in ein Verzeichnis wandeln.
  *
@@ -685,26 +663,6 @@ function bw_broker_erkennen()
     }
     return array('felder' => $felder, 'blaetter' => $blaetter,
                  'themen' => count($mqtt));
-}
-
-function bw_melden($schwere, $text)
-{
-    $p = bw_paths();
-    if ($p['home'] === '') { return false; }
-    $sdk = $p['home'] . '/libs/phplib/loxberry_log.php';
-    if (!is_file($sdk)) { return false; }
-    require_once $p['home'] . '/libs/phplib/loxberry_system.php';
-    require_once $sdk;
-    if (!function_exists('notify_ext')) { return false; }
-    $s = (int) $schwere;
-    if ($s < 1 || $s > 7) { $s = 4; }
-    notify_ext(array(
-        'PACKAGE'  => $p['plugin'],
-        'NAME'     => 'Bewaesserung',
-        'MESSAGE'  => (string) $text,
-        'SEVERITY' => $s,
-    ));
-    return true;
 }
 
 /**
@@ -884,21 +842,6 @@ function bw_dienst($befehl)
  */
 
 
-/**
- * Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
- *
- * Das Gateway liest ZEILENWEISE. Ein Zeilenumbruch im Wert - aus einer
- * Fehlermeldung des Betriebssystems, einem Geraetenamen oder der Ausgabe
- * eines Systembefehls - zerlegt die Uebertragung, und aus den Bruchstuecken
- * bildet das Gateway erfundene Themen. Ein Tabulator schadet ebenso, weil
- * Leerzeichen Thema und Wert trennt.
- */
-function bw_mqtt_wert_saeubern($v)
-{
-    $wert = str_replace(array("\r\n", "\r", "\n", "\t"), ' ', (string) $v);
-    return trim(preg_replace('/ {2,}/', ' ', $wert));
-}
-
 function bw_mqtt_zustand()
 {
     $p = bw_paths();
@@ -933,40 +876,6 @@ function bw_mqtt_zustand()
         'pw'         => (string) $hol('Brokerpass', 'brokerpass'),
         'lokal'      => in_array((string) $hol('Uselocalbroker', 'uselocalbroker'), array('1', 'true'), true) ? 1 : 0,
     );
-}
-
-/**
- * Werte ueber das LoxBerry-Gateway veroeffentlichen.
- *
- * Bewusst ueber den UDP-Eingang des Gateways und nicht mit einem eigenen
- * MQTT-Client: so muss das Plugin ueberhaupt keine Broker-Zugangsdaten
- * kennen, um zu senden. Das Gateway hat sie ohnehin.
- */
-function bw_mqtt_senden(array $paare, $praefix)
-{
-    $z = bw_mqtt_zustand();
-    if (!$z['udpport']) {
-        bw_log_gebremst('mqtt_kein_port', 'MQTT: kein UDP-Eingangsport in der general.json gefunden - nichts gesendet.');
-        return false;
-    }
-    if (!$z['autostart']) {
-        bw_log_gebremst('mqtt_aus', 'MQTT: das Gateway ist nicht auf Autostart gestellt '
-            . '(System, MQTT Gateway). Es wird gesendet, aber vermutlich hoert niemand zu.');
-    }
-    $s = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-    if (!$s) {
-        bw_log_gebremst('mqtt_socket', 'MQTT: Socket nicht moeglich.');
-        return false;
-    }
-    foreach ($paare as $k => $v) {
-        if ($v === null || $v === '') {
-            continue;   // fehlender Wert: nichts senden statt eine erfundene 0
-        }
-        $msg = 'publish ' . $praefix . '/' . $k . ' ' . bw_mqtt_wert_saeubern($v);
-        @socket_sendto($s, $msg, strlen($msg), 0, '127.0.0.1', $z['udpport']);
-    }
-    socket_close($s);
-    return true;
 }
 
 /* ==================================================================
