@@ -79,4 +79,23 @@ VL="$BASE/data/plugins/$PFOLDER/verlauf.json"
 [ -f "$VL" ] && cp -p "$VL" "$BASE/config/plugins/$PFOLDER.backup.verlauf.json" \
     && echo "<INFO> Verlauf des Wasserhaushalts gesichert."
 echo "<OK> preupgrade abgeschlossen."
+
+# ---------- Langzeitwerte retten ----------
+# die Tageshoechst- und -tiefstwerte, aus denen die Bilanz waechst.
+# Der Installer loescht data/plugins/<x>/ bei JEDEM Update - gemessen an
+# sbin/plugininstall.pl (Zweig master, 23.08.2026): &purge_installation steht
+# im Upgrade-Zweig (:886), und ihr Rumpf loescht ohne Bedingung (:1631).
+# Deshalb NEBEN den Ordner: "rm -rf .../<x>/" trifft den Nachbarn mit dem
+# Punkt nicht. postinstall.sh holt ihn zurueck und raeumt ihn weg.
+LANG_SICHER="$BASE/data/plugins/$PFOLDER.upgrade_sicherung"
+mkdir -p "$LANG_SICHER" 2>/dev/null
+chmod 0700 "$LANG_SICHER" 2>/dev/null
+for LANG_F in tagesextreme.json; do
+    [ -f "$BASE/data/plugins/$PFOLDER/$LANG_F" ] \
+        && cp -p "$BASE/data/plugins/$PFOLDER/$LANG_F" "$LANG_SICHER/$LANG_F" 2>/dev/null
+done
+# Die Wirkung pruefen, nicht den Rueckgabewert: liegt hinterher etwas da?
+if [ -n "$(ls -A "$LANG_SICHER" 2>/dev/null)" ]; then
+    echo "<OK> Langzeitwerte gesichert."
+fi
 exit 0
