@@ -57,6 +57,23 @@ $bw_kommazahl = function ($s) {
     return str_replace(',', '.', trim((string) $s));
 };
 
+/* ==================================================================
+ * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
+ * ==================================================================
+ *
+ * Stand der Kopf davor, war er beim Aufruf von header() schon
+ * geschrieben - "Cannot modify header information", und der Knopf
+ * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON
+ * statt einer Datei.
+ *
+ * Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos und
+ * headers_sent() immer falsch. Und wer OHNE gueltiges Formularmerkmal
+ * misst, wird vom Wachposten abgewiesen, bevor der Handler anlaeuft.
+ * Beides hat den Fehler lange verdeckt.
+ *
+ * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
+ * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ * ================================================================== */
 /* ---------------- Loxone-Vorlage ---------------- */
 if ($bw_post && isset($_POST['vorlage_laden'])) {
     list($bw_name, $bw_xml) = bw_vorlage();
@@ -662,9 +679,6 @@ $bw_alter = bw_alter();
 $bw_plan = isset($bw_a['plan']) && is_array($bw_a['plan']) ? $bw_a['plan'] : array();
 
 $bw_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
-if ($bw_rahmen) {
-    LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
-}
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -711,6 +725,11 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
             $bw_fehler[] = bw_t('EINST.SICH_SCHREIBFEHLER');
         }
     }
+}
+
+
+if ($bw_rahmen) {
+    LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
 }
 
 ?>
