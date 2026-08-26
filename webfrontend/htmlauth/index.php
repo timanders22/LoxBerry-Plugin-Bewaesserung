@@ -665,6 +665,54 @@ $bw_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
 if ($bw_rahmen) {
     LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
 }
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($bw_post && isset($_POST['bw_sichern'])) {
+    $bw_js = json_encode(bw_config(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($bw_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="bewaesserung_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $bw_js;
+        exit;
+    }
+    $bw_fehler[] = bw_t('EINST.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($bw_post && isset($_POST['bw_zurueck'])) {
+    if (!isset($_FILES['bw_sicherung']) || !is_array($_FILES['bw_sicherung'])
+        || !isset($_FILES['bw_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['bw_sicherung']['tmp_name'])) {
+        $bw_fehler[] = bw_t('EINST.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['bw_sicherung']['size'] > 262144) {
+        $bw_fehler[] = bw_t('EINST.SICH_ZU_GROSS');
+    } else {
+        list($bw_neu, $bw_mangel, $bw_n) = bw_sicherung_lesen(
+            (string) @file_get_contents($_FILES['bw_sicherung']['tmp_name']));
+        if ($bw_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $bw_fehler[] = bw_t('EINST.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $bw_mangel);
+        } elseif (bw_config_speichern($bw_neu)) {
+            $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
+        } else {
+            $bw_fehler[] = bw_t('EINST.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 .sm-wrap { max-width: 980px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
@@ -780,9 +828,9 @@ if ($bw_rahmen) {
 
 <h2><?= bw_e(bw_t('EINST.H_DIENST')) ?></h2>
 <div class="sm-legende">
-  <span style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-punkt sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
   <span style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
-  <span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
   <input data-role="none" type="hidden" name="activetab" value="tab-settings">
@@ -888,6 +936,25 @@ if ($bw_rahmen) {
          vollstaendig im Reiter MQTT - eine Sache, eine Stelle. */ ?>
 <button data-role="none" class="sm-b sm-b-aktion" name="speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
+
+<h2><?= bw_t('EINST.H_SICHERUNG') ?></h2>
+<div class="sm-hinweis"><?= bw_t('EINST.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= bw_t('EINST.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="bw_sichern" value="1"><?= bw_t('EINST.K_SICHERN') ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="file" name="bw_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_t('EINST.K_ZURUECK') ?></button>
+  </form>
+</div>
 </div>
 
 <!-- ============ Quellen ============ -->
@@ -1414,7 +1481,7 @@ if (!$bw_vt) { ?>
          (nicht sm-btn) und faerbt die Legendenpunkte unmittelbar - sm-punkt
          und sm-knopfreihe gibt es hier nicht. */ ?>
 <div class="sm-legende">
-  <span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <button data-role="none" class="sm-b sm-b-aktion" type="submit"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
@@ -1426,7 +1493,7 @@ if (!$bw_vt) { ?>
         ? bw_e(bw_t('MQTT.AUTOSTART_EIN')) : bw_e(bw_t('MQTT.AUTOSTART_AUS')) ?></td></tr>
 <tr><td><?= bw_e(bw_t('MQTT.T_UDP')) ?></td><td class="sm-mono"><?= (int) (isset($bw_g['udpport']) ? $bw_g['udpport'] : 0) ?></td></tr>
 </table>
-<div class="sm-warnung"><?= bw_t('MQTT.ABO_WARNUNG') ?></div>
+<div class="sm-warnung"><?= bw_abo_text() ?></div>
 <div class="sm-hinweis"><?= bw_t('MQTT.RUECKKANAL') ?></div>
 <p class="sm-hilfe"><?= bw_t('MQTT.ABO_TEXT') ?></p>
 <p><span class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/#</span></p>
@@ -1532,9 +1599,9 @@ foreach ($bw_liste as $bw_z2) { ?>
 
 <h2><?= bw_e(bw_t('TEST.H_LESEN')) ?></h2>
 <div class="sm-legende">
-  <span style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-punkt sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
   <span style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
-  <span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
   <input data-role="none" type="hidden" name="activetab" value="tab-test">
@@ -1567,7 +1634,7 @@ if (!$bw_zeilen) { ?>
 <?php } else { ?>
 <div class="sm-log"><?= bw_e(implode("\n", $bw_zeilen)) ?></div>
 <?php } ?>
-<div class="sm-legende"><span style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
+<div class="sm-legende"><span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
 <form action="index.php" method="post">
   <input data-role="none" type="hidden" name="activetab" value="tab-log">
   <button data-role="none" class="sm-b sm-b-aktion" name="log_leeren" value="1"><?= bw_e(bw_t('LOG.K_LEEREN')) ?></button>
