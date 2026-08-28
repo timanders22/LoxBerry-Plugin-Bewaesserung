@@ -45,6 +45,24 @@ if (isset($_POST['activetab']) && preg_match($bw_muster, (string) $_POST['active
 
 $bw_meldungen = array();
 $bw_fehler = array();
+
+/* ---------------------------------------------------------------- *
+ * Der Wachposten - EIN Posten, vor allen Handlern.
+ * Abgewiesen heisst gemeldet, und es wird NICHTS ausgefuehrt: $_POST
+ * wird geleert, nur der aktive Reiter bleibt stehen, damit der Bediener
+ * nach der Abweisung dort steht, wo er war.
+ * ---------------------------------------------------------------- */
+$bw_wache = bw_wachposten();
+if ($bw_wache !== '') {
+    $bw_reiter_merk = isset($_POST['activetab']) && is_string($_POST['activetab'])
+        ? (string) $_POST['activetab'] : null;
+    $_POST = array();
+    if ($bw_reiter_merk !== null) {
+        $_POST['activetab'] = $bw_reiter_merk;
+    }
+    $bw_fehler[] = $bw_wache;
+}
+
 $bw_ausgabe = '';
 $bw_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
 
@@ -852,6 +870,7 @@ if ($bw_rahmen) {
   <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-settings">
   <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="start"><?= bw_e(bw_t('EINST.K_START')) ?></button>
   <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="restart"><?= bw_e(bw_t('EINST.K_NEUSTART')) ?></button>
@@ -859,6 +878,7 @@ if ($bw_rahmen) {
 </form>
 
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 <h2><?= bw_e(bw_t('EINST.H_STANDORT')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('EINST.STANDORT_ERKLAERUNG') ?></p>
@@ -965,10 +985,12 @@ if ($bw_rahmen) {
        Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
        einen Download, der das Speichern verschluckt. -->
   <form action="index.php" method="post">
+    <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="bw_sichern" value="1"><?= bw_t('EINST.K_SICHERN') ?></button>
   </form>
   <form action="index.php" method="post" enctype="multipart/form-data">
+    <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="file" name="bw_sicherung" accept=".json">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_t('EINST.K_ZURUECK') ?></button>
@@ -983,6 +1005,7 @@ if ($bw_rahmen) {
 <div class="sm-warnung"><?= bw_t('QUELL.WEG_ERKLAERUNG') ?></div>
 
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-sources">
 <div class="sm-feld">
   <label for="vorlage"><?= bw_e(bw_t('QUELL.L_VORLAGE')) ?></label>
@@ -1000,6 +1023,7 @@ if ($bw_rahmen) {
 <?php } ?>
 
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-sources">
 <?php /* Die Adresse steht in Schritt 1. Zwei Eingabefelder fuer denselben
          Wert auf einer Seite sind eine Fehlerquelle: welches gilt? Das
@@ -1050,6 +1074,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 <h3><?= bw_e(bw_t('QUELL.S1_TITEL')) ?></h3>
 <p class="sm-hilfe"><?= bw_t('QUELL.S1_TEXT') ?></p>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-sources">
 <div class="sm-feld">
   <label for="http_url2"><?= bw_e(bw_t('QUELL.S1_L_HTTP')) ?></label>
@@ -1077,12 +1102,14 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
     <th><?= bw_e(bw_t('QUELL.S2_T_VORAUS')) ?></th></tr>
 <tr><td><b>HTTP</b></td>
     <td><form action="index.php" method="post" style="margin:0">
+      <?php echo bw_fmt(); ?>
       <input data-role="none" type="hidden" name="activetab" value="tab-sources">
       <button data-role="none" class="sm-b sm-b-lesen" name="quellen_erkennen" value="1"><?= bw_e(bw_t('QUELL.K_ERKENNEN')) ?></button>
     </form></td>
     <td class="sm-hilfe"><?= bw_t('QUELL.S2_V_HTTP') ?></td></tr>
 <tr><td><b>MQTT</b></td>
     <td><form action="index.php" method="post" style="margin:0">
+      <?php echo bw_fmt(); ?>
       <input data-role="none" type="hidden" name="activetab" value="tab-sources">
       <button data-role="none" class="sm-b sm-b-lesen" name="broker_erkennen" value="1"><?= bw_e(bw_t('QUELL.K_BROKER')) ?></button>
     </form></td>
@@ -1108,6 +1135,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 </table>
 </div>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-sources">
   <button data-role="none" class="sm-b sm-b-aktion" name="broker_uebernehmen" value="1"><?= bw_e(bw_t('QUELL.K_UEBERNEHMEN')) ?></button>
 </form>
@@ -1144,6 +1172,7 @@ foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
 </table>
 </div>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-sources">
   <button data-role="none" class="sm-b sm-b-aktion" name="quellen_uebernehmen" value="1"><?= bw_e(bw_t('QUELL.K_UEBERNEHMEN')) ?></button>
 </form>
@@ -1230,6 +1259,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 <h2><?= bw_e(bw_t('ZONE.H_TITEL')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('ZONE.ERKLAERUNG') ?></p>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-zones">
 <div class="sm-breit">
 <table class="sm-tabelle">
@@ -1344,6 +1374,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 <div class="sm-warnung"><?= bw_t('ZONE.BECHER_ERKLAERUNG') ?></div>
 <?php if ($bw_zonen) { ?>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-zones">
 <div class="sm-feld"><label for="becher"><?= bw_e(bw_t('ZONE.L_BECHER_ZONE')) ?></label>
 <select data-role="none" name="becher" id="becher">
@@ -1487,6 +1518,7 @@ if (!$bw_vt) { ?>
 
 <h2>MQTT</h2>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="save_mqtt" value="1">
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <h2><?= bw_e(bw_t('EINST.H_MQTT')) ?></h2>
@@ -1556,6 +1588,7 @@ if (!$bw_vt) { ?>
 </table>
 <p class="sm-hilfe sm-mono">http://<?= bw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'loxberry') ?>/plugins/<?= bw_e($bw_p['plugin']) ?>/index.php?token=<?= bw_e($bw_token) ?>&amp;aktion=status</p>
 <form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
   <button data-role="none" class="sm-b sm-b-lesen" name="vorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_VORLAGE')) ?></button>
 </form>
@@ -1603,6 +1636,7 @@ foreach ($bw_liste as $bw_z2) { ?>
 <p class="sm-hilfe"><?= bw_t('LOX.S4_TEXT') ?></p>
 <table class="sm-tabelle"><tr><th><?= bw_e(bw_t('LOX.T_TOKEN')) ?></th><td class="sm-mono"><?= bw_e($bw_token) ?></td></tr></table>
 <form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
   <button data-role="none" class="sm-b sm-b-aktion" name="token_neu" value="1"
     onclick="return confirm(<?= json_encode(strip_tags(html_entity_decode(bw_t('LOX.TOKEN_FRAGE'), ENT_QUOTES, 'UTF-8'))) ?>)"><?= bw_e(bw_t('LOX.K_TOKEN_NEU')) ?></button>
@@ -1623,6 +1657,7 @@ foreach ($bw_liste as $bw_z2) { ?>
   <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-test">
   <button data-role="none" class="sm-b sm-b-lesen" name="test" value="status"><?= bw_e(bw_t('TEST.K_STATUS')) ?></button>
   <button data-role="none" class="sm-b sm-b-technik" name="test" value="roh"><?= bw_e(bw_t('TEST.K_ROH')) ?></button>
@@ -1655,6 +1690,7 @@ if (!$bw_zeilen) { ?>
 <?php } ?>
 <div class="sm-legende"><span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-log">
   <button data-role="none" class="sm-b sm-b-aktion" name="log_leeren" value="1"><?= bw_e(bw_t('LOG.K_LEEREN')) ?></button>
 </form>
