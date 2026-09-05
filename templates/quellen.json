@@ -24,6 +24,8 @@
     "Wer eine Vorlage waehlt, kann jedes Feld danach von Hand aendern."
   ],
   "groessen": {
+    "_quelle": "FAO-56, Kapitel 3 und 4 - welche Groessen die Rechnung braucht und in welcher Einheit",
+    "_stand": "2026-09-05",
     "tmin": {
       "einheit": "C",
       "text": "Tagestiefstwert der Lufttemperatur",
@@ -86,6 +88,8 @@
     }
   },
   "vorlagen": {
+    "_quelle": "Themen und Pfade aus den Anleitungen der jeweiligen Bruecke; nur ecowitt_lokal und ecowitt_mqtt_direkt sind an einem GW3000A gemessen",
+    "_stand": "2026-08-18",
     "online": {
       "text": "Nur Open-Meteo, keine eigene Station",
       "hinweis": "Braucht nur Standort. Die Werte gelten fuer den Gitterpunkt, nicht fuer Ihren Garten - bei Wind und Strahlung ist der Unterschied im Einzelfall erheblich.",
@@ -296,6 +300,8 @@
     }
   },
   "einheiten": {
+    "_quelle": "Umrechnungsfaktoren, allgemein bekannt; F, in und mph am GW3000A gegen die Hersteller-App gegengerechnet",
+    "_stand": "2026-08-18",
     "_hinweis": [
       "Umrechnung in die Einheiten, mit denen FAO-56 rechnet.",
       "Was hier nicht steht, wird unveraendert uebernommen."

@@ -270,9 +270,17 @@ def meldungen_pruefen(abbild: dict, cfg: dict) -> list:
                      % (grenze, plan.get("noetige_durchlaeufe", 0),
                         plan.get("durchlaeufe", 0))))
 
+    # Wer eine Station eingerichtet hat und NULL Werte von ihr bekommt,
+    # hat ein Problem. Wer bewusst keine betreibt und rein mit dem Modell
+    # rechnet, hat keines - bis 0.9.18 bekam er dieselbe Meldung, seine
+    # Wetterstation liefere nichts mehr. Der Reiter Test hatte diesen
+    # Waechter schon; hier fehlte er.
     herkunft = abbild.get("herkunft") or {}
+    zuordnung = json_lesen(DATEI_QUELLEN)
+    eingerichtet = sum(1 for f in ((zuordnung or {}).get("felder") or {}).values()
+                       if isinstance(f, dict) and f.get("weg"))
     hat_station = any(w == "station" for w in herkunft.values())
-    if herkunft and not hat_station:
+    if herkunft and eingerichtet > 0 and not hat_station:
         zaehler["station"] = int(zaehler.get("station") or 0) + 1
     else:
         zaehler["station"] = 0
@@ -292,12 +300,46 @@ def meldungen_pruefen(abbild: dict, cfg: dict) -> list:
 
 # ---------------------------------------------------------------- Dateien
 
+# Die Rueckgabecodes der MQTT-Anmeldung, damit die Meldung den Grund
+# nennt statt einer Zahl. Quelle: MQTT 3.1.1, Abschnitt 3.2.2.3.
+CONNACK_TEXT = {
+    1: "Protokollfassung abgelehnt",
+    2: "Kennung abgelehnt",
+    3: "Broker nicht verfuegbar",
+    4: "Benutzername oder Kennwort falsch",
+    5: "nicht berechtigt - verlangt der Broker eine Anmeldung?",
+}
+
+
 def json_lesen(p: str) -> dict:
+    """Eine JSON-Datei lesen - und einen Schaden nicht verschweigen.
+
+    Bis 0.9.18 gaben "gibt es nicht" und "ist Muell" dasselbe zurueck:
+    ein leeres Verzeichnis, ohne eine Zeile im Protokoll. Eine
+    beschaedigte verlauf.json liess damit jede Zone mit Fuellstand 100 %
+    und Bedarf 0 dastehen, und der naechste Lauf schrieb die Datei mit
+    einem einzigen Tag neu - die Vorgeschichte war endgueltig weg.
+
+    Eine unlesbare Datei wird deshalb beiseitegelegt und gemeldet. Fehlt
+    sie oder ist sie leer, ist das der Normalfall des ersten Laufs und
+    bleibt still.
+    """
     try:
         with open(p, "r", encoding="utf-8") as fh:
             d = json.load(fh)
         return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
+    except OSError:
+        return {}
+    except ValueError as f:
+        beiseite = "%s.kaputt.%s" % (p, time.strftime("%Y%m%d_%H%M%S"))
+        try:
+            os.replace(p, beiseite)
+            _LOG.error("%s ist unlesbar (%s) und liegt jetzt als %s "
+                       "daneben.", os.path.basename(p), f,
+                       os.path.basename(beiseite))
+        except OSError as g:
+            _LOG.error("%s ist unlesbar (%s) und liess sich nicht "
+                       "beiseitelegen: %s", os.path.basename(p), f, g)
         return {}
 
 
@@ -739,7 +781,6 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         _LOG.info("Eigene ET0 (%.2f mm) verworfen: nur %.1f h Abdeckung - "
                   "es gilt Open-Meteo (%.2f mm).",
                   et0_eigen["et0"], et0_abdeckung_h, float(online_heute["et0"]))
-        et0_eigen_roh = et0_eigen
         et0_eigen = None
 
     # Welche Zahl gilt heute? Die eigene, wenn es sie gibt.
@@ -774,9 +815,15 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
     gegossen = giesswerte_einsammeln(sammler, zonenliste, cfg)
 
     if et0_heute is not None or gegossen:
-        eintrag = {"et0": et0_heute if et0_heute is not None else 0.0,
-                   "regen": regen_heute or 0.0,
+        # Ohne ET0 wird der SCHLUESSEL weggelassen, nicht 0.0 eingetragen.
+        # Eine 0.0 ist fuer die Bilanz ein Tag ohne jede Verdunstung, und
+        # der Lueckenfueller trug ihn nie nach, weil er "dasteht" - der
+        # Fehler ging in dieselbe Richtung wie die Luecke selbst: zu wenig
+        # Wasser.
+        eintrag = {"regen": regen_heute or 0.0,
                    "quelle": et0_quelle, "guete": et0_guete}
+        if et0_heute is not None:
+            eintrag["et0"] = et0_heute
         if gegossen:
             # Der groessere Wert gilt: die Rueckmeldung ist ein Tagesstand,
             # und ein zweiter Rechengang darf sie nicht kleiner machen.
@@ -849,6 +896,10 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         plan["grund"] = sperre["grund"]
         for jz in plan.get("je_zone", {}).values():
             jz["durchlaeufe"] = 0
+            # Auch die Ventilzeit. Bis 0.9.18 blieb sekunden_soll stehen
+            # und ging als <zone>/sekunden voll hinaus: wer die Zeit an
+            # Tv haengt und den Start anderswoher nimmt, goss bei Frost.
+            jz["sekunden_soll"] = 0
 
     abbild = {
         "ok": 1 if et0_heute is not None else 0,
@@ -967,7 +1018,21 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     if abbild.get("et0") is not None:
         p["et0"] = round(float(abbild["et0"]), 2)
     # Der Nachtplan geht vor, sobald es einen fuer heute gibt.
-    durchlaeufe = int(fest.get("durchlaeufe") if fest else plan.get("durchlaeufe") or 0)
+    # Geklammert: "or" bindet staerker als der Bedingungsausdruck. Bis
+    # 0.9.18 stand hier int(fest.get(...) if fest else ... or 0) - eine
+    # vorhandene, aber unvollstaendige nachtplan.json ergab int(None) und
+    # damit einen TypeError mitten im Veroeffentlichen. In diesem Takt
+    # ging dann gar nichts hinaus.
+    if fest:
+        durchlaeufe = int(fest.get("durchlaeufe") or 0)
+    else:
+        durchlaeufe = int(plan.get("durchlaeufe") or 0)
+    # Eine Sperre schlaegt auch den eingefrorenen Plan. Steht um 20:00 ein
+    # Plan fest und zieht um 23:00 Frost auf, gingen sonst "gesperrt=1"
+    # und "giessen=1" gleichzeitig hinaus, und welche der beiden Zahlen
+    # der Miniserver befolgt, entscheidet die Verdrahtung.
+    if int(sperre.get("aktiv") or 0):
+        durchlaeufe = 0
     p["durchlaeufe"] = durchlaeufe
     p["noetige_durchlaeufe"] = int(plan.get("noetige_durchlaeufe") or 0)
     p["reicht"] = int(plan.get("reicht") or 0)
@@ -1078,6 +1143,15 @@ class Dienst:
                 if stand_jetzt != stand:
                     stand = stand_jetzt
                     zuordnung = json_lesen(DATEI_QUELLEN)
+                    # Der Tagesspeicher gehoert zur ALTEN Zuordnung: Weg,
+                    # Pfad und Einheit stehen nicht darin. Wer mittags von
+                    # HTTP (metrisch) auf MQTT (imperial) umstellt, fuehrte
+                    # sonst Kleinst-, Groesst- und Summenwert desselben
+                    # Tages aus zwei Einheiten fort.
+                    if ((zuordnung or {}).get("felder") or {}) != sammler.felder:
+                        sammler.tag = {"datum": "", "werte": {}}
+                        _LOG.info("Zuordnung geaendert - der Tagesverlauf "
+                                  "beginnt neu.")
                     sammler.felder = (zuordnung or {}).get("felder") or {}
                     sammler.http_url = str((zuordnung or {}).get("http_url") or "")
                     neue = _themen_sammeln(sammler, zonen(), zuordnung)
@@ -1113,8 +1187,15 @@ class Dienst:
                     letzte_rechnung = jetzt
             except Exception as f:
                 _LOG.error("Rechengang fehlgeschlagen: %s", f)
-                json_schreiben(DATEI_ZUSTAND, {"ok": 0, "ts": int(time.time()),
-                                               "fehler": str(f)})
+                # Der Meldezaehler wird UEBERNOMMEN. Bis 0.9.18 ersetzte
+                # diese Zeile die ganze Datei: ausgerechnet die Lage, die
+                # zum Melden fuehren soll, setzte den Zaehler auf null
+                # zurueck, sobald dabei etwas schiefging.
+                alt_stand = json_lesen(DATEI_ZUSTAND)
+                json_schreiben(DATEI_ZUSTAND, {
+                    "ok": 0, "ts": int(time.time()), "fehler": str(f),
+                    "meldezaehler": alt_stand.get("meldezaehler") or {},
+                    "meldetag": alt_stand.get("meldetag") or ""})
             for _ in range(takt * 2):
                 if not self.laeuft:
                     break
@@ -1139,11 +1220,36 @@ class Dienst:
             broker = "127.0.0.1"
         while self.laeuft:
             try:
-                c = mqtt.Client()
+                # Fassungsfest: paho-mqtt ab 2.0 verlangt die Angabe der
+                # Rueckruf-Schnittstelle und wirft sonst einen ValueError,
+                # der unten als "Broker nicht erreichbar" erschiene - eine
+                # Meldung, die auf Netz und Anmeldung zeigt, waehrend das
+                # Paket gemeint ist. postinstall.sh pinnt nichts.
+                try:
+                    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+                except AttributeError:
+                    c = mqtt.Client()
                 if g.get("user"):
                     c.username_pw_set(str(g["user"]), str(g.get("pw") or ""))
 
-                def bei_verbindung(client, *_a):
+                def bei_verbindung(client, _u=None, _flags=None, rc=0, *_a):
+                    # Der Rueckgabecode wird GELESEN. Bis 0.9.18 fiel er in
+                    # *_a, und ein Broker, der die Anmeldung mit CONNACK 5
+                    # abweist, erzeugte dieselbe Zeile "Mit dem Broker
+                    # verbunden" wie ein gelungener Anlauf. Es kam nie eine
+                    # Nachricht an, und das Protokoll sagte das Gegenteil.
+                    # "laeuft" ist nicht "angemeldet".
+                    code = int(getattr(rc, "value", rc) or 0)
+                    if code != 0:
+                        _LOG.error("Der Broker hat die Verbindung abgelehnt "
+                                   "(CONNACK %d: %s). Es wird NICHTS "
+                                   "abonniert.", code,
+                                   CONNACK_TEXT.get(code, "unbekannter Grund"))
+                        try:
+                            client.disconnect()
+                        except Exception:
+                            pass
+                        return
                     for t in sorted(self.themen):
                         client.subscribe(t)
                     self.themen_neu = False
@@ -1154,6 +1260,7 @@ class Dienst:
                     sammler.mqtt_setzen(msg.topic,
                                         msg.payload.decode("utf-8", "replace"))
 
+                abonniert = set(self.themen)
                 c.on_connect = bei_verbindung
                 c.on_message = bei_nachricht
                 c.connect(broker, int(g.get("brokerport") or 1883), 60)
@@ -1161,6 +1268,17 @@ class Dienst:
                 while self.laeuft:
                     await asyncio.sleep(1)
                     if self.themen_neu:
+                        # Weggefallene Themen abbestellen: ein entferntes
+                        # Thema blieb sonst abonniert und schrieb bis zum
+                        # Neustart weiter frische Zeitstempel in den
+                        # Sammler.
+                        for t in sorted(abonniert - self.themen):
+                            try:
+                                c.unsubscribe(t)
+                            except Exception:
+                                pass
+                            sammler.mqtt.pop(t, None)
+                        abonniert = set(self.themen)
                         # Nachtraeglich abonnieren statt die Verbindung
                         # abzureissen - ein Broker-Neuaufbau kostet die
                         # bereits empfangenen retained-Werte.

@@ -9,6 +9,18 @@ ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bewaesserung}"
 BASE="${ARGV5:-$LBHOMEDIR}"
+# Ohne diese Rueckfallebene arbeitet das Skript bei leerem $BASE als root
+# auf /data/plugins/... - es legte Verzeichnisse im Wurzelverzeichnis an,
+# und KEINE Sicherung griff. postinstall.sh und uninstall haben sie seit
+# jeher, hier fehlte sie.
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    SELF=$(cd "$(dirname "$0")" && pwd)
+    BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
+fi
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    echo "<FAIL> Der LoxBerry-Ordner ist nicht bestimmbar - es wird NICHTS gesichert."
+    exit 1
+fi
 
 # Anhalten ueber dienst.sh, nicht mit einem eigenen kill.
 #
@@ -49,8 +61,10 @@ if [ -x "$DIENST" ] && "$DIENST" status >/dev/null 2>&1; then
     echo "<INFO> Der Dienst lief - er wird nach dem Update wieder gestartet."
 fi
 
-if [ -x "$DIENST" ]; then
-    "$DIENST" stop >/dev/null 2>&1
+# Der Rueckgabewert von stop entscheidet. Bis 0.9.18 lief die
+# Rueckfallebene nur, wenn dienst.sh FEHLTE - scheiterte das Anhalten,
+# schrieb der Dienst waehrend des Updates weiter in data/plugins/<x>/.
+if [ -x "$DIENST" ] && "$DIENST" stop >/dev/null 2>&1; then
     echo "<INFO> Laufender Dienst ueber dienst.sh angehalten."
 elif [ -f "$PID" ]; then
     P=$(cat "$PID" 2>/dev/null)
@@ -72,8 +86,12 @@ fi
 
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     CF="$BASE/config/plugins/$PFOLDER/$f"
-    [ -f "$CF" ] && cp -p "$CF" "$BASE/config/plugins/$PFOLDER.backup.$f" \
-        && echo "<INFO> $f gesichert."
+    # 0600 auch auf die Zweitschrift: cp -p erbt die Rechte der Quelle,
+    # und in bewaesserung.json steht das Aktionstoken.
+    if [ -f "$CF" ] && cp -p "$CF" "$BASE/config/plugins/$PFOLDER.backup.$f"; then
+        chmod 600 "$BASE/config/plugins/$PFOLDER.backup.$f" 2>/dev/null
+        echo "<INFO> $f gesichert."
+    fi
 done
 VL="$BASE/data/plugins/$PFOLDER/verlauf.json"
 [ -f "$VL" ] && cp -p "$VL" "$BASE/config/plugins/$PFOLDER.backup.verlauf.json" \
@@ -90,7 +108,13 @@ echo "<OK> preupgrade abgeschlossen."
 LANG_SICHER="$BASE/data/plugins/$PFOLDER.upgrade_sicherung"
 mkdir -p "$LANG_SICHER" 2>/dev/null
 chmod 0700 "$LANG_SICHER" 2>/dev/null
-for LANG_F in tagesextreme.json; do
+# nachtplan.json gehoert dazu: ein Update im Giessfenster raeumte ihn
+# weg, der Dienst fror einen NEUEN Plan ein, und die Zahl, gegen die
+# Loxone bereits zaehlt, aenderte sich mitten in der Nacht - das
+# Gegenteil dessen, was das Einfrieren zusagt. zustand.json traegt die
+# Meldezaehler; ohne ihn verschiebt sich jede Dauerstoerungsmeldung um
+# die verlorenen Tage.
+for LANG_F in tagesextreme.json nachtplan.json zustand.json; do
     [ -f "$BASE/data/plugins/$PFOLDER/$LANG_F" ] \
         && cp -p "$BASE/data/plugins/$PFOLDER/$LANG_F" "$LANG_SICHER/$LANG_F" 2>/dev/null
 done

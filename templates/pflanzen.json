@@ -20,6 +20,8 @@
   ],
 
   "bepflanzung": {
+    "_quelle": "FAO-56, Tabelle 12 (Kc) und Tabelle 22 (Zr, p)",
+    "_stand": "2026-08-18",
     "rasen_kuehl": {
       "text": "Rasen, kuehle Jahreszeit (Wiesenrispe, Weidelgras, Schwingel)",
       "kc": 0.95, "zr": 0.75, "p": 0.40,
@@ -76,13 +78,18 @@
   },
 
   "boden": {
+    "_quelle": "FAO-56, Kapitel 8, Tabelle 19 - nur die Eintraege mit eigenem Feld quelle; alle uebrigen sind geschaetzt",
+    "_stand": "2026-08-18",
     "_hinweis": [
       "theta_fc = Feldkapazitaet, theta_wp = permanenter Welkepunkt, beide in",
       "m3/m3. Daraus wird die nutzbare Feldkapazitaet gerechnet:",
       "TAW = 1000 * (theta_fc - theta_wp) * Zr    [FAO-56, Gl. 82]",
       "",
-      "Die drei mit 'quelle' belegten Werte stehen woertlich in FAO-56,",
-      "Kapitel 8. Die uebrigen sind gaengige Richtwerte fuer die jeweilige",
+      "Die mit 'quelle' auf FAO-56 belegten Werte stehen woertlich in",
+      "Kapitel 8, Tabelle 19. Ein Eintrag (kiesig) traegt zwar ein Feld",
+      "'quelle', sagt darin aber selbst, dass er KEIN FAO-56-Wert ist -",
+      "er ist zusaetzlich als geschaetzt gekennzeichnet. Die uebrigen sind",
+      "gaengige Richtwerte fuer die jeweilige",
       "Bodenart und als geschaetzt gekennzeichnet. Wer es genau will, laesst",
       "eine Bodenprobe untersuchen und traegt die Werte von Hand ein - das",
       "Feld dafuer gibt es."
@@ -104,6 +111,8 @@
   },
 
   "regner": {
+    "_quelle": "Erfahrungswerte, an keiner Anlage gemessen - jeder Eintrag traegt geschaetzt; massgeblich ist die Becherprobe",
+    "_stand": "2026-08-18",
     "_hinweis": [
       "Niederschlagsraten in mm/h - nur als Startpunkt.",
       "",

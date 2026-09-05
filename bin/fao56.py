@@ -234,10 +234,18 @@ def et0_aus_messwerten(m: dict) -> dict:
         _f(m.get("rh_min")), _f(m.get("rh_max")),
         _f(m.get("rh_mittel")), _f(m.get("taupunkt")))
 
-    u2 = wind_auf_2m(float(m.get("wind") or 2.0), float(m.get("wind_hoehe") or 2.0))
     # [F], Kapitel 3: fehlt der Wind ganz, ist 2 m/s ein brauchbarer Ersatz.
     # Das ist eine Annahme und wird als solche gemeldet.
-    wind_geschaetzt = m.get("wind") is None
+    #
+    # "or 2.0" waere hier falsch: eine gemessene Windstille (0,0 m/s) ist
+    # ein Wert, kein fehlender Wert. Bis 0.9.18 wurde sie durch den
+    # Ersatzwert ersetzt, und wind_geschaetzt blieb dabei auf 0 - die
+    # Ersetzung wurde also nicht einmal gemeldet.
+    _wind = _f(m.get("wind"))
+    _wh = _f(m.get("wind_hoehe"))
+    wind_geschaetzt = _wind is None
+    u2 = wind_auf_2m(2.0 if _wind is None else _wind,
+                     2.0 if _wh is None or _wh <= 0 else _wh)
 
     ra, n_moeglich = extraterrestrische_strahlung(breite, j)
     if m.get("strahlung_wm2") is not None:
@@ -301,7 +309,11 @@ def kc_klimaanpassung(kc_tabelle: float, u2: float, rh_min: float,
         return kc_tabelle
     u = max(1.0, min(6.0, float(u2)))
     r = max(20.0, min(80.0, float(rh_min)))
-    h = max(0.05, min(10.0, float(hoehe_pflanze_m)))
+    # [F] gibt Gl. 62 fuer h von 0,1 bis 10 m an. Die untere Kappung lag
+    # bis 0.9.18 bei 0,05 m und damit unter dem geeichten Bereich -
+    # dieselbe Art Grenzueberschreitung, die der Docstring bei u2 und
+    # RHmin ausdruecklich vermeidet.
+    h = max(0.1, min(10.0, float(hoehe_pflanze_m)))
     return kc_tabelle + (0.04 * (u - 2.0) - 0.004 * (r - 45.0)) * (h / 3.0) ** 0.3
 
 

@@ -7,9 +7,13 @@
 # Schritt 7). Was NEBEN diesen Ordnern liegt, bleibt liegen - und genau
 # dorthin gehoert alles, was ein Update ueberstehen soll:
 #
-#   config/plugins/<x>.backup.json          Zweitschrift der Einstellungen
-#   config/plugins/<x>.backup.verlauf.json  der Verlauf
+#   config/plugins/<x>.backup.bewaesserung.json       aus preupgrade.sh
+#   config/plugins/<x>.backup.zonen.json              aus preupgrade.sh
+#   config/plugins/<x>.backup.quellen_zuordnung.json  aus preupgrade.sh
+#   config/plugins/<x>.backup.verlauf.json            aus preupgrade.sh
 #   config/plugins/<x>.backup.lief_vorher   Merker: lief der Dienst vorher?
+#   config/plugins/<x>.backup.json          Zweitschrift aus der
+#                                           Oberflaeche (bw_config_speichern)
 #   data/plugins/<x>.upgrade_sicherung      Langzeitwerte waehrend des Updates
 #
 # Aufruf: <ZUFALLSKENNUNG> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <TEMPFOLDER>
@@ -25,7 +29,14 @@ fi
 
 # Der Punkt hinter dem Ordnernamen ist Absicht: er trennt den Nachbarn vom
 # Ordner. Das Sternchen trifft deshalb nur die eigenen Zweitschriften.
+UN_DIENST="$UN_BASE/bin/plugins/$UN_FOLDER/dienst.sh"
+[ -x "$UN_DIENST" ] && "$UN_DIENST" stop >/dev/null 2>&1
+
 rm -f  "$UN_BASE/config/plugins/$UN_FOLDER".backup.* 2>/dev/null
 rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
-echo "<OK> Zweitschriften und Update-Sicherung entfernt."
+# Der Protokollordner steht nicht in der Aufzaehlung oben - LoxBerry
+# raeumt ihn also nicht mit. Angelegt wird er in postinstall.sh, und er
+# nimmt bis 512 000 Byte auf.
+rm -rf "$UN_BASE/log/plugins/$UN_FOLDER" 2>/dev/null
+echo "<OK> Dienst angehalten, Zweitschriften, Update-Sicherung und Protokoll entfernt."
 exit 0

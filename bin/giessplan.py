@@ -117,6 +117,13 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
                            "nutzbaren Wasserspeicher. Bitte im Reiter Zonen pruefen."}
 
     # --- Vergangenheit fortschreiben ---
+    #
+    # Ohne Verlauf gibt es keine Bilanz. Bis 0.9.18 lief die Schleife
+    # unten null Mal, dr blieb 0, und die Zone meldete Fuellstand 100 %
+    # und Bedarf 0 - "ich weiss nichts" war von "der Boden ist voll"
+    # nicht zu unterscheiden, und die Zahl ging als Messergebnis ueber
+    # MQTT hinaus.
+    unbelegt = not verlauf and float(zone.get("dr") or 0.0) <= 0.0
     dr = float(zone.get("dr") or 0.0)
     dr = max(0.0, min(taw_mm, dr))
     etc_letzter = 0.0
@@ -194,7 +201,17 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
     noetig = dr >= raw_mm or bedarf_mm > 0.5
 
     return {
-        "ok": 1,
+        # Kein Verlauf UND kein fortgeschriebenes Defizit heisst: es ist
+        # nichts bekannt. Bis 0.9.18 kam dabei "Fuellstand 100 %, Bedarf 0"
+        # heraus - "ich weiss nichts" war von "der Boden ist voll" nicht zu
+        # unterscheiden, und die Zahl ging als Messergebnis ueber MQTT
+        # hinaus. Gerechnet wird trotzdem zu Ende, damit die Oberflaeche
+        # TAW und RAW zeigen kann.
+        "ok": 0 if unbelegt else 1,
+        "grund": "kein_verlauf" if unbelegt else "",
+        "meldung": ("Es gibt noch keinen Tagesverlauf, aus dem sich eine "
+                    "Wasserbilanz ergeben koennte. Nach dem ersten vollen "
+                    "Tag steht sie.") if unbelegt else "",
         "taw": taw_mm, "raw": raw_mm, "p": p_jetzt,
         "dr": dr, "dr_gerechnet": dr_gerechnet,
         "fuellstand": max(0.0, min(100.0, 100.0 * (1.0 - dr / taw_mm))),
@@ -267,7 +284,13 @@ def plan_bauen(zonen: list[dict], ergebnisse: dict, cfg: dict) -> dict:
     fenster_min = _fenster_minuten(von, bis)
 
     # Wie lange dauert ein Durchlauf? Nur Zonen, die im Zyklus mitlaufen.
-    im_zyklus = [z for z in zonen if int(z.get("im_zyklus") or 0)
+    # z.get(), nicht z[]: der Dienst ueberspringt Zonen ohne Schluessel
+    # beim Rechnen, gibt aber die VOLLE Liste hierher. Ein fehlender
+    # Schluessel ergab bis 0.9.18 einen KeyError, den der Sammelfang als
+    # "Rechengang fehlgeschlagen" protokollierte - in jedem Takt neu und
+    # ohne Hinweis auf die Zone.
+    im_zyklus = [z for z in zonen if z.get("schluessel")
+                 and int(z.get("im_zyklus") or 0)
                  and ergebnisse.get(z["schluessel"], {}).get("ok")]
     dauern = {z["schluessel"]: _zonendauer(z, dauer_s) for z in im_zyklus}
     lauf_min = sum(dauern.values()) / 60.0

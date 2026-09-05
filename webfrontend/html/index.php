@@ -26,8 +26,15 @@
  * stimmen. Hier waere das zwar harmlos - der Endpunkt liest ohnehin nur -,
  * aber die Antwort 'status' laesst sich nicht von 'Token falsch'
  * unterscheiden, wenn noch nie gerechnet wurde. Der Selbsttest beantwortet
- * genau eine Frage: stimmt das Token. Sonst nichts: kein Dateizugriff ueber
- * die Konfiguration hinaus, kein Protokolleintrag, keine Wirkung.
+ * genau eine Frage: stimmt das Token. Sonst nichts: gelesen wird die
+ * Konfiguration, geschrieben wird NICHTS - kein Verzeichnis, keine Datei,
+ * kein Protokolleintrag.
+ *
+ * Bis 0.9.18 stimmte dieser Satz nicht: bw_config() legte beim Lesen
+ * Verzeichnis und Konfigurationsdatei aus der Zweitschrift an, und das
+ * geschah VOR der Tokenpruefung. Ein Aufruf ohne Token aus dem Netz hat
+ * damit die Konfiguration erzeugt (gemessen am 04.09.2026 unter PHP 7.4
+ * und 8.4). Deshalb steht hier jetzt bw_config(false).
  *
  * Es gibt hier bewusst KEINE schaltende Aktion. Das Plugin oeffnet kein
  * Ventil - das macht der Bewaesserungsbaustein im Miniserver. Ein Endpunkt,
@@ -37,10 +44,13 @@
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 require_once __DIR__ . '/bw_lib.php';
 
-$bw_cfg = bw_config();
+$bw_cfg = bw_config(false);   // false = NICHTS anlegen, siehe oben
 header('Cache-Control: no-store');
 
-$bw_soll = (string) $bw_cfg['aktionstoken'];
+/* trim() wie in bw_token(): ein Token aus lauter Leerzeichen galt hier
+ * als eingerichtet und in der Bibliothek gleichzeitig als fehlend -
+ * zwei Stellen, zwei Urteile ueber denselben Wert. */
+$bw_soll = trim((string) $bw_cfg['aktionstoken']);
 $bw_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
 
 /* Die Tokenprobe steht unmittelbar hinter dem Einlesen und VOR jeder
@@ -56,7 +66,15 @@ if ($bw_soll === '') {
         exit;
     }
     echo "FEHLER;OK=0;GRUND=KEIN_TOKEN_GESETZT\n";
-    echo "Die Plugin-Oberflaeche wurde noch nie geoeffnet - es gibt noch kein Token.\n";
+    /* Warum es keines gibt, entscheidet die Lage der Konfiguration.
+     * "Noch nie geoeffnet" auf eine beschaedigte Datei zu antworten,
+     * schickt den Betreiber in die Grundeinrichtung, waehrend seine
+     * Konfiguration in Truemmern daneben liegt. */
+    if (bw_config_zustand() === 'kaputt') {
+        echo "Die Konfiguration ist beschaedigt. Bitte die Plugin-Oberflaeche oeffnen - sie holt die Zweitschrift zurueck.\n";
+    } else {
+        echo "Die Plugin-Oberflaeche wurde noch nie geoeffnet - es gibt noch kein Token.\n";
+    }
     exit;
 }
 if (!hash_equals($bw_soll, $bw_ist)) {

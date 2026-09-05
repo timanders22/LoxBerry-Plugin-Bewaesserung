@@ -79,14 +79,30 @@ fi
 
 mkdir -p "$PDATA" "$PLOG" 2>/dev/null
 
+# Laeuft der Dienst? Die PID-Datei ist die schnelle Antwort, nicht die
+# einzige. Sie liegt in data/plugins/<x>/ und ist damit nach jedem
+# Upgrade weg; auch ein misslungenes Anhalten kann sie entfernen,
+# waehrend der Prozess weiterlaeuft. Bis 0.9.18 hiess "keine Datei"
+# schlicht "laeuft nicht" - der Waechter startete dann minuetlich einen
+# ZWEITEN Dienst daneben, und beide schrieben abbild.json und
+# verlauf.json.
 laeuft() {
-    [ -f "$PID" ] || return 1
-    P=$(cat "$PID" 2>/dev/null)
-    [ -n "$P" ] || return 1
-    kill -0 "$P" 2>/dev/null || return 1
-    # Nummernrecycling ausschliessen: der Prozess muss unser Skript sein
-    grep -qa "bewaesserung_dienst.py" "/proc/$P/cmdline" 2>/dev/null || return 1
-    return 0
+    if [ -f "$PID" ]; then
+        P=$(cat "$PID" 2>/dev/null)
+        if [ -n "$P" ] && kill -0 "$P" 2>/dev/null \
+           && grep -qa "bewaesserung_dienst.py" "/proc/$P/cmdline" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    # Zweite Frage: laeuft GENAU DIESES Skript, auch ohne PID-Datei?
+    # Eingeschraenkt auf den eigenen Pfad, damit eine zweite Installation
+    # (LoxBerry haengt bei ihr _01 an) nicht mitgezaehlt wird.
+    P=$(pgrep -f "$SKRIPT" 2>/dev/null | head -n 1)
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
+        echo "$P" > "$PID" 2>/dev/null
+        return 0
+    fi
+    return 1
 }
 
 starten() {
@@ -141,6 +157,15 @@ anhalten() {
     if laeuft; then
         kill -9 "$P" 2>/dev/null
         sleep 1
+    fi
+    # Die Wirkung pruefen, nicht den Rueckgabewert. Bis 0.9.18 wurde nach
+    # dem harten Abschuss nicht mehr nachgesehen: gehoert der Prozess root
+    # und ruft loxberry das Skript, laeuft er weiter - die PID-Datei war
+    # trotzdem weg, "angehalten" stand da, und der Waechter startete
+    # einen zweiten daneben.
+    if laeuft; then
+        echo "FEHLER: Prozess $P laeuft weiter - Rechteproblem? Als root anhalten."
+        return 1
     fi
     rm -f "$PID"
     echo "angehalten"

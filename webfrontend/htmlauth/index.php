@@ -2,13 +2,21 @@
 /**
  * Bewaesserung vorausschauend - Bedienoberflaeche
  *
- * Reiter: Einstellungen | Quellen | Zonen | MQTT |
+ * Reiter: Einstellungen | Quellen | Zonen | Verlauf | MQTT |
  *         Einbindung in Loxone | Test | Logdateien
  *
- * Zwei Reiter kommen zu den fuenf des Hausstandards hinzu, weil sie eigene
- * Vorgaenge sind: 'Quellen' ordnet die Wetterstation zu (herstellerneutral),
- * 'Zonen' pflegt Flaechen, Bepflanzung, Boden und die Becherprobe. In den
- * Einstellungen wuerden beide untergehen.
+ * Acht Reiter: drei kommen zu den fuenf des Hausstandards hinzu, weil sie
+ * eigene Vorgaenge sind - 'Quellen' ordnet die Wetterstation zu
+ * (herstellerneutral), 'Zonen' pflegt Flaechen, Bepflanzung, Boden und die
+ * Becherprobe, 'Verlauf' zeigt die Tagesreihe, aus der die Bilanz entsteht.
+ * In den Einstellungen wuerden alle drei untergehen.
+ *
+ * Kein verstecktes 'formular=<name>': jeder Handler haengt an einem eigenen,
+ * eindeutigen Schluessel (dem Knopfnamen bzw. 'save_mqtt'), und der
+ * Wachposten leert $_POST, bevor irgendein Zweig anlaeuft. Ein zweites
+ * Kennzeichen waere eine zweite Stelle, die niemand pflegt. Wer hier einen
+ * Handler ergaenzt, prueft einen Schluessel, den KEIN anderes Formular
+ * mitschickt - sonst laufen zwei Zweige auf einen Druck.
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
@@ -214,7 +222,7 @@ if ($bw_post && isset($_POST['speichern'])) {
 
     if (!$bw_fehler) {
         if (bw_config_speichern($bw_cfg)) { $bw_meldungen[] = bw_t('EINST.GESPEICHERT'); }
-        else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['config']); }
+        else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['config'])); }
     }
     $bw_tab = 'tab-settings';
 }
@@ -238,6 +246,9 @@ if ($bw_post && isset($_POST['save_mqtt'])) {
     if (!$bw_fehler) {
         if (bw_config_speichern($bw_mcfg)) {
             $bw_meldungen[] = bw_t('EINST.GESPEICHERT');
+        } else {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'),
+                                   bw_e($bw_p['config']));
         }
     }
     $bw_tab = 'tab-mqtt';
@@ -268,7 +279,7 @@ if ($bw_post && isset($_POST['vorlage_waehlen'])) {
          * Bis 0.9.10 stand hier '$bw_q['felder'] = <Vorlage>' - das hat beim
          * Wechsel der Vorlage JEDE bestehende Zuordnung weggeworfen, auch die
          * eines anderen Weges. Und die Adresse wurde durch den Platzhalter
-         * der Vorlage ersetzt: aus einer funktionierenden 192.168.178.16
+         * der Vorlage ersetzt: aus einer funktionierenden 192.0.2.16
          * wurde 'http://GATEWAY-ADRESSE/get_livedata_info', und der naechste
          * Abruf endete mit 'Name or service not known'.
          *
@@ -313,7 +324,7 @@ if ($bw_post && isset($_POST['vorlage_waehlen'])) {
                                           bw_e($bw_url_alt));
             }
         } else {
-            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']);
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['quellen']));
         }
     }
     $bw_tab = 'tab-sources';
@@ -369,7 +380,7 @@ if ($bw_post && (isset($_POST['quellen_erkennen']) || isset($_POST['quellen_uebe
         if (bw_quellen_speichern($bw_q)) {
             $bw_meldungen[] = sprintf(bw_t('QUELL.ERK_UEBERNOMMEN'), $bw_n);
         } else {
-            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']);
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['quellen']));
         }
     }
     $bw_tab = 'tab-sources';
@@ -391,8 +402,13 @@ if ($bw_post && isset($_POST['weg_speichern'])) {
     } else {
         $bw_q['mqtt_thema'] = $bw_th;
     }
-    if (!$bw_fehler && bw_quellen_speichern($bw_q)) {
-        $bw_meldungen[] = bw_t('QUELL.WEG_GESPEICHERT');
+    if (!$bw_fehler) {
+        if (bw_quellen_speichern($bw_q)) {
+            $bw_meldungen[] = bw_t('QUELL.WEG_GESPEICHERT');
+        } else {
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'),
+                                   bw_e($bw_p['quellen']));
+        }
     }
     $bw_tab = 'tab-sources';
 }
@@ -421,7 +437,7 @@ if ($bw_post && (isset($_POST['broker_erkennen']) || isset($_POST['broker_uebern
         if (bw_quellen_speichern($bw_q)) {
             $bw_meldungen[] = sprintf(bw_t('QUELL.BRO_UEBERNOMMEN'), $bw_n);
         } else {
-            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']);
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['quellen']));
         }
     }
     $bw_tab = 'tab-sources';
@@ -437,7 +453,7 @@ if ($bw_post && isset($_POST['quellen_speichern'])) {
     }
     $bw_felder = array();
     $bw_alle = bw_vorlagen();
-    foreach (array_keys($bw_alle['groessen']) as $bw_g) {
+    foreach (array_keys(bw_tabelle($bw_alle['groessen'])) as $bw_g) {
         $bw_weg = isset($_POST['weg'][$bw_g]) ? (string) $_POST['weg'][$bw_g] : '';
         if (!in_array($bw_weg, array('', 'mqtt', 'http'), true)) {
             $bw_fehler[] = sprintf(bw_t('QUELL.FEHLER_WEG'), bw_e($bw_g));
@@ -465,9 +481,29 @@ if ($bw_post && isset($_POST['quellen_speichern'])) {
         $bw_felder[$bw_g] = $bw_eintrag;
     }
     if (!$bw_fehler) {
+        /* Eine Zuordnung zu einer Groesse, die templates/quellen.json
+         * nicht (mehr) fuehrt, wird UEBERNOMMEN statt weggeworfen.
+         * Die Tabelle zeigt nur die bekannten Groessen; bis 0.9.18 war
+         * jedes Speichern im Reiter Quellen damit ein stiller Loescher
+         * fuer alles andere - dieselbe Klasse, gegen die der
+         * Vorlagen-Handler weiter oben ausdruecklich abgesichert ist. */
+        $bw_alt_f = isset($bw_q['felder']) && is_array($bw_q['felder'])
+                  ? $bw_q['felder'] : array();
+        $bw_behalten_n = 0;
+        foreach ($bw_alt_f as $bw_ag => $bw_af) {
+            if (!array_key_exists($bw_ag, bw_tabelle($bw_alle['groessen']))
+                && !isset($bw_felder[$bw_ag])) {
+                $bw_felder[$bw_ag] = $bw_af;
+                $bw_behalten_n++;
+            }
+        }
+        if ($bw_behalten_n > 0) {
+            $bw_meldungen[] = sprintf(bw_t('QUELL.FREMD_BEHALTEN'),
+                                      $bw_behalten_n);
+        }
         $bw_q['felder'] = $bw_felder;
         if (bw_quellen_speichern($bw_q)) { $bw_meldungen[] = bw_t('QUELL.GESPEICHERT'); }
-        else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['quellen']); }
+        else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['quellen'])); }
     }
     $bw_tab = 'tab-sources';
 }
@@ -596,7 +632,13 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             'theta_wp_eigen' => $bw_twp !== null ? $bw_twp : 0.0,
             'rate_mmh'     => $bw_rate !== '' ? (float) $bw_rate : 0.0,
             'mikroklima'   => $bw_mk !== '' ? (float) $bw_mk : 1.0,
-            'rate_gemessen' => (int) (isset($bw_alt['rate_gemessen']) ? $bw_alt['rate_gemessen'] : 0),
+            /* Wer die Rate leert, nimmt die Becherprobe zurueck. Das
+             * Merkmal aus $bw_alt zu uebernehmen ist richtig (es steht
+             * in keinem Formularfeld) - aber nicht fuer eine Rate von
+             * null: die Zone zeigte sonst 'aus eigenen Messwerten' mit
+             * dem alten Datum bei einer Rate, die es nicht mehr gibt. */
+            'rate_gemessen' => $bw_rate === '' ? 0
+                : (int) (isset($bw_alt['rate_gemessen']) ? $bw_alt['rate_gemessen'] : 0),
             'im_zyklus'    => !empty($_POST['z_zyklus'][$bw_i]) ? 1 : 0,
             'feuchte_thema' => trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
                 (string) (isset($_POST['z_feuchte'][$bw_i]) ? $_POST['z_feuchte'][$bw_i] : ''))),
@@ -616,19 +658,25 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             // geloescht. Genau die Fehlerklasse, die in REGELN_2 unter
             // "Speichern-Handler: uebernehmen, was das Formular nicht
             // mitschickt" steht.
-            'rate_gemessen_am' => (string) (isset($bw_alt['rate_gemessen_am'])
-                ? $bw_alt['rate_gemessen_am'] : ''),
+            'rate_gemessen_am' => $bw_rate === '' ? ''
+                : (string) (isset($bw_alt['rate_gemessen_am'])
+                    ? $bw_alt['rate_gemessen_am'] : ''),
         );
     }
     if (!$bw_fehler) {
         if (bw_zonen_speichern($bw_neu)) { $bw_meldungen[] = bw_t('ZONE.GESPEICHERT'); }
-        else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['zonen']); }
+        else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['zonen'])); }
     }
     $bw_tab = 'tab-zones';
 }
 
-/* ---------------- Becherprobe ---------------- */
-if ($bw_post && isset($_POST['becher'])) {
+/* ---------------- Becherprobe ----------------
+ *
+ * Ausgeloest wird am KNOPF, nicht am Auswahlfeld: 'becher' geht bei
+ * jedem Absenden dieses Formulars mit, ein zweiter Knopf darin haette
+ * die Becherprobe also mitgefeuert. Alle uebrigen Handler haengen
+ * ebenfalls am Knopfnamen. */
+if ($bw_post && isset($_POST['becher_senden'])) {
     $bw_s = preg_replace('/[^a-z0-9_-]/', '', strtolower((string) $_POST['becher']));
     $bw_mm = $bw_kommazahl($bw_sauber('becher_mm'));
     $bw_min = $bw_kommazahl($bw_sauber('becher_min'));
@@ -652,7 +700,7 @@ if ($bw_post && isset($_POST['becher'])) {
         if (bw_zonen_speichern($bw_liste)) {
             $bw_meldungen[] = sprintf(bw_t('ZONE.BECHER_OK'), bw_e($bw_zone['name']), $bw_rate);
         } else {
-            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['zonen']);
+            $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['zonen']));
         }
     }
     $bw_tab = 'tab-zones';
@@ -663,7 +711,7 @@ if ($bw_post && isset($_POST['token_neu'])) {
     $bw_cfg = bw_config();
     $bw_cfg['aktionstoken'] = bw_token_erzeugen();
     if (bw_config_speichern($bw_cfg)) { $bw_meldungen[] = bw_t('LOX.TOKEN_NEU'); }
-    else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), $bw_p['config']); }
+    else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['config'])); }
     $bw_tab = 'tab-loxone';
 }
 if ($bw_post && isset($_POST['log_leeren'])) {
@@ -683,20 +731,6 @@ if ($bw_post && isset($_POST['selbsttest'])) {
     $bw_ausgabe = bw_selbsttest_ausgabe();
     $bw_tab = 'tab-test';
 }
-
-/* ---------------- Laden ---------------- */
-$bw_cfg = bw_config();
-$bw_token = bw_token();
-$bw_zonen = bw_zonen();
-$bw_q = bw_quellen();
-$bw_vorl = bw_vorlagen();
-$bw_pf = bw_pflanzen();
-$bw_a = bw_abbild();
-$bw_pid = bw_dienst_pid();
-$bw_alter = bw_alter();
-$bw_plan = isset($bw_a['plan']) && is_array($bw_a['plan']) ? $bw_a['plan'] : array();
-
-$bw_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -721,7 +755,13 @@ if ($bw_post && isset($_POST['bw_sichern'])) {
  *
  * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
  * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen.
+ *
+ * Dieser Zweig stand bis 0.9.18 als einziger schreibender Handler HINTER dem
+ * Ladeblock. Er schrieb die Datei, aber $bw_cfg und $bw_token im Speicher
+ * blieben die alten: die Seite meldete 'uebernommen' und zeigte daneben an
+ * sechzehn Stellen die Werte von vorher, samt altem Token in der
+ * Loxone-Adresse. Deshalb steht er jetzt bei den uebrigen Handlern. */
 if ($bw_post && isset($_POST['bw_zurueck'])) {
     if (!isset($_FILES['bw_sicherung']) || !is_array($_FILES['bw_sicherung'])
         || !isset($_FILES['bw_sicherung']['tmp_name'])
@@ -737,13 +777,43 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
              * nichts. */
             $bw_fehler[] = bw_t('EINST.SICH_ABGELEHNT') . ' '
                             . implode(' ', $bw_mangel);
-        } elseif (bw_config_speichern($bw_neu)) {
-            $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
         } else {
-            $bw_fehler[] = bw_t('EINST.SICH_SCHREIBFEHLER');
+            /* Traegt die Datei KEIN Aktionstoken, wird das laufende behalten.
+             * bw_sicherung_lesen() baut auf den Vorgaben auf, und dort ist es
+             * leer: eine von Hand gekuerzte Sicherung hat es bis 0.9.18 beim
+             * Zurueckspielen stillschweigend geloescht. Jede im Miniserver
+             * eingetragene Adresse antwortete danach mit 403, und weil ein
+             * virtueller Eingang die Antwort nicht auswertet, blieb der
+             * Ausfall stumm. */
+            $bw_altcfg = bw_config();
+            if (trim((string) $bw_neu['aktionstoken']) === ''
+                && trim((string) $bw_altcfg['aktionstoken']) !== '') {
+                $bw_neu['aktionstoken'] = $bw_altcfg['aktionstoken'];
+                $bw_meldungen[] = bw_t('EINST.SICH_TOKEN_BEHALTEN');
+            }
+            if (bw_config_speichern($bw_neu)) {
+                $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
+            } else {
+                $bw_fehler[] = bw_t('EINST.SICH_SCHREIBFEHLER');
+            }
         }
     }
+    $bw_tab = 'tab-settings';
 }
+
+/* ---------------- Laden ---------------- */
+$bw_cfg = bw_config();
+$bw_token = bw_token();
+$bw_zonen = bw_zonen();
+$bw_q = bw_quellen();
+$bw_vorl = bw_vorlagen();
+$bw_pf = bw_pflanzen();
+$bw_a = bw_abbild();
+$bw_pid = bw_dienst_pid();
+$bw_alter = bw_alter();
+$bw_plan = isset($bw_a['plan']) && is_array($bw_a['plan']) ? $bw_a['plan'] : array();
+
+$bw_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
 
 
 if ($bw_rahmen) {
@@ -865,9 +935,8 @@ if ($bw_rahmen) {
 
 <h2><?= bw_e(bw_t('EINST.H_DIENST')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-punkt sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
-  <span style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
-  <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
@@ -976,31 +1045,33 @@ if ($bw_rahmen) {
 <button data-role="none" class="sm-b sm-b-aktion" name="speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 
-<h2><?= bw_t('EINST.H_SICHERUNG') ?></h2>
+<h2><?= bw_e(bw_t('EINST.H_SICHERUNG')) ?></h2>
 <div class="sm-hinweis"><?= bw_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= bw_t('EINST.SICH_WARNUNG') ?></div>
-<div class="sm-knopfreihe">
-  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
-       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
-       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
-       einen Download, der das Speichern verschluckt. -->
+<!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+     exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+     Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+     einen Download, der das Speichern verschluckt. -->
   <form action="index.php" method="post">
     <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="bw_sichern" value="1"><?= bw_t('EINST.K_SICHERN') ?></button>
+    <button data-role="none" class="sm-b sm-b-lesen" type="submit" name="bw_sichern" value="1"><?= bw_e(bw_t('EINST.K_SICHERN')) ?></button>
   </form>
   <form action="index.php" method="post" enctype="multipart/form-data">
     <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="file" name="bw_sicherung" accept=".json">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_t('EINST.K_ZURUECK') ?></button>
+    <button data-role="none" class="sm-b sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_e(bw_t('EINST.K_ZURUECK')) ?></button>
   </form>
-</div>
 </div>
 
 <!-- ============ Quellen ============ -->
 <div class="sm-seite<?= $bw_tab === 'tab-sources' ? ' sm-active' : '' ?>" id="tab-sources">
 <h2><?= bw_e(bw_t('QUELL.H_TITEL')) ?></h2>
+<div class="sm-legende">
+  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+</div>
 <div class="sm-hinweis"><?= bw_t('QUELL.ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= bw_t('QUELL.WEG_ERKLAERUNG') ?></div>
 
@@ -1010,7 +1081,7 @@ if ($bw_rahmen) {
 <div class="sm-feld">
   <label for="vorlage"><?= bw_e(bw_t('QUELL.L_VORLAGE')) ?></label>
   <select data-role="none" name="vorlage" id="vorlage">
-  <?php foreach (($bw_vorl['vorlagen'] ?: array()) as $bw_k => $bw_v) { ?>
+  <?php foreach (bw_tabelle($bw_vorl['vorlagen']) as $bw_k => $bw_v) { ?>
     <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_q['vorlage']) && $bw_q['vorlage'] === $bw_k) ? ' selected' : '' ?>><?= bw_e($bw_v['text']) ?></option>
   <?php } ?>
   </select>
@@ -1040,7 +1111,7 @@ if ($bw_rahmen) {
     <th><?= bw_e(bw_t('QUELL.T_EINHEIT')) ?></th><th><?= bw_e(bw_t('QUELL.T_HERKUNFT')) ?></th></tr>
 <?php
 $bw_h = isset($bw_a['herkunft']) && is_array($bw_a['herkunft']) ? $bw_a['herkunft'] : array();
-foreach (($bw_vorl['groessen'] ?: array()) as $bw_g => $bw_gd) {
+foreach (bw_tabelle($bw_vorl['groessen']) as $bw_g => $bw_gd) {
     $bw_f = isset($bw_q['felder'][$bw_g]) ? $bw_q['felder'][$bw_g] : array(); ?>
 <tr>
   <td><?= bw_e($bw_gd['text']) ?><?= !empty($bw_gd['pflicht']) ? ' <span class="sm-aus">*</span>' : '' ?>
@@ -1257,6 +1328,9 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 <!-- ============ Zonen ============ -->
 <div class="sm-seite<?= $bw_tab === 'tab-zones' ? ' sm-active' : '' ?>" id="tab-zones">
 <h2><?= bw_e(bw_t('ZONE.H_TITEL')) ?></h2>
+<div class="sm-legende">
+  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+</div>
 <p class="sm-hilfe"><?= bw_t('ZONE.ERKLAERUNG') ?></p>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
@@ -1268,7 +1342,14 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
     <th><?= bw_e(bw_t('ZONE.T_BODEN')) ?></th><th><?= bw_e(bw_t('ZONE.T_RATE')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_MIKRO')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_FEUCHTE')) ?></th><th><?= bw_e(bw_t('ZONE.T_ZYKLUS')) ?></th></tr>
-<?php for ($bw_i = 0; $bw_i < 8; $bw_i++) {
+<?php /* Acht Zeilen sind die Vorgabe, aber NIE weniger, als es Zonen
+         gibt: der Speichern-Handler baut die Liste aus dem Formular
+         neu auf. Stuenden in zonen.json neun Zonen und die Tabelle
+         zeigte acht, wuerde die neunte bei jedem Speichern still
+         weggeworfen - sichtbar blieb sie in Auswahlfeld, Standtabelle
+         und Themenliste, die alle ungekappt zaehlen. */
+   $bw_zeilen_n = max(8, count($bw_zonen)); ?>
+<?php for ($bw_i = 0; $bw_i < $bw_zeilen_n; $bw_i++) {
     $bw_z = isset($bw_zonen[$bw_i]) ? $bw_zonen[$bw_i] : array(); ?>
 <tr>
   <td><input data-role="none" type="text" name="z_name[<?= $bw_i ?>]" size="16"
@@ -1278,20 +1359,18 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
   <td><input data-role="none" type="text" name="z_flaeche[<?= $bw_i ?>]" size="6"
              value="<?= bw_e(isset($bw_z['flaeche']) ? $bw_z['flaeche'] : '') ?>"></td>
   <td><select data-role="none" name="z_bepflanzung[<?= $bw_i ?>]">
-      <?php foreach (($bw_pf['bepflanzung'] ?: array()) as $bw_k => $bw_v) { ?>
+      <?php foreach (bw_tabelle($bw_pf['bepflanzung']) as $bw_k => $bw_v) { ?>
       <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['bepflanzung']) ? $bw_z['bepflanzung'] : 'rasen_kuehl') === $bw_k ? ' selected' : '' ?>><?= bw_e($bw_v['text']) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
       <?php } ?></select></td>
   <td><select data-role="none" name="z_boden[<?= $bw_i ?>]">
-      <?php foreach (($bw_pf['boden'] ?: array()) as $bw_k => $bw_v) {
-          if ($bw_k === '_hinweis') { continue; } ?>
+      <?php foreach (bw_tabelle($bw_pf['boden']) as $bw_k => $bw_v) { ?>
       <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['boden']) ? $bw_z['boden'] : 'lehm') === $bw_k ? ' selected' : '' ?>><?= bw_e($bw_v['text']) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
       <?php } ?></select></td>
   <td><input data-role="none" type="text" name="z_rate[<?= $bw_i ?>]" size="5"
              value="<?= bw_e(isset($bw_z['rate_mmh']) ? $bw_z['rate_mmh'] : '') ?>">
       <select data-role="none" name="z_regner[<?= $bw_i ?>]" style="margin-top:3px">
       <option value=""><?= bw_e(bw_t('ZONE.REGNER_KEINER')) ?></option>
-      <?php foreach (($bw_pf['regner'] ?: array()) as $bw_rk => $bw_rv) {
-          if ($bw_rk === '_hinweis') { continue; } ?>
+      <?php foreach (bw_tabelle($bw_pf['regner']) as $bw_rk => $bw_rv) { ?>inue; } ?>
       <option value="<?= bw_e($bw_rk) ?>"<?= (isset($bw_z['regner']) ? $bw_z['regner'] : '') === $bw_rk ? ' selected' : '' ?>><?= bw_e($bw_rv['text']) ?> (<?= bw_e($bw_rv['mmh']) ?>)</option>
       <?php } ?></select>
       <?php if (!empty($bw_z['schluessel'])) { ?>
@@ -1324,7 +1403,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
     <th><?= bw_e(bw_t('ZONE.T_SENSOR_GEWICHT')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_THETA_FC')) ?></th><th><?= bw_e(bw_t('ZONE.T_THETA_WP')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_GIESS_THEMA')) ?></th><th><?= bw_e(bw_t('ZONE.T_GIESS_ART')) ?></th></tr>
-<?php for ($bw_j = 0; $bw_j < 8; $bw_j++) {
+<?php for ($bw_j = 0; $bw_j < $bw_zeilen_n; $bw_j++) {
     $bw_z = isset($bw_zonen[$bw_j]) ? $bw_zonen[$bw_j] : array(); ?>
 <tr>
   <?php /* NICHT bw_e('&mdash;') - die Maskierfunktion macht daraus
@@ -1528,11 +1607,14 @@ if (!$bw_vt) { ?>
   <label for="mqtt_topic"><?= bw_e(bw_t('EINST.L_MQTT_TOPIC')) ?></label>
   <input data-role="none" type="text" name="mqtt_topic" id="mqtt_topic" value="<?= bw_e($bw_cfg['mqtt_topic']) ?>">
 </div>
-<?php /* Schreibweise wie im uebrigen Plugin: Bewaesserung benutzt sm-b
-         (nicht sm-btn) und faerbt die Legendenpunkte unmittelbar - sm-punkt
-         und sm-knopfreihe gibt es hier nicht. */ ?>
+<?php /* Schreibweise wie im uebrigen Plugin: die Knopf-Grundklasse dieser
+         Linie ist die kurze Form, und die Legendenpunkte bekommen ihre
+         Groesse aus '.sm-legende span' und ihre Farbe unmittelbar aus dem
+         style-Attribut. Eine eigene Punktklasse und eine Klasse fuer die
+         Knopfreihe gibt es in dieser Linie nicht - bis 0.9.18 standen beide
+         als Namen im HTML, ohne dass der Stilblock sie kannte. */ ?>
 <div class="sm-legende">
-  <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <button data-role="none" class="sm-b sm-b-aktion" type="submit"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
@@ -1574,6 +1656,10 @@ if (!$bw_vt) { ?>
 <!-- ============ Einbindung in Loxone ============ -->
 <div class="sm-seite<?= $bw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <h2><?= bw_e(bw_t('LOX.H_TITEL')) ?></h2>
+<div class="sm-legende">
+  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+</div>
 <p class="sm-hilfe"><?= bw_t('LOX.EINLEITUNG') ?></p>
 
 <div class="sm-step">
@@ -1608,10 +1694,14 @@ if (!$bw_vt) { ?>
     <th><?= bw_e(bw_t('LOX.T_PARAMETER')) ?></th><th><?= bw_e(bw_t('LOX.T_EINGAENGE')) ?></th></tr>
 <?php
 $bw_liste = array(
-    array(1,  'BAUSTEIN.T_VE',      'BAUSTEIN.N01', 'BAUSTEIN.P01', '&mdash;'),
-    array(2,  'BAUSTEIN.T_VE',      'BAUSTEIN.N02', 'BAUSTEIN.P02', '&mdash;'),
-    array(3,  'BAUSTEIN.T_VE',      'BAUSTEIN.N03', 'BAUSTEIN.P03', '&mdash;'),
-    array(4,  'BAUSTEIN.T_VE',      'BAUSTEIN.N04', 'BAUSTEIN.P04', '&mdash;'),
+    array(1,  'BAUSTEIN.T_VE',      'BAUSTEIN.N01', array('text' => sprintf(bw_t('BAUSTEIN.P01'),
+              '<span class="sm-mono">' . bw_e(bw_check('GIESSEN')) . '</span>')), '&mdash;'),
+    array(2,  'BAUSTEIN.T_VE',      'BAUSTEIN.N02', array('text' => sprintf(bw_t('BAUSTEIN.P02'),
+              '<span class="sm-mono">' . bw_e(bw_check('DURCHLAEUFE')) . '</span>')), '&mdash;'),
+    array(3,  'BAUSTEIN.T_VE',      'BAUSTEIN.N03', array('text' => sprintf(bw_t('BAUSTEIN.P03'),
+              '<span class="sm-mono">' . bw_e(bw_check('ET0')) . '</span>')), '&mdash;'),
+    array(4,  'BAUSTEIN.T_VE',      'BAUSTEIN.N04', array('text' => sprintf(bw_t('BAUSTEIN.P04'),
+              '<span class="sm-mono">' . bw_e(bw_check('REICHT')) . '</span>')), '&mdash;'),
     array(5,  'BAUSTEIN.T_SWS',     'BAUSTEIN.N05', 'BAUSTEIN.P05', 'I &larr; #1'),
     array(6,  'BAUSTEIN.T_NICHT',   'BAUSTEIN.N06', '',             'I &larr; #5'),
     array(7,  'BAUSTEIN.T_ZAEHLER', 'BAUSTEIN.N07', 'BAUSTEIN.P07', 'I &larr; ' . bw_t('BAUSTEIN.E_DURCHLAUF')),
@@ -1624,7 +1714,11 @@ $bw_liste = array(
 foreach ($bw_liste as $bw_z2) { ?>
 <tr><td><?= (int) $bw_z2[0] ?></td><td><?= bw_t($bw_z2[1]) ?></td>
     <td class="sm-mono"><?= bw_t($bw_z2[2]) ?></td>
-    <td><?= $bw_z2[3] !== '' ? bw_t($bw_z2[3]) : '&mdash;' ?></td>
+    <?php /* Ein Feld, das als array('text' => ...) kommt, ist FERTIG und
+             geht nicht noch einmal durch bw_t() - sonst suchte die
+             Uebersetzung nach einem Schluessel, der der halbe Satz ist. */ ?>
+    <td><?= is_array($bw_z2[3]) ? $bw_z2[3]['text']
+            : ($bw_z2[3] !== '' ? bw_t($bw_z2[3]) : '&mdash;') ?></td>
     <td class="sm-mono"><?= $bw_z2[4] ?></td></tr>
 <?php } ?>
 </table>
@@ -1639,7 +1733,7 @@ foreach ($bw_liste as $bw_z2) { ?>
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
   <button data-role="none" class="sm-b sm-b-aktion" name="token_neu" value="1"
-    onclick="return confirm(<?= json_encode(strip_tags(html_entity_decode(bw_t('LOX.TOKEN_FRAGE'), ENT_QUOTES, 'UTF-8'))) ?>)"><?= bw_e(bw_t('LOX.K_TOKEN_NEU')) ?></button>
+    onclick="return confirm(<?= bw_e(json_encode(strip_tags(html_entity_decode(bw_t('LOX.TOKEN_FRAGE'), ENT_QUOTES, 'UTF-8')))) ?>)"><?= bw_e(bw_t('LOX.K_TOKEN_NEU')) ?></button>
 </form>
 </div>
 </div>
@@ -1648,13 +1742,22 @@ foreach ($bw_liste as $bw_z2) { ?>
 <div class="sm-seite<?= $bw_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?= bw_e(bw_t('TEST.H_SELBSTPRUEFUNG')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('TEST.EINLEITUNG') ?></p>
+<?php /* Nur im offenen Reiter rechnen. Der PHP-Ausdruck lief bis
+         0.9.18 bei JEDEM Seitenaufbau - 'sm-active' steuert nur die
+         Sichtbarkeit -, und darin steckt ein HTTP-Aufruf des eigenen
+         Endpunkts mit fuenf Sekunden Zeitgrenze. Gemessen wurden 3,5 s
+         je Aufruf des Reiters Einstellungen. */ ?>
+<?php if ($bw_tab === 'tab-test') { ?>
 <?= bw_pruefungen_html() ?>
+<?php } else { ?>
+<p class="sm-hilfe"><?= bw_e(bw_t('TEST.NUR_IM_REITER')) ?></p>
+<?php } ?>
 
 <h2><?= bw_e(bw_t('TEST.H_LESEN')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-punkt sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
-  <span style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
-  <span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-technik" style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
+  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
@@ -1688,7 +1791,7 @@ if (!$bw_zeilen) { ?>
 <?php } else { ?>
 <div class="sm-log"><?= bw_e(implode("\n", $bw_zeilen)) ?></div>
 <?php } ?>
-<div class="sm-legende"><span class="sm-punkt sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
+<div class="sm-legende"><span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-log">

@@ -5,10 +5,12 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.7 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.19 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
-> 0.9.6 auf „0.9.0" — sechs Fassungen lang.
+> 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
+> und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
+> `Werkzeuge/fassung_setzen.py` mitzieht.
 
 ## Herstellerneutral — das ist der Kern
 
@@ -67,7 +69,7 @@ auch am Endpunkt (`geschaetzt: 1`).
     bin/bewaesserung_dienst.py  Dienst
     templates/quellen.json    Messgrößen, Vorlagen, Einheiten — EINE Datei
     templates/pflanzen.json   Kc, Zr, p, Bodenkennwerte, Regnertypen
-    webfrontend/htmlauth/     Oberfläche (sieben Reiter)
+    webfrontend/htmlauth/     Oberfläche (acht Reiter)
     webfrontend/html/         Endpunkt (nur lesend) + Bibliothek
 
 Kein Pflichtpaket. `paho-mqtt` ist freiwillig und nur für MQTT-Quellen nötig.
@@ -112,7 +114,7 @@ Gemessen für einen Sommertag von 12 bis 28 °C ohne Strahlungsmesser:
     tmin = tmax = 22    ET0 = 1,95 mm    (Rs =  0,0 MJ, denn Wurzel aus 0 ist 0)
 
 Wer seine eigene Station nach Vorlage einrichtete, bekam eine dreifach zu
-kleine Verdunstung — und zwar still, gekennzeichnet als „geschätzt" statt als
+kleine Verdunstung — und zwar still, gekennzeichnet als „“ statt als
 Fehler. Die Auflösung braucht keine Umstellung: der Dienst merkt sich den
 Tagesverlauf je Messgröße und gibt für `tmin` das Minimum und für `tmax` das
 Maximum des Tages zurück. Das ist in beiden Fällen richtig — auch wenn Ihre
@@ -129,8 +131,8 @@ gegossen. Gemessen, vierzehn Tage trocken:
 
 | | Defizit | Füllstand | Bedarf | Plan |
 |---|---|---|---|---|
-| ohne Rückmeldung | 63,2 mm | 40 % | 24,3 mm | 8 von 49 — „die Anlage schafft es nicht" |
-| mit 4 mm je Nacht | 10,5 mm | 90 % | 0,0 mm | „kein Bedarf" |
+| ohne Rückmeldung | 63,2 mm | 40 % | 24,3 mm | 8 von 49 — „“ |
+| mit 4 mm je Nacht | 10,5 mm | 90 % | 0,0 mm | „“ |
 
 Tragen Sie im Reiter Zonen je Kreis ein **Rückmeldethema** ein und lassen Sie
 Loxone dorthin die Laufminuten oder die fertigen Durchläufe der Nacht
@@ -188,15 +190,15 @@ abzuleiten hieße, den Garten trockenzulegen.
   sagten das seit jeher zu; die dafür vorgesehene Datei wurde nie geschrieben.
 - **Drei Gründe hatten keinen Satz.** `rate_fehlt`, `rate_fehlt_teilweise` und
   `fenster_ungueltig` fehlten in **beiden** Sprachdateien — im Reiter Test
-  stand buchstäblich „GRUND.RATE_FEHLT". Ausgerechnet der Fall, den der
+  stand buchstäblich „“. Ausgerechnet der Fall, den der
   Quelltext als den gefährlichsten des Moduls bezeichnet. Und die Zonen ohne
   Niederschlagsrate werden jetzt mit Namen genannt, wie es seit 0.9.1 zugesagt
   war.
 - **Die feste Rechenzeit gibt es wirklich.** Der Schlüssel `rechenzeit` stand
-  seit 0.9.0 mit dem Kommentar „wann der Plan für die Nacht steht" in der
+  seit 0.9.0 mit dem Kommentar „“ in der
   Vorgabeliste und wurde von keiner Zeile gelesen.
 - **Ein Bodenfeuchtefühler altert jetzt.** Er wurde am Verfallsdatum vorbei
-  gelesen, das für jede andere Messgröße gilt; ein bei „nass" stehengebliebener
+  gelesen, das für jede andere Messgröße gilt; ein bei „“ stehengebliebener
   Fühler hätte die Bewässerung auf Dauer abgeschaltet. Dasselbe für die
   HTTP-Quelle, die gar keine Altersgrenze hatte.
 - **Zwei Eingaben ohne Wirkung sind jetzt erreichbar:** der
@@ -205,7 +207,7 @@ abzuleiten hieße, den Garten trockenzulegen.
 - **Das Datum der Becherprobe überlebt das Speichern.** Es wurde geschrieben
   und beim nächsten Speichern der Zonentabelle still gelöscht.
 - **MQTT:** `alter` stand fest auf 0 und meldete als retained-Wert für immer
-  „gerade eben gerechnet". `et0` wurde bei fehlgeschlagener Rechnung als 0
+  „“. `et0` wurde bei fehlgeschlagener Rechnung als 0
   gesendet. Und `<zone>/defizit_mm` trug den *Bedarf*, während das gleichnamige
   Feld am HTTP-Endpunkt das *Defizit* führt — gemessen lagen sie um den Faktor
   5,4 auseinander. Das Thema behält seine Bedeutung; daneben stehen jetzt die
@@ -244,9 +246,12 @@ erst der Betrieb.
 
 ## Die Fassungen dazwischen
 
-Diese Datei sprang bisher von 0.9.1 auf 0.9.7. Die Anmerkungen zu den
-Fassungen dazwischen stehen auf den Release-Seiten des Repositoriums; hier
-in Kurzform, damit die Reihe vollständig ist.
+Diese Datei sprang von 0.9.1 auf 0.9.7. Die Anmerkungen zu 0.9.2 bis 0.9.6
+stehen hier in Kurzform; für **0.9.8 bis 0.9.16** stehen sie
+ausschließlich auf den Release-Seiten des Repositoriums. Der Satz
+„damit die Reihe vollständig ist“ stand hier bis 0.9.18 und
+war seit 0.9.8 falsch — eine Zusage, die zehn Fassungen lang niemand
+eingelöst hat.
 
 **0.9.2 — übersetzbare Hilfe.** Die Hilfeseite trug ihren Text fest
 verdrahtet in `help.html`, auf Deutsch. Wer das Plugin auf Englisch benutzte,
@@ -265,9 +270,12 @@ dann, wenn niemand mehr hinsieht.
 doppelten Anführungszeichen, damit `parse_ini_file` an einem Semikolon nichts
 abschneidet, und kein Schlüssel doppelt im selben Abschnitt.
 
-**0.9.6 — Textpflege, keine Verhaltensänderung.** Umschreibungen wie `laeuft`
-und `heisst` durch echte Umlaute ersetzt; nur Sprachdateien. Dazu eine
-Richtigstellung in der `LICENSE`, die als Urheber „Sprache Plugin Authors"
+**0.9.6 — Textpflege, keine Verhaltensänderung.** Die damals
+betroffenen Umschreibungen durch echte Umlaute ersetzt; nur Sprachdateien.
+(Vollständig war das nicht: zehn Wertzeilen blieben stehen und sind
+erst in 0.9.19 nachgezogen worden. Der Satz hier nannte zwei Wörter
+als Beispiel, die beide noch dastanden.) Dazu eine
+Richtigstellung in der `LICENSE`, die als Urheber „“
 nannte — ein Übernahmefehler aus einer Vorlage.
 
 ## Neu in 0.9.1
@@ -303,9 +311,9 @@ schon die Erstinstallation. Jetzt steht dort ein `chown -R loxberry:loxberry`.
   vergrößern, nicht verkleinern.
 - **`publish` vor der MQTT-Zeile.** Das Verb fehlte hier als einzigem Plugin
   dieser Reihe. Dazu werden Zeilenumbrüche aus den Werten und Leerzeichen aus
-  den Themennamen entfernt — eine Zone namens „Rasen hinten" hätte das Thema
+  den Themennamen entfernt — eine Zone namens „“ hätte das Thema
   sonst mitten im Namen abgeschnitten.
-- **Ein Zonenfehler heißt nicht mehr „Zone unbekannt".** Der Endpunkt
+- **Ein Zonenfehler heißt nicht mehr „“.** Der Endpunkt
   unterschied nicht zwischen einem falschen Zonenschlüssel und einer Zone, die
   sich nicht rechnen ließ. Wer das in Loxone sah, suchte einen Tippfehler, den
   es nicht gab. Jetzt gibt es `ZONE_UNBEKANNT`, `NOCH_NICHT_GERECHNET` und
@@ -318,7 +326,7 @@ schon die Erstinstallation. Jetzt steht dort ein `chown -R loxberry:loxberry`.
   aus Null-Bytes.
 - **Nebendateien beim atomaren Schreiben sind eindeutig** (Prozessnummer im
   Namen), in PHP wie in Python. `<datei>.tmp` kollidierte, sobald neben dem
-  Dienst ein zweiter Lauf über „Jetzt rechnen" schrieb. Python macht zusätzlich
+  Dienst ein zweiter Lauf über „“ schrieb. Python macht zusätzlich
   ein `fsync`, bevor umbenannt wird.
 - **Open-Meteo wirft nicht mehr durch.** Die Zeitgrenze wurde bereits im Dienst
   abgefangen; die Funktion gibt jetzt selbst ein leeres, wohlgeformtes Ergebnis
@@ -345,22 +353,92 @@ Die drei `__pycache__`-Dateien sind aus dem Archiv entfernt.
   1,2 bis 1,3 vor einer Südmauer oder im Kiesbeet. Er wirkt auf ETc, nicht auf
   ET0 — die Referenzverdunstung am Standort bleibt für alle Zonen dieselbe
   Zahl, sie je Zone zu verbiegen wäre eine Falschaussage über das Wetter. Eine
-  0 gilt als „nichts eingetragen", nicht als „verdunstet nie".
+  0 gilt als „“, nicht als „“.
 - **Der Dienst läuft jetzt auch ohne virtuelle Python-Umgebung.**
   `postinstall.sh` sagte zu: „Das Plugin läuft trotzdem — dann aber ohne
-  MQTT-Quellen", falls sich die Umgebung nicht anlegen lässt (etwa ohne das
+  MQTT-Quellen“, falls sich die Umgebung nicht anlegen lässt (etwa ohne das
   Paket `python3-venv`). `dienst.sh` hielt sich nicht daran: es bestand auf
-  `venv/bin/python3` und verweigerte den Start mit „Plugin neu installieren".
+  `venv/bin/python3` und verweigerte den Start mit „“.
   Die Installation meldete also Erfolg, und der Dienst lief nie an — auch der
   Reiter Test schlug fehl, mit einem Hinweis auf die falsche Ursache. Jetzt ist
   der System-Python die Rückfallebene, und der Selbsttest nennt, welcher
   Interpreter läuft und wo `paho-mqtt` dann liegen müsste.
 
-## Grundlage
+## Fassung 0.9.19 — die Durchsicht vom 04./05.09.2026
 
-FAO Irrigation and Drainage Paper 56 (Allen, Pereira, Raes, Smith), Kapitel 4
-und 8. Vorhersagedaten von Open-Meteo — kostenlos und ohne Schlüssel für nicht
-gewerbliche Nutzung, ebenfalls nach FAO-56 Penman-Monteith gerechnet.
+Eine vollstaendige Gegenlesung der Fassung 0.9.18. Der Reihe nach, mit dem,
+was gemessen wurde:
+
+**Der Endpunkt legt nichts mehr an.** `bw_config()` las die Konfiguration und
+holte sie dabei aus der Zweitschrift zurueck — auch aus dem
+unangemeldeten Bereich, und zwar **vor** der Tokenpruefung. Ein Aufruf ohne
+Token aus dem Netz hat damit Verzeichnis und Konfigurationsdatei erzeugt
+(gemessen in neun Lagen unter PHP 7.4 und 8.4). Der Endpunkt ruft jetzt
+`bw_config(false)`, und der Kopfkommentar der Datei sagt wieder die Wahrheit.
+
+**Eine beschaedigte Konfiguration wird erkannt.** Bisher gaben „gibt es
+nicht“ und „ist unlesbar“ dasselbe zurueck: ein leeres Feld,
+ohne eine Zeile im Protokoll. Der Endpunkt antwortete dann dauerhaft
+`KEIN_TOKEN_GESETZT`, und der naechste Speichervorgang kopierte die
+Werkseinstellungen ueber die Zweitschrift. Jetzt wird die kaputte Datei als
+`.kaputt.<Zeitstempel>` beiseitegelegt, einmal gemeldet und — wenn die
+Zweitschrift ein Aktionstoken traegt — daraus wiederhergestellt. Der
+Reiter Test hat dafuer eine neue Pflichtzeile mit fuenf Ausgaengen.
+
+**Der Aktualisierungsfall ist kein Schaden mehr.** Eine Konfiguration, die nur
+`{}` enthaelt, ist der Zustand jeder bestehenden Anlage nach einem Update.
+Bisher wurde sie durch die Zweitschrift ersetzt; entschieden wird jetzt nach
+dem Inhalt, nicht nach der Form.
+
+**Die Sicherungsdatei wird auf ihre Werte geprueft.** Bisher wurden nur die
+Schluessel angesehen. Gemessen gingen ein Feld, ein `null`, ein
+Zeilenumbruch, 100 000 Zeichen und `"sofort"` als Taktzeit anstandslos durch
+— sieben von vierzehn Faellen. Und eine Datei ohne `aktionstoken` setzte
+es beim Zurueckspielen auf leer, womit jede im Miniserver eingetragene
+Adresse stumm ungueltig wurde; das laufende Token wird jetzt behalten.
+
+**Die Anmeldung am Broker wird ausgewertet.** Der Rueckgabecode des
+MQTT-Verbindungsaufbaus fiel bisher unter den Tisch: ein Broker, der die
+Anmeldung ablehnt (CONNACK 4 oder 5), erzeugte dieselbe Protokollzeile
+„Mit dem Broker verbunden“ wie ein gelungener Anlauf. Es kam nie
+eine Nachricht an, und das Protokoll sagte das Gegenteil.
+
+**Die Tageswerte ueberleben das Update wirklich.** `postinstall.sh` startete
+den Dienst, **bevor** `tagesextreme.json` zurueckgelegt wurde. Der Dienst
+liest die Datei beim Anlauf und schreibt sie im ersten Rechengang zurueck
+— die Rettung war damit wirkungslos. Der Block steht jetzt vor dem
+Dienststart, und `nachtplan.json` und `zustand.json` werden mitgerettet.
+
+**Ein MQTT-Feld ohne Pfad wird abgewiesen.** Traegt die Nachricht mehrere
+Werte (JSON oder die Feldliste des Ecowitt-Uploadprotokolls) und ist kein
+Pfad eingetragen, ging bisher die ganze Zeichenkette an die Zahlenauswertung
+— gemessen wurde daraus `123.0`, gelesen aus `PASSKEY=ABC123`. Jetzt
+gibt es dafuer den Grund `pfad_fehlt`.
+
+**Die Selbstpruefung laeuft nur im offenen Reiter.** Sie ruft den eigenen
+Endpunkt ueber das Netz auf, mit fuenf Sekunden Zeitgrenze, und lief bei
+jedem Seitenaufbau — gemessen 3,5 s je Aufruf des Reiters Einstellungen.
+
+**Sperren wirken auch auf die Ventilzeit.** Bei Frost wurden die Durchlaeufe
+auf null gesetzt, die Ventilzeit je Zone aber unveraendert veroeffentlicht.
+Und ein eingefrorener Nachtplan schlug die Sperre: `gesperrt=1` und
+`giessen=1` standen gleichzeitig in der Meldung.
+
+Dazu 16 kleinere Berichtigungen, darunter der zerbrochene
+Bestaetigungsdialog am Knopf „neues Token“ (die Rueckfrage entfiel
+ersatzlos), Zonen ab der neunten, die jedes Speichern still verlor, drei
+CSS-Klassen ohne Definition, zehn Zeilen mit ASCII-Umschrift in der
+deutschen Sprachdatei und eine Beispieladresse aus dem Heimnetz.
+
+Neu im Reiter Test: **Ist die Konfiguration heil?**, **Tragen alle Formulare
+das Merkmal gegen fremde Absender?**, **Nennt jede Legende genau die
+Knopffarben ihres Reiters?** und **Ist die erzeugbare Loxone-Vorlage
+wohlgeformt?** — die dritte ersetzt eine Pruefung, die das Hauswerkzeug
+an dieser Linie nicht durchfuehren kann, weil sie eine andere
+Klassenschreibweise benutzt.
+
+**Nicht geprueft:** nichts davon ist an einer Anlage gemessen. Die letzte
+Fassung, die auf echter Hardware lief, ist 0.9.11.
 
 ## Fassung 0.9.17 — der Stat-Zwischenspeicher
 Die Protokollkappung (512 000 Byte) stand in
@@ -390,4 +468,10 @@ Abhilfe: `clearstatcache(true, …)` **vor** dem Tor; der zweite Parameter
 beschränkt das Leeren auf diese eine Datei. Dasselbe Muster tragen Robonect,
 Saugroboter, SignalBot, Octopus, Sprachsteuerung und WärmepumpeCloud schon
 länger — es ist am 29.08.2026 im ganzen Bestand nachgezogen worden.
+
+## Grundlage
+
+FAO Irrigation and Drainage Paper 56 (Allen, Pereira, Raes, Smith), Kapitel 4
+und 8. Vorhersagedaten von Open-Meteo — kostenlos und ohne Schlüssel für nicht
+gewerbliche Nutzung, ebenfalls nach FAO-56 Penman-Monteith gerechnet.
 

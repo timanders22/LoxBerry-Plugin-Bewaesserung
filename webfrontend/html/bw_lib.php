@@ -180,15 +180,131 @@ function bw_json_schreiben($pfad, $daten, $rechte = null)
     return true;
 }
 
-function bw_config()
+/**
+ * Die Lage einer JSON-Datei benennen, statt sie zu verschweigen.
+ *
+ * bw_json_lesen() gab bis 0.9.18 fuer "gibt es nicht" und "ist Muell"
+ * dasselbe zurueck: ein leeres Feld, ohne eine Zeile im Protokoll. Eine
+ * beschaedigte bewaesserung.json wurde damit zur reinen Vorgabenlage - mit
+ * leerem Aktionstoken. Der Endpunkt antwortete danach dauerhaft
+ * KEIN_TOKEN_GESETZT, in Loxone blieb jeder virtuelle Eingang stumm, und der
+ * naechste Speichervorgang schrieb die Vorgabenlage ueber die Zweitschrift.
+ *
+ * Rueckgabe: array(Lage, Daten) mit Lage aus
+ *   fehlt      | die Datei gibt es nicht          -> Neuinstallation
+ *   leer       | vorhanden, aber ohne Inhalt      -> unlesbar
+ *   neu        | genau "{}"                       -> Aktualisierungsfall
+ *   ungueltig  | vorhanden, aber kein JSON        -> Schaden
+ *   ok         | gelesen
+ */
+function bw_json_lage($pfad)
+{
+    clearstatcache(true, $pfad);
+    if (!is_file($pfad)) { return array('fehlt', array()); }
+    $roh = trim((string) @file_get_contents($pfad));
+    if ($roh === '') { return array('leer', array()); }
+    $d = json_decode($roh, true);
+    if (!is_array($d)) { return array('ungueltig', array()); }
+    return array($roh === '{}' ? 'neu' : 'ok', $d);
+}
+
+/**
+ * Den ZUERST festgestellten Zustand der Konfiguration festhalten.
+ *
+ * Die Selbstheilung beseitigt den Schaden, den sie behebt - eine Pruefzeile,
+ * die spaeter nachsieht, faende eine heile Datei und meldete "in Ordnung".
+ * Ein geheilter Schaden ist aber kein Nicht-Schaden: die Zweitschrift kann
+ * aelter sein als das, was verlorenging, und die Ursache besteht fort.
+ * Deshalb gewinnt der erste Befund; nur die Heilung selbst wird angehaengt.
+ */
+function bw_config_zustand($setzen = null)
+{
+    static $z = '';
+    if ($setzen !== null) {
+        if ($z === '') {
+            $z = (string) $setzen;
+        } elseif ($setzen === 'zweitschrift' && strpos($z, 'zweitschrift') === false) {
+            $z .= '+zweitschrift';
+        }
+    }
+    return $z;
+}
+
+/**
+ * Taugt die Zweitschrift? Entschieden wird nach INHALT, nicht nach Form.
+ *
+ * Bis 0.9.18 entschied allein die Form der Konfiguration ('' oder '{}'), und
+ * die Zweitschrift wurde ungeprueft darueberkopiert. Damit galt der
+ * Aktualisierungsfall als Schaden, der echte Schaden fiel durch, und eine
+ * halb geschriebene Zweitschrift ersetzte die Konfiguration durch denselben
+ * Schrott. Merkmal ist jetzt das Aktionstoken: es ist der eine Wert, der auf
+ * jeder eingerichteten Anlage steht und dessen Verlust wehtut.
+ */
+function bw_zweitschrift_taugt($pfad)
+{
+    if (!is_file($pfad)) { return false; }
+    $d = json_decode((string) @file_get_contents($pfad), true);
+    return is_array($d) && isset($d['aktionstoken'])
+        && trim((string) $d['aktionstoken']) !== '';
+}
+
+/**
+ * Die Konfiguration lesen - und nur aus der angemeldeten Oberflaeche heilen.
+ *
+ * $erzeugen = false ist der unangemeldete Weg: der Loxone-Endpunkt liest die
+ * Konfiguration, BEVOR er das Token prueft. Bis 0.9.18 legte damit jeder
+ * Fremdaufruf aus dem Netz Verzeichnis und Konfigurationsdatei an - gemessen
+ * am 04.09.2026 unter PHP 7.4 und 8.4. Ein Endpunkt legt nichts an.
+ */
+function bw_config($erzeugen = true)
 {
     $p = bw_paths();
-    $roh = is_file($p['config']) ? trim((string) @file_get_contents($p['config'])) : '';
-    if (($roh === '' || $roh === '{}') && is_file($p['sicherung'])) {
-        @mkdir($p['configdir'], 0775, true);
-        @copy($p['sicherung'], $p['config']);
+    list($lage, $daten) = bw_json_lage($p['config']);
+
+    if ($lage === 'ungueltig') {
+        bw_config_zustand('kaputt');
+        if ($erzeugen) {
+            /* Die kaputte Datei bleibt liegen, statt beim naechsten Speichern
+             * ueberbuegelt zu werden - sonst ist die Ursache nicht mehr zu
+             * sehen. */
+            $beiseite = $p['config'] . '.kaputt.' . date('Ymd_His');
+            if (!is_file($beiseite) && @rename($p['config'], $beiseite)) {
+                bw_log('Die Konfiguration war unlesbar und liegt jetzt als '
+                     . basename($beiseite) . ' daneben.');
+            }
+            $daten = bw_config_heilen($p);
+            if ($daten !== null) { list($lage, $daten) = bw_json_lage($p['config']); }
+            else { $daten = array(); }
+        }
+    } elseif ($lage === 'fehlt' || $lage === 'leer') {
+        bw_config_zustand($lage);
+        if ($erzeugen) {
+            $g = bw_config_heilen($p);
+            if ($g !== null) { list($lage, $daten) = bw_json_lage($p['config']); }
+        }
+    } else {
+        bw_config_zustand($lage);       // 'ok' oder 'neu' (Aktualisierungsfall)
     }
-    return array_merge(bw_vorgaben(), bw_json_lesen($p['config']));
+    return array_merge(bw_vorgaben(), is_array($daten) ? $daten : array());
+}
+
+/** Einmal aus der Zweitschrift zuruecklesen, einmal melden. */
+function bw_config_heilen($p)
+{
+    static $getan = false;
+    if ($getan || !bw_zweitschrift_taugt($p['sicherung'])) { return null; }
+    $getan = true;
+    $d = bw_json_lesen($p['sicherung']);
+    if (!$d) { return null; }
+    if (!bw_json_schreiben($p['config'], $d, 0600)) {
+        bw_log('Die Konfiguration liess sich nicht aus der Zweitschrift '
+             . 'zurueckschreiben.');
+        return null;
+    }
+    bw_config_zustand('zweitschrift');
+    bw_log('Die Konfiguration war nicht lesbar und wurde aus der Zweitschrift '
+         . 'zurueckgeholt. Die Ursache besteht moeglicherweise fort.');
+    return $d;
 }
 
 function bw_config_speichern($cfg)
@@ -197,9 +313,39 @@ function bw_config_speichern($cfg)
     // 0600, nicht 0644: in dieser Datei steht das Aktionstoken, mit dem der
     // Miniserver den unangemeldeten Endpunkt erreicht.
     if (!bw_json_schreiben($p['config'], $cfg, 0600)) { return false; }
-    @copy($p['config'], $p['sicherung']);
-    @chmod($p['sicherung'], 0600);
+    /* Die Zweitschrift wird nur erneuert, wenn der gespeicherte Stand ein
+     * Aktionstoken traegt. Sonst kopierte ein Speichervorgang auf einer
+     * beschaedigten Anlage die Vorgabenlage darueber - und der letzte gute
+     * Stand waere weg. Und der Rueckgabewert wird gelesen: ein stiller
+     * Fehlschlag hier heisst, dass es beim naechsten Schaden nichts zu holen
+     * gibt. */
+    if (isset($cfg['aktionstoken']) && trim((string) $cfg['aktionstoken']) !== '') {
+        if (@copy($p['config'], $p['sicherung'])) {
+            @chmod($p['sicherung'], 0600);
+        } else {
+            bw_log('Die Zweitschrift ' . basename($p['sicherung'])
+                 . ' liess sich nicht erneuern.');
+        }
+    }
     return true;
+}
+
+/**
+ * Die Eintraege einer Tabelle aus quellen.json oder pflanzen.json.
+ *
+ * Schluessel mit fuehrendem Unterstrich sind Beschreibung der Tabelle
+ * (_hinweis, _quelle, _stand), nicht ihr Inhalt. Bis 0.9.18 filterten
+ * zwei Stellen genau den einen Namen _hinweis - eine Auswahlliste zeigte
+ * deshalb jede weitere Erklaerungszeile als waehlbaren Eintrag.
+ */
+function bw_tabelle($feld)
+{
+    $aus = array();
+    foreach ((array) $feld as $k => $v) {
+        if ($k !== '' && $k[0] === '_') { continue; }
+        $aus[$k] = $v;
+    }
+    return $aus;
 }
 
 function bw_vorlagen()
@@ -251,7 +397,10 @@ function bw_zone($schluessel)
 }
 
 function bw_quellen()      { return bw_json_lesen(bw_paths()['quellen']); }
-function bw_quellen_speichern($q) { return bw_json_schreiben(bw_paths()['quellen'], $q); }
+/* 0600: in 'http_url' kann eine Adresse der Form
+ * http://benutzer:kennwort@station/... stehen - bei Wetterstationen im
+ * Heimnetz nicht ungewoehnlich. */
+function bw_quellen_speichern($q) { return bw_json_schreiben(bw_paths()['quellen'], $q, 0600); }
 function bw_abbild()       { return bw_json_lesen(bw_paths()['datadir'] . '/abbild.json'); }
 function bw_verlauf()      { return bw_json_lesen(bw_paths()['datadir'] . '/verlauf.json'); }
 
@@ -303,7 +452,11 @@ function bw_token()
         bw_log('Die Sperrdatei fuer das Token liess sich nicht anlegen - '
              . 'es wird ohne Sperre erzeugt.');
         $cfg['aktionstoken'] = bw_token_erzeugen();
-        bw_config_speichern($cfg);
+        if (!bw_config_speichern($cfg)) {
+            bw_log('Das ohne Sperre erzeugte Aktionstoken liess sich nicht '
+                 . 'speichern - es wird nicht ausgeliefert.');
+            return '';
+        }
         return (string) $cfg['aktionstoken'];
     }
     if (@flock($fp, LOCK_EX)) {
@@ -317,9 +470,20 @@ function bw_token()
             }
         }
         @flock($fp, LOCK_UN);
+    } else {
+        /* Ohne Sperre wird NICHTS erzeugt - und das wird gesagt. Bis
+         * 0.9.18 gab die Funktion hier stumm einen Leerstring zurueck;
+         * bw_vorlage() baute daraus eine Importdatei mit 'token=', die
+         * in Loxone dauerhaft 403 bekommt, ohne dass es auffaellt. */
+        bw_log('Die Sperrdatei fuer das Token liess sich nicht sperren - '
+             . 'es wurde KEIN Token erzeugt.');
     }
     fclose($fp);
-    return (string) $cfg['aktionstoken'];
+    /* Ein Token, das nicht gespeichert werden konnte, wird auch nicht
+     * herausgegeben: lieber sichtbar nichts als unsichtbar Falsches. */
+    $stand = bw_config();
+    return trim((string) $stand['aktionstoken']) !== ''
+         ? (string) $stand['aktionstoken'] : '';
 }
 
 /* ---------------- Becherprobe ----------------
@@ -364,6 +528,25 @@ function bw_ungemessen()
  * im Wert zerlegt die Zeile, und der Miniserver sieht nur den Anfang. Der
  * Sperrgrund im Klartext geht deshalb ueber MQTT und aktion=roh, nicht hier.
  */
+/**
+ * Der Suchtext eines Feldes fuer die Befehlserkennung in Loxone.
+ *
+ * EINE Stelle fuer Importvorlage, Baustein-Liste und Sprachdatei. Das
+ * Trennzeichen davor ist Pflicht: Loxone sucht woertlich und nimmt den
+ * ersten Treffer. Die Antwortzeile setzt vor JEDEN Feldnamen ein
+ * Semikolon, auch vor den ersten (BEWAESSERUNG;OK=...) - ohne das
+ * Trennzeichen faende das Muster eines kurzen Feldes beim naechsten
+ * laengeren Namen, der darauf endet, die falsche Zahl.
+ *
+ * Bis 0.9.18 stand das Muster an einer Stelle mit Trennzeichen (der
+ * Importvorlage) und an acht Stellen der beiden Sprachdateien ohne. Die
+ * Sprachdatei traegt jetzt nur noch die Beschriftung mit Platzhalter.
+ */
+function bw_check($feld)
+{
+    return '\\i;' . $feld . '=' . '\\i' . '\\v';
+}
+
 function bw_status_felder()
 {
     // Drittes Feld: der NAME, unter dem der Eingang in Loxone Config
@@ -449,7 +632,8 @@ function bw_zonenzeile($schluessel)
         // Steht der Schluessel wenigstens in der Zonenliste? Dann ist es kein
         // falscher Name, sondern ein fehlendes Ergebnis.
         foreach (bw_zonen() as $bekannt) {
-            if ((string) $bekannt['schluessel'] === (string) $schluessel) {
+            if (isset($bekannt['schluessel'])
+                && (string) $bekannt['schluessel'] === (string) $schluessel) {
                 return array('_grund' => empty($a['ts'])
                     ? 'NOCH_NICHT_GERECHNET' : 'BERECHNUNGSFEHLER',
                     '_text' => empty($a['ts'])
@@ -494,8 +678,9 @@ function bw_selbsttest_ausgabe()
     $s = $p['bindir'] . '/dienst.sh';
     if (!is_file($s)) { return 'dienst.sh nicht gefunden: ' . $s; }
     $a = array(); $c = 0;
-    // escapeshellarg statt escapeshellcmd: letzteres laesst ein Leerzeichen
-    // im Pfad unangetastet, und der Aufruf zerfiele in zwei Worte.
+    // Der Pfad wird als ARGUMENT maskiert. Die Maskierung fuer eine ganze
+    // Kommandozeile laesst ein Leerzeichen im Pfad unangetastet, und der
+    // Aufruf zerfiele in zwei Worte.
     @exec(escapeshellarg($s) . ' selbsttest 2>&1', $a, $c);
     return implode("\n", $a);
 }
@@ -528,7 +713,7 @@ function bw_vorlage()
             // bestehenden endet, traefe sonst die falsche Stelle. Gemessen
             // kollidiert heute nichts - es ist Vorsorge fuer das naechste
             // Feld, und drei Linien im Bestand halten es schon so.
-            'check'   => '\i;' . $feld . '=\i\v',
+            'check'   => bw_check($feld),
         );
     }
     return array('bewaesserung_status.xml', bw_xml_virtual_in_http(array(
@@ -646,7 +831,7 @@ function bw_broker_erkennen()
                 $blaetter[] = array('thema' => $thema, 'pfad' => $k,
                                     'wert' => $v, 'einheit' => '');
                 if (!isset($tab[$k])) { continue; }
-                foreach ((array) $tab[$k]['groessen'] as $g) {
+                foreach (bw_tabelle($tab[$k]['groessen']) as $g => $unused) {
                     $felder[$g] = array('thema' => $thema, 'pfad' => $k,
                                         'wert' => $v,
                                         'einheit' => (string) $tab[$k]['einheit']);
@@ -831,7 +1016,11 @@ function bw_dienst($befehl)
     }
     $ausgabe = array();
     $code = 0;
-    @exec(escapeshellcmd($skript) . ' ' . escapeshellarg($befehl) . ' 2>&1', $ausgabe, $code);
+    // Der Pfad wird als ARGUMENT maskiert, nicht als Kommandozeile -
+    // dieselbe Lehre wie bei den beiden Aufrufen weiter oben: die
+    // Kommandozeilen-Maskierung laesst ein Leerzeichen im Pfad
+    // unangetastet, und der Aufruf zerfiele in zwei Worte.
+    @exec(escapeshellarg($skript) . ' ' . escapeshellarg($befehl) . ' 2>&1', $ausgabe, $code);
     return array($code === 0 ? 1 : 0, implode("\n", $ausgabe));
 }
 
@@ -851,7 +1040,8 @@ function bw_mqtt_zustand()
 {
     $p = bw_paths();
     $leer = array('gefunden' => 0, 'autostart' => 0, 'fassung' => 0, 'udpport' => 0, 'broker' => '',
-                  'brokerport' => '', 'user' => '', 'pw' => '', 'lokal' => 0);
+                  'brokerport' => '', 'user' => '', 'pw_gesetzt' => 0,
+                  'lokal' => 0);
     if ($p['home'] === '') {
         return $leer;
     }
@@ -884,7 +1074,11 @@ function bw_mqtt_zustand()
         'broker'     => (string) $hol('Brokerhost', 'brokerhost'),
         'brokerport' => (string) $hol('Brokerport', 'brokerport'),
         'user'       => (string) $hol('Brokeruser', 'brokeruser'),
-        'pw'         => (string) $hol('Brokerpass', 'brokerpass'),
+        /* NUR die Frage 'ist eines hinterlegt', nicht das Kennwort. Kein
+         * Aufrufer im Webfrontend hat es je gelesen; ein Geheimnis, das
+         * man nicht holt, kann keine Fehlerausgabe ausplaudern. Der
+         * Dienst holt es sich selbst aus derselben general.json. */
+        'pw_gesetzt' => trim((string) $hol('Brokerpass', 'brokerpass')) !== '' ? 1 : 0,
         'lokal'      => in_array((string) $hol('Uselocalbroker', 'uselocalbroker'), array('1', 'true'), true) ? 1 : 0,
     );
 }
@@ -1039,6 +1233,63 @@ function bw_t($schluessel)
 
 
 /**
+ * Taugt ein Wert ueberhaupt fuer diese Konfiguration?
+ *
+ * Erste Stufe, ohne Kenntnis des Schluessels: kein Feld, kein Objekt, kein
+ * null, keine Steuerzeichen, nicht endlos lang. bw_sicherung_lesen() hat bis
+ * 0.9.18 NUR die Schluessel geprueft - gemessen am 04.09.2026 gingen ein Feld,
+ * ein null, ein Zeilenumbruch, 100 000 Zeichen und "sofort" als Taktzeit
+ * anstandslos durch.
+ */
+function bw_wert_taugt($w)
+{
+    if (is_array($w) || is_object($w) || is_null($w)) { return false; }
+    if (is_bool($w)) { return true; }
+    $s = (string) $w;
+    if (strlen($s) > 512) { return false; }
+    return preg_match('/[\x00-\x08\x0A-\x1F\x7F]/', $s) !== 1;
+}
+
+/**
+ * Ist der Wert fuer DIESEN Schluessel zulaessig?
+ *
+ * Zweite Stufe, gegen dieselben Muster, die das Formular benutzt. Die Art
+ * kommt aus den Vorgaben: ein Vorgabewert vom Typ int verlangt eine
+ * nichtnegative ganze Zahl, ein float eine Zahl, alles Uebrige eine
+ * Zeichenkette mit eigenem Muster.
+ */
+function bw_wert_pruefen($k, $w)
+{
+    $v = bw_vorgaben();
+    if (!array_key_exists($k, $v)) { return false; }
+    $soll = $v[$k];
+    if (is_int($soll)) {
+        if (is_bool($w)) { return true; }
+        return is_numeric($w) && (float) $w >= 0 && (float) $w == (int) (float) $w;
+    }
+    if (is_float($soll)) { return is_numeric($w); }
+    $s = (string) $w;
+    switch ($k) {
+        case 'rechenzeit':
+        case 'fenster_von':
+        case 'fenster_bis':
+            return preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', $s) === 1;
+        case 'mqtt_topic':
+            return preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $s) === 1;
+        case 'aktionstoken':
+            /* Weit gefasst: zugelassen wird, was ohne Kodierung in eine
+             * Adresse passt. Ein zu enges Muster verwirft ein von Hand
+             * gesetztes Token, und der Schaden ist derselbe wie bei einem
+             * verlorenen. Die Laenge 0 bleibt zulaessig - "kein Token
+             * gesichert" ist kein unzulaessiger Wert. */
+            return preg_match('/^[A-Za-z0-9_.\-]{0,64}$/', $s) === 1;
+        case 'vorlage':
+            return preg_match('/^[a-z0-9_]{0,40}$/', $s) === 1;
+    }
+    return is_string($w);
+}
+
+/**
  * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
  *
  * Die sieben Punkte aus REGELN_2, und der wichtigste ist der dritte: eine
@@ -1059,7 +1310,8 @@ function bw_sicherung_lesen($roh)
     if (!is_array($daten)) {
         return array(null, array(bw_t('EINST.SICH_KEIN_JSON')), 0);
     }
-    $neu = bw_vorgaben();
+    $vorgaben = bw_vorgaben();
+    $neu = $vorgaben;
     $bekannt = array_keys($neu);
     $anzahl = 0;
     foreach ($daten as $k => $w) {
@@ -1068,6 +1320,19 @@ function bw_sicherung_lesen($roh)
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
             continue;
         }
+        if (!bw_wert_taugt($w) || !bw_wert_pruefen($k, $w)) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_WERT'),
+                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        /* Art angleichen, Wert nicht aendern: die Pruefung oben hat
+         * schon entschieden, dass er zulaessig ist. Ohne das stuende
+         * nach dem Zurueckspielen eine Zeichenkette da, wo das Formular
+         * eine Zahl schreibt. */
+        $soll = $vorgaben[$k];
+        if (is_int($soll))        { $w = (int) $w; }
+        elseif (is_float($soll))  { $w = (float) $w; }
+        else                      { $w = (string) $w; }
         $neu[$k] = $w;
         $anzahl++;
     }
@@ -1128,16 +1393,32 @@ function bw_merkwort()
     if (!is_dir($verz)) {
         @mkdir($verz, 0775, true);
     }
-    /* Rechte VOR dem Inhalt: zwischen Anlegen und chmod laege sonst ein
-     * Fenster, in dem das Merkwort fuer alle lesbar ist. */
-    $tmp = $datei . '.tmp';
+    /* Die Rechte werden gesetzt, BEVOR die Datei ihren endgueltigen
+     * Namen bekommt: unter diesem Namen gibt es sie nie mit offenen
+     * Rechten. (Bis 0.9.18 behauptete der Kommentar hier 'Rechte VOR dem
+     * Inhalt' - das tat der Code nie.)
+     *
+     * Der Name der Nebendatei traegt Prozessnummer und Zufall, wie in
+     * bw_json_schreiben: zwei offene Reiter schrieben sonst in dieselbe
+     * Datei, und einer der beiden Umbenennungen traefe eine, die der
+     * andere gerade fuellt. */
+    $tmp = $datei . '.tmp.' . getmypid() . '.' . bin2hex(random_bytes(4));
+    $steht = false;
     if (@file_put_contents($tmp, $neu) !== false) {
         @chmod($tmp, 0600);
-        if (@rename($tmp, $datei)) {
-            @chmod($datei, 0600);
-        } else {
-            @unlink($tmp);
-        }
+        if (@rename($tmp, $datei)) { $steht = true; }
+        else { @unlink($tmp); }
+    }
+    if (!$steht) {
+        /* Kein Merkwort auf der Platte heisst: jeder Aufruf bekaeme ein
+         * anderes, und der Wachposten wiese JEDES Speichern ab - ohne
+         * dass irgendwo stuende, warum. Lieber leer zurueckgeben; der
+         * Wachposten faellt dann geschlossen aus und nennt denselben
+         * Grund. */
+        bw_log('Das Formularmerkwort liess sich nicht schreiben ('
+             . $datei . ') - das Speichern wird abgewiesen.');
+        $wort = '';
+        return $wort;
     }
     $wort = $neu;
     return $wort;

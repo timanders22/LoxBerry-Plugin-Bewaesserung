@@ -435,11 +435,21 @@ class Sammler:
             if time.time() - ts > hoechstalter:
                 return None, "mqtt_veraltet"
             roh = nutzlast
+            d = self.mqtt_json(str(f.get("thema") or ""), nutzlast)
             if f.get("pfad"):
-                d = self.mqtt_json(str(f.get("thema") or ""), nutzlast)
                 if d is _KAPUTT:
                     return None, "mqtt_kein_json"
                 roh = json_pfad(d, str(f["pfad"]))
+            elif isinstance(d, dict) and d:
+                # Die Nachricht traegt MEHRERE Werte (JSON oder die
+                # Feldliste des Ecowitt-Uploadprotokolls), aber es ist kein
+                # Pfad eingetragen. Bis 0.9.18 ging die ganze Zeichenkette
+                # an zahl(), und das nahm die erste Zahl darin - aus
+                # "PASSKEY=ABC123&stationtype=GW3000A..." wurde ein
+                # Messwert. Gemessen am 04.09.2026: 123.0, ohne jede
+                # Fehlermeldung. Die Selbstpruefung dieses Moduls
+                # beschreibt genau diesen Fall.
+                return None, "pfad_fehlt"
         elif weg == "http":
             if self.roh_http is None:
                 return None, "http_nichts"
@@ -512,6 +522,16 @@ class Sammler:
             if stunden < MITTEL_MINDESTSTUNDEN:
                 # Ein halber Tag Strahlung gemittelt ist kein Tagesmittel.
                 return None, "abdeckung_zu_kurz"
+            # Und die Spanne allein genuegt nicht: zwei Messpunkte,
+            # achtzehn Stunden auseinander, bestanden die Pruefung bis
+            # 0.9.18 und ergaben ein "Tagesmittel" aus zwei
+            # Momentanwerten. Verlangt werden deshalb mindestens drei
+            # Punkte und im Schnitt einer je vier Stunden. Enger geht es
+            # nicht ohne die groesste Luecke mitzufuehren, und die stuende
+            # nicht in tagesextreme.json - eine bestehende Anlage haette
+            # sie nach dem Update nicht.
+            if int(k["anzahl"]) < 3 or int(k["anzahl"]) * 4 < int(stunden):
+                return None, "zu_wenige_messpunkte"
             return k["summe"] / k["anzahl"], ""
         return k["letzt"], ""
 
