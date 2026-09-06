@@ -52,6 +52,19 @@ PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/dienst.pid"
 SOLL="$PDATA/soll_laufen"
 LOGDATEI="$PLOG/bewaesserung.log"
+# Eigene Datei fuer alles, was NEBEN dem Protokoll anfaellt: Meldungen des
+# Starts und alles, was das Programm nach stderr schreibt, bevor sein
+# Protokoll steht (Syntaxfehler, fehlende Bibliothek, Abbruch im Importpfad).
+#
+# Bis 0.9.24 ging diese Ausgabe mit ">> $LOGDATEI" in DIESELBE Datei, die
+# bin/bewaesserung_dienst.py mit einem umlaufenden Handler fuehrt. Das haelt einen zweiten,
+# anhaengenden Deskriptor auf diese Datei offen. Beim Ueberlauf benennt der
+# Handler um, beim Leeren der Ramdisk verschwindet die Datei ganz - der
+# Deskriptor dieser Shell zeigt danach weiter auf die weggeschobene oder
+# geloeschte Datei, und was er traegt, sieht niemand mehr. Am Geraet gemessen
+# (06.09.2026): sieben Dienste hielten so eine geloeschte Protokolldatei offen.
+# Regel: genau einer schreibt in eine Protokolldatei.
+STARTLOG="$PLOG/bewaesserung_start.log"
 SKRIPT="$SELF/bewaesserung_dienst.py"
 # Welcher Python?
 #
@@ -127,16 +140,18 @@ starten() {
         return 1
     fi
     touch "$SOLL"
-    # Ausgabe geht in die Logdatei. Das Python-Skript protokolliert deshalb
-    # NICHT zusaetzlich nach stdout - sonst stuende jede Zeile doppelt darin.
-    nohup "$PY" "$SKRIPT" >> "$LOGDATEI" 2>&1 &
+    # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
+    # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
+    # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
+    : > "$STARTLOG"
+    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 &
     echo $! > "$PID"
     sleep 1
     if laeuft; then
         echo "gestartet (PID $(cat "$PID"))"
         return 0
     fi
-    echo "FEHLER: Start fehlgeschlagen - siehe $LOGDATEI"
+    echo "FEHLER: Start fehlgeschlagen - siehe $STARTLOG und $LOGDATEI"
     rm -f "$PID"
     return 1
 }
@@ -207,7 +222,7 @@ case "$1" in
         # angehaltener Dienst bleibt angehalten.
         if [ -f "$SOLL" ] && ! laeuft; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
-            starten >> "$LOGDATEI" 2>&1
+            starten >> "$STARTLOG" 2>&1
         fi
         ;;
     *)
