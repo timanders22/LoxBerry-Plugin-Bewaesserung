@@ -15,6 +15,15 @@ if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     SELF=$(cd "$(dirname "$0")" && pwd)
     BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
 fi
+# Fail-closed - preupgrade.sh und uninstall haben diese Bremse seit jeher,
+# hier fehlte sie (der Kommentar in preupgrade.sh:14 behauptete das
+# Gegenteil). '$0' ist der Arbeitsordner des Installateurs unter /tmp;
+# '$SELF/../..' ergibt dann '/tmp' - ein Verzeichnis, das '[ -d ]' besteht.
+# Ein LoxBerry hat immer config/system/general.json; ein Rest hat sie nie.
+if [ -z "$BASE" ] || [ ! -f "$BASE/config/system/general.json" ]; then
+    echo "<FAIL> Der LoxBerry-Ordner ist nicht bestimmbar ($BASE) - es wird NICHTS angelegt."
+    exit 2
+fi
 
 PBIN="$BASE/bin/plugins/$PFOLDER"
 PDATA="$BASE/data/plugins/$PFOLDER"
@@ -34,7 +43,37 @@ done
 # 0600, nicht 0644: in bewaesserung.json steht das Aktionstoken.
 chmod 600 "$PCONFIG"/*.json 2>/dev/null
 
+# ---------- Python ----------
+PY3=$(command -v python3)
+if [ -z "$PY3" ]; then
+    echo "<FAIL> python3 ist nicht vorhanden."
+    exit 1
+fi
+PYVER=$("$PY3" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)
+echo "<INFO> Gefundenes Python: $PYVER"
+# Untergrenze 3.8 - und die bleibt so.
+#
+# Der Quelltext kommt mit 3.8 aus: 'from __future__ import annotations' macht
+# die Schreibweisen 'float | None' und 'dict[str, Any]' zu blossen
+# Zeichenketten, die zur Laufzeit gar nicht ausgewertet werden, und
+# asyncio.run gibt es seit 3.7. Die Untergrenze anzuheben, weil LoxBerry 3
+# ohnehin Python 3.9 mitbringt, wuerde also nichts gewinnen und nur
+# Installationen ausschliessen, auf denen das Plugin laufen wuerde.
+"$PY3" -c 'import sys;sys.exit(0 if sys.version_info>=(3,8) else 1)' || {
+    echo "<FAIL> Python 3.8 oder neuer wird gebraucht, gefunden wurde $PYVER."
+    exit 1
+}
+
 # Aus der Sicherung zurueckholen, wenn die Datei leer ist.
+#
+# Der Python-Block steht seit 0.9.22 DARUEBER. Bis 0.9.21 stand er 59 Zeilen
+# weiter unten, und die Lesbarkeitspruefung ein paar Zeilen tiefer benutzte
+# "$PY3", bevor er zugewiesen war. Gemessen mit 'bash -x': die Trace-Zeile
+# lautete
+#     + '' -c 'import json,sys;json.load(open(sys.argv[1]))' .../bewaesserung.json
+# 'LESBAR' blieb damit IMMER 0, die Bedingung darunter war immer wahr, und
+# die Zweitschrift wurde bedingungslos ueber die Konfiguration kopiert -
+# auch ueber eine heile. Der Kommentar sagte das Gegenteil zu.
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
@@ -71,58 +110,36 @@ fi
 # - mit dem Aktionstoken darin.
 chmod 600 "$PCONFIG"/*.json 2>/dev/null
 
-# ---------- Eigentuemer richtigstellen ----------
+# ---------- Eigentuemer ----------
 #
-# Das hier ist die wichtigste Zeile dieses Skripts, und sie fehlte bis 0.9.0.
+# BERICHTIGT 06.09.2026. Hier stand: "LoxBerry fuehrt postinstall.sh als root
+# aus" und darunter, dies sei "die wichtigste Zeile dieses Skripts". Beides
+# ist falsch. Gemessen an sbin/plugininstall.pl eines LoxBerry 4,
+# Zeile 1310:
 #
-# LoxBerry fuehrt postinstall.sh als root aus. Alles, was hier entsteht,
-# gehoert danach root: die mit 'echo {} >' angelegten Konfigurationsdateien
-# ebenso wie die mit 'cp -p' aus der Sicherung zurueckgeholten - cp -p
-# uebernimmt zwar Rechte und Zeitstempel, aber der Eigentuemer richtet sich
-# nach dem, der kopiert.
+#   command => "cd \"$tempfolder\" && $sudobin -n -u loxberry \"$script\" ..."
 #
-# Oberflaeche und Dienst laufen als loxberry. Mit root-eigenen Dateien
-# konnte die Oberflaeche sie zwar LESEN (0644), aber nicht schreiben. Wer
-# nach der Installation eine Zone anlegte, klickte auf Speichern und bekam
-# eine Fehlermeldung - oder schlimmer: gar keine, weil das Schreiben mit @
-# unterdrueckt war. Das betraf nicht nur das Update, sondern schon die
-# Erstinstallation.
+# Das Skript laeuft als loxberry, nicht als root. Eine root-eigene Datei
+# koennte es also gar nicht umschreiben - und muss es auch nicht: der
+# Installateur chownt die vier Baeume selbst, VOR diesem Skript (:918
+# config/, :937 bin/, :1022 data/, :1042 log/).
+#
+# Der Aufruf bleibt trotzdem stehen: die Zweitschriften NEBEN dem
+# Konfigordner fasst der Installateur nicht an, und die entstehen hier. Was
+# nicht bleibt, ist die Erfolgs- bzw. Fehlermeldung: ein <FAIL> ueber einen
+# Zustand, den das Skript nicht herstellen kann und den der Installateur
+# schon hergestellt hat, schickt den Betreiber auf die Suche nach einem
+# Fehler, den es nicht gibt.
 if id loxberry >/dev/null 2>&1; then
-    # Der Rueckgabewert wird gelesen. Bis 0.9.18 stand die Erfolgsmeldung
-    # unbedingt darunter: schlug chown fehl, sagte das Protokoll trotzdem
-    # <OK>, und der Anwender suchte den Speicherfehler in der Oberflaeche.
-    if chown -R loxberry:loxberry "$PCONFIG" "$PDATA" "$PLOG" "$PBIN" 2>/dev/null; then
-        for BKD in "$BASE/config/plugins/$PFOLDER".backup.*; do
-            [ -e "$BKD" ] && chown loxberry:loxberry "$BKD" 2>/dev/null
-        done
-        echo "<OK> Eigentuemer der Konfigurations-, Daten- und Protokolldateien: loxberry."
-    else
-        echo "<FAIL> Eigentuemer nicht gesetzt - die Oberflaeche kann dann nicht speichern."
-    fi
+    chown -R loxberry:loxberry "$PCONFIG" "$PDATA" "$PLOG" "$PBIN" 2>/dev/null
+    for BKD in "$BASE/config/plugins/$PFOLDER".backup.*; do
+        [ -e "$BKD" ] && chown loxberry:loxberry "$BKD" 2>/dev/null
+    done
+    echo "<INFO> Eigentuemer der Zweitschriften nachgezogen (die Plugin-Ordner setzt der Installateur selbst)."
 else
     echo "<INFO> Benutzer loxberry nicht gefunden - Eigentuemer nicht geaendert."
 fi
 
-# ---------- Python ----------
-PY3=$(command -v python3)
-if [ -z "$PY3" ]; then
-    echo "<FAIL> python3 ist nicht vorhanden."
-    exit 1
-fi
-PYVER=$("$PY3" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)
-echo "<INFO> Gefundenes Python: $PYVER"
-# Untergrenze 3.8 - und die bleibt so.
-#
-# Der Quelltext kommt mit 3.8 aus: 'from __future__ import annotations' macht
-# die Schreibweisen 'float | None' und 'dict[str, Any]' zu blossen
-# Zeichenketten, die zur Laufzeit gar nicht ausgewertet werden, und
-# asyncio.run gibt es seit 3.7. Die Untergrenze anzuheben, weil LoxBerry 3
-# ohnehin Python 3.9 mitbringt, wuerde also nichts gewinnen und nur
-# Installationen ausschliessen, auf denen das Plugin laufen wuerde.
-"$PY3" -c 'import sys;sys.exit(0 if sys.version_info>=(3,8) else 1)' || {
-    echo "<FAIL> Python 3.8 oder neuer wird gebraucht, gefunden wurde $PYVER."
-    exit 1
-}
 
 # ---------- venv nur fuer das freiwillige Paket ----------
 if [ ! -x "$VENV/bin/python3" ]; then
@@ -186,6 +203,7 @@ echo "<INFO> Selbsttest:"
 # Mittagstemperatur - und ET0 nach der Messung im README 1,95 statt 5,40 mm.
 LANG_SICHER="$BASE/data/plugins/$PFOLDER.upgrade_sicherung"
 if [ -d "$LANG_SICHER" ]; then
+    LANG_FEHL=0
     for LANG_F in tagesextreme.json nachtplan.json zustand.json; do
         if [ -f "$LANG_SICHER/$LANG_F" ] \
            && [ ! -s "$BASE/data/plugins/$PFOLDER/$LANG_F" ]; then
@@ -195,10 +213,23 @@ if [ -d "$LANG_SICHER" ]; then
                 echo "<OK> $LANG_F ueber das Update gerettet."
             else
                 echo "<FAIL> $LANG_F liess sich NICHT zurueckholen."
+                LANG_FEHL=1
             fi
         fi
     done
-    rm -rf "$LANG_SICHER" 2>/dev/null
+    # Weggeraeumt wird nur, wenn NICHTS gescheitert ist.
+    #
+    # Bis 0.9.21 stand das rm ausserhalb jeder Erfolgspruefung: genau die
+    # Datei, deren Verlust dieses Skript oben ausfuehrlich begruendet
+    # (tagesextreme.json - nach einem Mittags-Update ist Tmin die
+    # Mittagstemperatur, ET0 1,95 statt 5,40 mm), wurde nach einem
+    # gescheiterten Zurueckholen endgueltig weggeworfen, obwohl sie noch
+    # dalag und beim naechsten Lauf zu retten gewesen waere.
+    if [ "$LANG_FEHL" = "0" ]; then
+        rm -rf "$LANG_SICHER" 2>/dev/null
+    else
+        echo "<INFO> Die Update-Sicherung bleibt liegen ($LANG_SICHER) - beim naechsten Lauf wird es erneut versucht."
+    fi
 fi
 
 # ---------- Dienst wieder starten, wenn er vorher lief ----------

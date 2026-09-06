@@ -654,6 +654,183 @@ function bw_pruefungen()
                 : bw_t('TEST.A_VORLAGE_KAPUTT'));
     }
 
+    /* --- Neu in 0.9.22: die drei Stellen, die auseinanderlaufen koennen ---
+     *
+     * Alle drei messen die AUSGABE, nicht die Absicht: die Datei index.php
+     * wird gelesen, nicht das, was sie tun sollte.
+     */
+    /* bw_oberflaechendateien() gibt 'Dateiname => INHALT' zurueck, nicht
+     * Pfade. Beim ersten Anlauf dieser drei Zeilen stand hier ein
+     * file_get_contents() auf den Schluessel - beide Zeilen meldeten
+     * dauerhaft "nicht feststellbar", und das sieht aus wie eine Pruefung.
+     * "Geprueft und in Ordnung" und "konnte nicht pruefen" sind zwei
+     * verschiedene Ausgaenge. */
+    $bw_dateien = bw_oberflaechendateien();
+    $bw_ip = isset($bw_dateien['index.php']) ? (string) $bw_dateien['index.php'] : '';
+
+    /* (1) Themenliste des Reiters MQTT gegen den Sendecode.
+     *
+     * Die Tabelle im Reiter MQTT ist die Anleitung; sie sagt dem Anwender,
+     * welche Themen es gibt. Nichts hielt sie bis 0.9.21 gegen
+     * bin/bewaesserung_dienst.py. Heute stimmt sie - es fehlte der
+     * Waechter, der es beim naechsten neuen Thema merkt. */
+    $bw_py = '';
+    $bw_pyd = bw_paths()['bindir'] . '/bewaesserung_dienst.py';
+    if (is_file($bw_pyd)) { $bw_py = (string) @file_get_contents($bw_pyd); }
+    if ($bw_ip === '' || $bw_py === '') {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_THEMENLISTE'),
+                                  bw_t('TEST.A_THEMENLISTE_KEINE'));
+    } else {
+        /* Globale Themen und Zonenthemen werden GETRENNT verglichen.
+         * Sie stehen im Quelltext in verschiedener Gestalt: global als
+         * p["name"], je Zone als p["%s/name" % s]. Wer beide in einen Topf
+         * wirft, bekommt acht Scheinbefunde - beim ersten Anlauf dieser
+         * Zeile am 06.09.2026 genau das. */
+        $bw_tab = array();
+        $bw_tab_z = array();
+        if (preg_match_all("/'([a-z0-9_]+)' => 'MQTT\.B_(ZONE_)?/", $bw_ip, $bw_m,
+                           PREG_SET_ORDER)) {
+            foreach ($bw_m as $bw_tr) {
+                if (!empty($bw_tr[2])) { $bw_tab_z[] = $bw_tr[1]; }
+                else { $bw_tab[] = $bw_tr[1]; }
+            }
+        }
+        $bw_tab = array_values(array_unique($bw_tab));
+        $bw_tab_z = array_values(array_unique($bw_tab_z));
+        $bw_code = array();
+        if (preg_match_all('/[^"]p\["([a-z0-9_]+)"\]\s*=/', $bw_py, $bw_m2)) {
+            $bw_code = array_values(array_unique($bw_m2[1]));
+        }
+        $bw_code_z = array();
+        if (preg_match_all('/p\["%s\/([a-z0-9_]+)"/', $bw_py, $bw_m3)) {
+            $bw_code_z = array_values(array_unique($bw_m3[1]));
+        }
+        $bw_fehl = array_merge(
+            array_diff($bw_tab, $bw_code), array_diff($bw_code, $bw_tab),
+            array_diff($bw_tab_z, $bw_code_z), array_diff($bw_code_z, $bw_tab_z));
+        $bw_anz = count($bw_tab) + count($bw_tab_z);
+        $zeilen[] = bw_pruefzeile($bw_anz === 0 ? -1 : ($bw_fehl ? 0 : 1),
+            bw_t('TEST.F_THEMENLISTE'),
+            $bw_anz === 0
+                ? bw_t('TEST.A_THEMENLISTE_KEINE')
+                : ($bw_fehl
+                    ? sprintf(bw_t('TEST.A_THEMENLISTE_FEHL'), bw_e(implode(', ', $bw_fehl)))
+                    : sprintf(bw_t('TEST.A_THEMENLISTE_OK'), $bw_anz)));
+    }
+
+    /* (2) Tragen die Muster der Feldtabelle das Trennzeichen?
+     *
+     * Die Tabelle in Schritt 1 des Reiters "Einbindung in Loxone" wird
+     * ABGESCHRIEBEN. Bis 0.9.21 stand ihr Muster von Hand da, ohne
+     * Semikolon, waehrend bw_check() und die Baustein-Liste eines MIT
+     * Semikolon zeigten - zwei Anleitungen fuer dieselbe Sache auf
+     * demselben Reiter. Gemessen: 0 von 10 gegen 4 von 4. */
+    if ($bw_ip === '') {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_ABSCHRIFT'),
+                                  bw_t('TEST.A_ABSCHRIFT_KEINE'));
+    } else {
+        /* Gesucht wird die Zeichenfolge Rueckstrich-i, die NICHT von einem
+         * Semikolon gefolgt wird - genau das ist ein von Hand geschriebenes
+         * Suchmuster ohne Trennzeichen. Wer die Muster ueber bw_check()
+         * ausgibt, hat keine einzige solche Stelle in der Datei.
+         * Gemessen am 06.09.2026: 0.9.21 zwei Stellen, 0.9.22 keine. */
+        $bw_ohne = preg_match_all('/\\\\i(?!;)/', $bw_ip);
+        $zeilen[] = bw_pruefzeile($bw_ohne ? 0 : 1, bw_t('TEST.F_ABSCHRIFT'),
+            $bw_ohne ? sprintf(bw_t('TEST.A_ABSCHRIFT_FEHL'), (int) $bw_ohne)
+                     : bw_t('TEST.A_ABSCHRIFT_OK'));
+    }
+
+    /* (3) Namensvorschlaege gegen die Titel der Importvorlage.
+     *
+     * Bis 0.9.21 nannte die Baustein-Liste "BEW_GIESSEN", waehrend die
+     * Vorlage "Bewaesserung heute Nacht giessen" anlegt. Wer beides tat,
+     * hatte zwei virtuelle Eingaenge auf derselben Adresse. */
+    $bw_paare = array('N01' => 'GIESSEN', 'N02' => 'DURCHLAEUFE',
+                      'N03' => 'ET0', 'N04' => 'REICHT');
+    $bw_felder = bw_status_felder();
+    $bw_un = array();
+    foreach ($bw_paare as $bw_nk => $bw_fk) {
+        $bw_soll = isset($bw_felder[$bw_fk]) ? bw_t($bw_felder[$bw_fk][2]) : '';
+        if ($bw_soll === '' || bw_t('BAUSTEIN.' . $bw_nk) !== $bw_soll) {
+            $bw_un[] = $bw_nk;
+        }
+    }
+    $zeilen[] = bw_pruefzeile($bw_un ? 0 : 1, bw_t('TEST.F_NAMEN'),
+        $bw_un ? sprintf(bw_t('TEST.A_NAMEN_FEHL'), bw_e(implode(', ', $bw_un)))
+               : sprintf(bw_t('TEST.A_NAMEN_OK'), count($bw_paare)));
+
+    /* --- Neu in 0.9.22: liefern die eingerichteten Messgroessen? ---
+     *
+     * Gemessen wird am Abbild (wer hat zuletzt geliefert) und an der
+     * zuletzt empfangenen Nutzlast (warum nicht). Der wichtigste Fall ist
+     * der, den die Anlage am 06.09.2026 ueber Monate hatte: MQTT-Weg mit
+     * den JSON-Pfaden der HTTP-Vorlage. Die Nutzlast eines Ecowitt-Gateways
+     * ist ueber MQTT die Feldliste des Uploadprotokolls, kein JSON - ein
+     * Pfad mit Punkt oder eckiger Klammer findet darin nie etwas. Das
+     * Plugin sagte bis dahin nur, DASS nichts ankommt.
+     */
+    $bw_qz = bw_quellen();
+    $bw_qf = isset($bw_qz['felder']) && is_array($bw_qz['felder'])
+           ? $bw_qz['felder'] : array();
+    $bw_ein = array();
+    foreach ($bw_qf as $bw_g => $bw_e2) {
+        if (is_array($bw_e2) && !empty($bw_e2['weg'])) { $bw_ein[$bw_g] = $bw_e2; }
+    }
+    if (!$bw_ein) {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_QUELLEN'),
+                                  bw_t('TEST.A_QUELLEN_KEINE'));
+    } else {
+        $bw_ab = bw_abbild();
+        $bw_hk = isset($bw_ab['herkunft']) && is_array($bw_ab['herkunft'])
+               ? $bw_ab['herkunft'] : array();
+        $bw_stumm = array();
+        foreach ($bw_ein as $bw_g => $bw_e2) {
+            if ((isset($bw_hk[$bw_g]) ? $bw_hk[$bw_g] : '') !== 'station') {
+                $bw_stumm[] = $bw_g;
+            }
+        }
+        /* Die Diagnose: JSON-Pfad auf einer Nutzlast, die kein JSON ist. */
+        $bw_roh = bw_json_lesen(bw_paths()['datadir'] . '/roh.json');
+        $bw_nutz = isset($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])
+                 ? $bw_roh['mqtt'] : array();
+        $bw_bruch = array();
+        foreach ($bw_ein as $bw_g => $bw_e2) {
+            if ((string) $bw_e2['weg'] !== 'mqtt') { continue; }
+            $bw_pf2 = isset($bw_e2['pfad']) ? (string) $bw_e2['pfad'] : '';
+            if ($bw_pf2 === '' || (strpos($bw_pf2, '[') === false
+                                   && strpos($bw_pf2, '.') === false)) { continue; }
+            $bw_th = isset($bw_e2['thema']) ? (string) $bw_e2['thema'] : '';
+            if (!isset($bw_nutz[$bw_th]['nutzlast'])) { continue; }
+            $bw_nl = (string) $bw_nutz[$bw_th]['nutzlast'];
+            if (json_decode($bw_nl, true) !== null) { continue; }   // ist JSON
+            if (strpos($bw_nl, '=') !== false && strpos($bw_nl, '&') !== false) {
+                $bw_bruch[] = $bw_g;
+            }
+        }
+        $bw_zusatz = $bw_bruch
+            ? ' ' . sprintf(bw_t('TEST.A_QUELLEN_VORLAGE'),
+                            bw_e(implode(', ', $bw_bruch)))
+            : '';
+        if (!$bw_stumm) {
+            $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_QUELLEN'),
+                sprintf(bw_t('TEST.A_QUELLEN_OK'), count($bw_ein)));
+        } elseif (count($bw_stumm) === count($bw_ein)) {
+            /* ALLE stumm ist ein Befund - das ist nie ein Zufall. */
+            $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_QUELLEN'),
+                sprintf(bw_t('TEST.A_QUELLEN_ALLE'), count($bw_ein),
+                        bw_e(implode(', ', $bw_stumm))) . $bw_zusatz);
+        } else {
+            /* Einige stumm ist ein Hinweis, kein Befund: eine Groesse, die
+             * die Station gar nicht sendet (Taupunkt beim GW3000A), waere
+             * sonst dauerhaft rot - und ein Fehlalarm bei jedem Lauf ist
+             * eine abgeschaltete Pruefung. */
+            $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_QUELLEN'),
+                sprintf(bw_t('TEST.A_QUELLEN_TEILS'),
+                        count($bw_ein) - count($bw_stumm), count($bw_ein),
+                        bw_e(implode(', ', $bw_stumm))) . $bw_zusatz);
+        }
+    }
+
     $g = bw_mqtt_zustand();
     if (empty($g['gefunden'])) {
         $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_MQTT'), bw_t('TEST.A_MQTT_NICHT_GEFUNDEN'));

@@ -18,65 +18,93 @@
     "beides weiss hier niemand. Wer es genauer braucht, hebt den Kc-Wert der",
     "Zone von Hand an."
   ],
-
   "bepflanzung": {
     "_quelle": "FAO-56, Tabelle 12 (Kc) und Tabelle 22 (Zr, p)",
     "_stand": "2026-08-18",
     "rasen_kuehl": {
-      "text": "Rasen, kuehle Jahreszeit (Wiesenrispe, Weidelgras, Schwingel)",
-      "kc": 0.95, "zr": 0.75, "p": 0.40,
-      "quelle": "FAO-56 Tab. 12 (0,90/0,95/0,95) und Tab. 22 (Zr 0,5-1,0 m, p 0,40)"
+      "text": "Rasen, kühle Jahreszeit (Wiesenrispe, Weidelgras, Schwingel)",
+      "kc": 0.95,
+      "zr": 0.75,
+      "p": 0.4,
+      "quelle": "FAO-56 Tab. 12 (0,90/0,95/0,95) und Tab. 22 (Zr 0,5-1,0 m, p 0,40)",
+      "text_en": "Lawn, cool season (bluegrass, ryegrass, fescue)"
     },
     "rasen_warm": {
       "text": "Rasen, warme Jahreszeit (Bermuda, St. Augustine)",
-      "kc": 0.85, "zr": 0.75, "p": 0.50,
-      "quelle": "FAO-56 Tab. 12 (0,80/0,85/0,85) und Tab. 22 (Zr 0,5-1,0 m, p 0,50)"
+      "kc": 0.85,
+      "zr": 0.75,
+      "p": 0.5,
+      "quelle": "FAO-56 Tab. 12 (0,80/0,85/0,85) und Tab. 22 (Zr 0,5-1,0 m, p 0,50)",
+      "text_en": "Lawn, warm season (Bermuda, St. Augustine)"
     },
     "rasen_sparsam": {
-      "text": "Rasen, sparsam gewaessert (nimmt Sommerbraeune in Kauf)",
-      "kc": 0.85, "zr": 0.75, "p": 0.55,
-      "quelle": "FAO-56 Tab. 12, Fussnote 15: 'Kc's for turf can be reduced by 0,10' bei sorgfaeltigem Wassermanagement. p bewusst hoeher - der Rasen darf trockener werden."
+      "text": "Rasen, sparsam gewässert (nimmt Sommerbräune in Kauf)",
+      "kc": 0.85,
+      "zr": 0.75,
+      "p": 0.55,
+      "quelle": "FAO-56 Tab. 12, Fussnote 15: 'Kc's for turf can be reduced by 0,10' bei sorgfaeltigem Wassermanagement. p bewusst hoeher - der Rasen darf trockener werden.",
+      "text_en": "Lawn, watered sparingly (accepts summer browning)"
     },
     "gemuese_klein": {
-      "text": "Gemuese, kleinwuechsig (Salat, Kohl, Moehren)",
-      "kc": 1.05, "zr": 0.40, "p": 0.35,
-      "quelle": "FAO-56 Tab. 12 (Small Vegetables 0,7/1,05/0,95), Tab. 22 (Kohl p 0,45, Salat p 0,30)"
+      "text": "Gemüse, kleinwüchsig (Salat, Kohl, Möhren)",
+      "kc": 1.05,
+      "zr": 0.4,
+      "p": 0.35,
+      "quelle": "FAO-56 Tab. 12 (Small Vegetables 0,7/1,05/0,95), Tab. 22 (Kohl p 0,45, Salat p 0,30)",
+      "text_en": "Vegetables, low growing (lettuce, cabbage, carrots)"
     },
     "tomate": {
       "text": "Tomaten",
-      "kc": 1.15, "zr": 1.00, "p": 0.40,
-      "quelle": "FAO-56 Tab. 12 (Kc mid 1,15) und Tab. 22 (Zr 0,7-1,5 m, p 0,40)"
+      "kc": 1.15,
+      "zr": 1.0,
+      "p": 0.4,
+      "quelle": "FAO-56 Tab. 12 (Kc mid 1,15) und Tab. 22 (Zr 0,7-1,5 m, p 0,40)",
+      "text_en": "Tomatoes"
     },
     "erdbeere": {
       "text": "Erdbeeren",
-      "kc": 0.85, "zr": 0.25, "p": 0.20,
-      "quelle": "FAO-56 Tab. 12 (0,40/0,85/0,75) und Tab. 22 (Zr 0,2-0,3 m, p 0,20)"
+      "kc": 0.85,
+      "zr": 0.25,
+      "p": 0.2,
+      "quelle": "FAO-56 Tab. 12 (0,40/0,85/0,75) und Tab. 22 (Zr 0,2-0,3 m, p 0,20)",
+      "text_en": "Strawberries"
     },
     "beerenstraucher": {
-      "text": "Beerenstraeucher",
-      "kc": 1.05, "zr": 0.90, "p": 0.50,
-      "quelle": "FAO-56 Tab. 12 (0,30/1,05/0,50) und Tab. 22 (Zr 0,6-1,2 m, p 0,50)"
+      "text": "Beerensträucher",
+      "kc": 1.05,
+      "zr": 0.9,
+      "p": 0.5,
+      "quelle": "FAO-56 Tab. 12 (0,30/1,05/0,50) und Tab. 22 (Zr 0,6-1,2 m, p 0,50)",
+      "text_en": "Berry bushes"
     },
     "hecke_gehoelz": {
-      "text": "Hecke, Straeucher, junge Gehoelze",
-      "kc": 0.90, "zr": 1.00, "p": 0.50,
+      "text": "Hecke, Sträucher, junge Gehölze",
+      "kc": 0.9,
+      "zr": 1.0,
+      "p": 0.5,
       "quelle": "Ableitung aus FAO-56 Tab. 12 (Beerenstraeucher) - fuer Zierhecken nennt FAO keinen eigenen Wert. GESCHAETZT.",
-      "geschaetzt": 1
+      "geschaetzt": 1,
+      "text_en": "Hedge, shrubs, young woody plants"
     },
     "staudenbeet": {
       "text": "Staudenbeet, Blumen",
-      "kc": 1.00, "zr": 0.50, "p": 0.40,
+      "kc": 1.0,
+      "zr": 0.5,
+      "p": 0.4,
       "quelle": "Ableitung aus FAO-56 Tab. 12 (Small Vegetables / Blumen) - fuer Zierstauden nennt FAO keinen eigenen Wert. GESCHAETZT.",
-      "geschaetzt": 1
+      "geschaetzt": 1,
+      "text_en": "Perennial bed, flowers"
     },
     "topf_kuebel": {
-      "text": "Kuebel und Topfpflanzen",
-      "kc": 1.10, "zr": 0.25, "p": 0.30,
+      "text": "Kübel und Topfpflanzen",
+      "kc": 1.1,
+      "zr": 0.25,
+      "p": 0.3,
       "quelle": "Kein FAO-Wert. Kuebel trocknen schneller aus als Boden - Zr klein, p klein. GESCHAETZT.",
-      "geschaetzt": 1
+      "geschaetzt": 1,
+      "text_en": "Pots and containers"
     }
   },
-
   "boden": {
     "_quelle": "FAO-56, Kapitel 8, Tabelle 19 - nur die Eintraege mit eigenem Feld quelle; alle uebrigen sind geschaetzt",
     "_stand": "2026-08-18",
@@ -94,22 +122,71 @@
       "eine Bodenprobe untersuchen und traegt die Werte von Hand ein - das",
       "Feld dafuer gibt es."
     ],
-    "sand":            { "text": "Sand",                 "theta_fc": 0.12, "theta_wp": 0.05, "geschaetzt": 1 },
-    "lehmiger_sand":   { "text": "Lehmiger Sand",        "theta_fc": 0.15, "theta_wp": 0.06,
-                         "quelle": "FAO-56 Kap. 8, Beispiel 34: Loamy sand" },
-    "sandiger_lehm":   { "text": "Sandiger Lehm",        "theta_fc": 0.22, "theta_wp": 0.10, "geschaetzt": 1 },
-    "lehm":            { "text": "Lehm",                 "theta_fc": 0.27, "theta_wp": 0.13, "geschaetzt": 1 },
-    "schluff":         { "text": "Schluff",              "theta_fc": 0.32, "theta_wp": 0.15,
-                         "quelle": "FAO-56 Kap. 8, Beispiel 34: Silt" },
-    "schluffiger_ton": { "text": "Schluffiger Ton",      "theta_fc": 0.35, "theta_wp": 0.23,
-                         "quelle": "FAO-56 Kap. 8, Beispiel 34: Silty clay" },
-    "ton":             { "text": "Ton",                  "theta_fc": 0.36, "theta_wp": 0.22, "geschaetzt": 1 },
-    "kiesig":          { "text": "Kiesig oder steinig (viel Grobanteil)", "theta_fc": 0.14, "theta_wp": 0.06,
-                         "quelle": "Kein FAO-56-Wert. Grobanteil traegt kein Bodenwasser; die Kennwerte sind die des Feinbodens, anteilig gemindert. GESCHAETZT - wer es genau braucht, traegt eigene Werte je Zone ein.",
-                         "geschaetzt": 1 },
-    "eigen":           { "text": "Eigene Werte eintragen (Spalten thetaFC und thetaWP je Zone)", "theta_fc": 0.25, "theta_wp": 0.12, "geschaetzt": 1 }
+    "sand": {
+      "text": "Sand",
+      "theta_fc": 0.12,
+      "theta_wp": 0.05,
+      "geschaetzt": 1,
+      "text_en": "Sand"
+    },
+    "lehmiger_sand": {
+      "text": "Lehmiger Sand",
+      "theta_fc": 0.15,
+      "theta_wp": 0.06,
+      "quelle": "FAO-56 Kap. 8, Beispiel 34: Loamy sand",
+      "text_en": "Loamy sand"
+    },
+    "sandiger_lehm": {
+      "text": "Sandiger Lehm",
+      "theta_fc": 0.22,
+      "theta_wp": 0.1,
+      "geschaetzt": 1,
+      "text_en": "Sandy loam"
+    },
+    "lehm": {
+      "text": "Lehm",
+      "theta_fc": 0.27,
+      "theta_wp": 0.13,
+      "geschaetzt": 1,
+      "text_en": "Loam"
+    },
+    "schluff": {
+      "text": "Schluff",
+      "theta_fc": 0.32,
+      "theta_wp": 0.15,
+      "quelle": "FAO-56 Kap. 8, Beispiel 34: Silt",
+      "text_en": "Silt"
+    },
+    "schluffiger_ton": {
+      "text": "Schluffiger Ton",
+      "theta_fc": 0.35,
+      "theta_wp": 0.23,
+      "quelle": "FAO-56 Kap. 8, Beispiel 34: Silty clay",
+      "text_en": "Silty clay"
+    },
+    "ton": {
+      "text": "Ton",
+      "theta_fc": 0.36,
+      "theta_wp": 0.22,
+      "geschaetzt": 1,
+      "text_en": "Clay"
+    },
+    "kiesig": {
+      "text": "Kiesig oder steinig (viel Grobanteil)",
+      "theta_fc": 0.14,
+      "theta_wp": 0.06,
+      "quelle": "Kein FAO-56-Wert. Grobanteil traegt kein Bodenwasser; die Kennwerte sind die des Feinbodens, anteilig gemindert. GESCHAETZT - wer es genau braucht, traegt eigene Werte je Zone ein.",
+      "geschaetzt": 1,
+      "text_en": "Gravelly or stony (large coarse fraction)"
+    },
+    "eigen": {
+      "text": "Eigene Werte eintragen (Spalten thetaFC und thetaWP je Zone)",
+      "theta_fc": 0.25,
+      "theta_wp": 0.12,
+      "geschaetzt": 1,
+      "text_en": "Enter own values (columns thetaFC and thetaWP per zone)"
+    }
   },
-
   "regner": {
     "_quelle": "Erfahrungswerte, an keiner Anlage gemessen - jeder Eintrag traegt geschaetzt; massgeblich ist die Becherprobe",
     "_stand": "2026-08-18",
@@ -124,11 +201,41 @@
       "die Rate aus. Solange keine Messung vorliegt, sind alle Liter- und",
       "Minutenangaben als geschaetzt gekennzeichnet."
     ],
-    "versenkregner":  { "text": "Versenkregner (Getriebe)", "mmh": 10.0, "geschaetzt": 1 },
-    "sprueher":       { "text": "Spruehduesen",             "mmh": 35.0, "geschaetzt": 1 },
-    "impulsregner":   { "text": "Impulsregner",             "mmh": 12.0, "geschaetzt": 1 },
-    "viereckregner":  { "text": "Viereckregner",            "mmh": 15.0, "geschaetzt": 1 },
-    "perlschlauch":   { "text": "Perl- oder Tropfschlauch", "mmh":  5.0, "geschaetzt": 1 },
-    "tropfer":        { "text": "Tropfer (Einzelabgabe)",   "mmh":  4.0, "geschaetzt": 1 }
+    "versenkregner": {
+      "text": "Versenkregner (Getriebe)",
+      "mmh": 10.0,
+      "geschaetzt": 1,
+      "text_en": "Pop-up rotor sprinkler"
+    },
+    "sprueher": {
+      "text": "Sprühdüsen",
+      "mmh": 35.0,
+      "geschaetzt": 1,
+      "text_en": "Spray nozzles"
+    },
+    "impulsregner": {
+      "text": "Impulsregner",
+      "mmh": 12.0,
+      "geschaetzt": 1,
+      "text_en": "Impact sprinkler"
+    },
+    "viereckregner": {
+      "text": "Viereckregner",
+      "mmh": 15.0,
+      "geschaetzt": 1,
+      "text_en": "Oscillating sprinkler"
+    },
+    "perlschlauch": {
+      "text": "Perl- oder Tropfschlauch",
+      "mmh": 5.0,
+      "geschaetzt": 1,
+      "text_en": "Soaker or drip hose"
+    },
+    "tropfer": {
+      "text": "Tropfer (Einzelabgabe)",
+      "mmh": 4.0,
+      "geschaetzt": 1,
+      "text_en": "Drippers (individual emitters)"
+    }
   }
 }

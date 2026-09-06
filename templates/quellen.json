@@ -29,62 +29,74 @@
     "tmin": {
       "einheit": "C",
       "text": "Tagestiefstwert der Lufttemperatur",
-      "pflicht": 1
+      "pflicht": 1,
+      "text_en": "daily minimum air temperature"
     },
     "tmax": {
       "einheit": "C",
-      "text": "Tageshoechstwert der Lufttemperatur",
-      "pflicht": 1
+      "text": "Tageshöchstwert der Lufttemperatur",
+      "pflicht": 1,
+      "text_en": "daily maximum air temperature"
     },
     "rh_min": {
       "einheit": "%",
       "text": "kleinste relative Luftfeuchte am Tag",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "lowest relative humidity of the day"
     },
     "rh_max": {
       "einheit": "%",
-      "text": "groesste relative Luftfeuchte am Tag",
-      "pflicht": 0
+      "text": "größte relative Luftfeuchte am Tag",
+      "pflicht": 0,
+      "text_en": "highest relative humidity of the day"
     },
     "rh_mittel": {
       "einheit": "%",
       "text": "mittlere relative Luftfeuchte",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "mean relative humidity"
     },
     "taupunkt": {
       "einheit": "C",
       "text": "Taupunkt (genauester Weg zu ea)",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "dew point (most accurate route to ea)"
     },
     "wind": {
       "einheit": "m/s",
       "text": "mittlere Windgeschwindigkeit",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "mean wind speed"
     },
     "strahlung_wm2": {
       "einheit": "W/m2",
       "text": "Globalstrahlung im Tagesmittel",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "global radiation, daily mean"
     },
     "sonnenstunden": {
       "einheit": "h",
       "text": "Sonnenscheindauer",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "sunshine duration"
     },
     "regen_tag": {
       "einheit": "mm",
       "text": "Niederschlag des Tages",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "precipitation of the day"
     },
     "regen_stunde": {
       "einheit": "mm/h",
       "text": "Niederschlag der letzten Stunde",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "precipitation of the last hour"
     },
     "bodenfeuchte": {
       "einheit": "%",
       "text": "Bodenfeuchte je Zone (volumetrisch oder Prozent)",
-      "pflicht": 0
+      "pflicht": 0,
+      "text_en": "soil moisture per zone (volumetric or percent)"
     }
   },
   "vorlagen": {
@@ -92,12 +104,14 @@
     "_stand": "2026-08-18",
     "online": {
       "text": "Nur Open-Meteo, keine eigene Station",
-      "hinweis": "Braucht nur Standort. Die Werte gelten fuer den Gitterpunkt, nicht fuer Ihren Garten - bei Wind und Strahlung ist der Unterschied im Einzelfall erheblich.",
-      "felder": {}
+      "hinweis": "Braucht nur Standort. Die Werte gelten für den Gitterpunkt, nicht für Ihren Garten - bei Wind und Strahlung ist der Unterschied im Einzelfall erheblich.",
+      "felder": {},
+      "text_en": "Open-Meteo only, no own station",
+      "hinweis_en": "Needs only the location. The values apply to the grid point, not to your garden - for wind and radiation the difference can be considerable in an individual case."
     },
     "ecowitt_lokal": {
-      "text": "Ecowitt-Gateway, oertlich abgefragt (GW1100, GW2000, GW3000)",
-      "hinweis": "Das Gateway beantwortet im Heimnetz 'get_livedata_info' ohne Zugangsdaten. Die Pfade unten waehlen je KENNUNG statt je Stellung - eine Stellungsangabe zeigt auf einen anderen Eintrag, sobald ein Sensor dazukommt. Die Kennungen sind am 18.08.2026 an einem GW3000A gegen die Hersteller-App gemessen. Der Knopf 'Antwort abholen und zuordnen' prueft sie gegen IHR Geraet.",
+      "text": "Ecowitt-Gateway, örtlich abgefragt (GW1100, GW2000, GW3000)",
+      "hinweis": "Das Gateway beantwortet im Heimnetz 'get_livedata_info' ohne Zugangsdaten. Die Pfade unten wählen je KENNUNG statt je Stellung - eine Stellungsangabe zeigt auf einen anderen Eintrag, sobald ein Sensor dazukommt. Die Kennungen sind am 18.08.2026 an einem GW3000A gegen die Hersteller-App gemessen. Der Knopf 'Antwort abholen und zuordnen' prüft sie gegen IHR Gerät.",
       "http_url": "http://GATEWAY-ADRESSE/get_livedata_info",
       "felder": {
         "tmax": {
@@ -132,11 +146,13 @@
           "weg": "http",
           "pfad": "rain[id=0x0E].val"
         }
-      }
+      },
+      "text_en": "Ecowitt gateway, queried locally (GW1100, GW2000, GW3000)",
+      "hinweis_en": "On the home network the gateway answers 'get_livedata_info' without credentials. The paths below select by IDENTIFIER rather than by position - a position would point at a different entry as soon as a sensor is added. The identifiers were measured on 18.08.2026 on a GW3000A against the manufacturer's app. The button 'Fetch response and assign' checks them against YOUR device."
     },
     "ecowitt_mqtt_direkt": {
-      "text": "Ecowitt-Gateway sendet selbst ueber MQTT (ohne Bruecke)",
-      "hinweis": "Das Gateway schickt unter 'Weather Services' > 'Customized' > 'MQTT' EINE Nachricht mit allen Werten - keine JSON-Struktur, sondern die Feldliste des Ecowitt-Uploadprotokolls. Das Thema steht dort als 'Publish Topic' und muss unten ueberall eingetragen werden. ACHTUNG: die Werte sind IMPERIAL, unabhaengig von den Einheiten-Einstellungen des Geraets - das ist am 18.08.2026 an einem GW3000A_V1.2.2 gegen die Hersteller-App gemessen (0,358 in = 9,09 mm gegen 9,1 mm in der App). Die Einheiten unten sind deshalb gesetzt und gehoeren so. Einzige Ausnahme: solarradiation steht schon in W/m2.",
+      "text": "Ecowitt-Gateway sendet selbst über MQTT (ohne Brücke)",
+      "hinweis": "Das Gateway schickt unter 'Weather Services' > 'Customized' > 'MQTT' EINE Nachricht mit allen Werten - keine JSON-Struktur, sondern die Feldliste des Ecowitt-Uploadprotokolls. Das Thema steht dort als 'Publish Topic' und muss unten überall eingetragen werden. ACHTUNG: die Werte sind IMPERIAL, unabhängig von den Einheiten-Einstellungen des Geräts - das ist am 18.08.2026 an einem GW3000A_V1.2.2 gegen die Hersteller-App gemessen (0,358 in = 9,09 mm gegen 9,1 mm in der App). Die Einheiten unten sind deshalb gesetzt und gehören so. Einzige Ausnahme: solarradiation steht schon in W/m2.",
       "felder": {
         "tmax": {
           "weg": "mqtt",
@@ -178,11 +194,13 @@
           "pfad": "rainratein",
           "einheit_quelle": "in"
         }
-      }
+      },
+      "text_en": "Ecowitt gateway publishes over MQTT itself (no bridge)",
+      "hinweis_en": "Under 'Weather Services' > 'Customized' > 'MQTT' the gateway sends ONE message with all values - not a JSON structure, but the field list of the Ecowitt upload protocol. The topic is given there as 'Publish Topic' and must be entered below everywhere. NOTE: the values are IMPERIAL, regardless of the unit settings of the device - measured on 18.08.2026 on a GW3000A_V1.2.2 against the manufacturer's app (0.358 in = 9.09 mm against 9.1 mm in the app). The units below are therefore set and belong that way. The only exception: solarradiation is already in W/m2."
     },
     "ecowitt_mqtt": {
-      "text": "Ecowitt oder Froggit ueber ecowitt2mqtt",
-      "hinweis": "Themen nach dem Muster ecowitt2mqtt/<Geraet>/<Groesse>. Geraetenamen anpassen.",
+      "text": "Ecowitt oder Froggit über ecowitt2mqtt",
+      "hinweis": "Themen nach dem Muster ecowitt2mqtt/<Gerät>/<Größe>. Gerätenamen anpassen.",
       "felder": {
         "tmax": {
           "weg": "mqtt",
@@ -213,11 +231,13 @@
           "weg": "mqtt",
           "thema": "ecowitt2mqtt/GERAET/hourly_rain"
         }
-      }
+      },
+      "text_en": "Ecowitt or Froggit via ecowitt2mqtt",
+      "hinweis_en": "Topics follow the pattern ecowitt2mqtt/<device>/<quantity>. Adjust the device names."
     },
     "weewx_mqtt": {
-      "text": "WeeWX ueber MQTT (Davis, Vantage, vieles andere)",
-      "hinweis": "WeeWX veroeffentlicht mit der MQTT-Erweiterung je Groesse ein eigenes Thema. Einheiten haengen am eingestellten Einheitensystem - im Reiter Quellen pruefen.",
+      "text": "WeeWX über MQTT (Davis, Vantage, vieles andere)",
+      "hinweis": "WeeWX veröffentlicht mit der MQTT-Erweiterung je Größe ein eigenes Thema. Einheiten hängen am eingestellten Einheitensystem - im Reiter Quellen prüfen.",
       "felder": {
         "tmax": {
           "weg": "mqtt",
@@ -243,11 +263,13 @@
           "weg": "mqtt",
           "thema": "weather/dayRain_mm"
         }
-      }
+      },
+      "text_en": "WeeWX over MQTT (Davis, Vantage, much else)",
+      "hinweis_en": "With the MQTT extension WeeWX publishes a separate topic per quantity. Units depend on the configured unit system - check in the Sources tab."
     },
     "weatherflow": {
-      "text": "WeatherFlow Tempest ueber MQTT",
-      "hinweis": "Die gaengigen Bruecken veroeffentlichen unter weatherflow/... - Themen im Reiter Quellen abgleichen.",
+      "text": "WeatherFlow Tempest über MQTT",
+      "hinweis": "Die gängigen Brücken veröffentlichen unter weatherflow/... - Themen im Reiter Quellen abgleichen.",
       "felder": {
         "tmax": {
           "weg": "mqtt",
@@ -273,30 +295,39 @@
           "weg": "mqtt",
           "thema": "weatherflow/rain_accumulated"
         }
-      }
+      },
+      "text_en": "WeatherFlow Tempest over MQTT",
+      "hinweis_en": "The common bridges publish under weatherflow/... - reconcile the topics in the Sources tab."
     },
     "eigenes_mqtt": {
       "text": "Eigene Themen von Hand eintragen",
-      "hinweis": "Fuer alles andere: Zigbee2MQTT, ESPHome, Shelly, Tasmota, ein selbstgebauter Sensor. Steht der Wert in einem JSON-Objekt, hilft der Pfad - etwa 'value' oder 'result.temperature'.",
-      "felder": {}
+      "hinweis": "Für alles andere: Zigbee2MQTT, ESPHome, Shelly, Tasmota, ein selbstgebauter Sensor. Steht der Wert in einem JSON-Objekt, hilft der Pfad - etwa 'value' oder 'result.temperature'.",
+      "felder": {},
+      "text_en": "Enter own topics by hand",
+      "hinweis_en": "For everything else: Zigbee2MQTT, ESPHome, Shelly, Tasmota, a self-built sensor. If the value sits inside a JSON object, the path helps - for example 'value' or 'result.temperature'."
     },
     "loxberry_mqtt": {
       "text": "Werte, die schon im LoxBerry-Broker stehen",
-      "hinweis": "Wer seine Wetterstation bereits ueber ein anderes Plugin in den Broker bringt, traegt hier einfach die vorhandenen Themen ein. Der Reiter Quellen zeigt, was zuletzt angekommen ist.",
-      "felder": {}
+      "hinweis": "Wer seine Wetterstation bereits über ein anderes Plugin in den Broker bringt, trägt hier einfach die vorhandenen Themen ein. Der Reiter Quellen zeigt, was zuletzt angekommen ist.",
+      "felder": {},
+      "text_en": "Values already present in the LoxBerry broker",
+      "hinweis_en": "If your weather station already reaches the broker through another plugin, simply enter the existing topics here. The Sources tab shows what arrived last."
     },
     "prognose_ghi": {
       "text": "Einstrahlung aus einer fremden Quelle (echte W/m2, keine PV-Prognose)",
-      "hinweis": "BELEGT AM 10.08.2026 GEGEN DIE THEMENLISTE DES PLUGINS \"PV Solcast NG\": dieses Plugin liefert AUSSCHLIESSLICH Ertragswerte der eigenen PV-Anlage - total.td_kw, hourly_td_kw.0 bis .23, next.3_kw, daytime.morning_kw und so weiter, alle in kW, kWh, W oder Wh. Es veroeffentlicht KEINEN einzigen Einstrahlungswert. Damit ist es als Strahlungsquelle fuer FAO-56 UNBRAUCHBAR - nicht weil die Umrechnung fehlt, sondern weil die Groesse eine andere ist: zwischen Ertrag und Einstrahlung liegen Modulflaeche, Wirkungsgrad, Neigung, Ausrichtung und Verschattung. Wer total.td_kw hier eintraegt, bekommt eine ET0, die plausibel aussieht und um ein Vielfaches danebenliegt. Diese Vorlage passt nur zu einer Quelle, die echte Einstrahlung liefert: ghi (global horizontal irradiance) in W/m2 oder eine Tagessumme in kWh/m2. Eine Wetterstation mit Solarsensor kann das, eine PV-Ertragsprognose nicht. Zweiter Punkt: eine Prognose ist keine Messung. Der Reiter Quellen zeigt die Herkunft, und die Guete der ET0 wird auf \"modellstrahlung\" zurueckgestuft - das ist richtig so und kein Fehler.",
+      "hinweis": "BELEGT AM 10.08.2026 GEGEN DIE THEMENLISTE DES PLUGINS \"PV Solcast NG\": dieses Plugin liefert AUSSCHLIESSLICH Ertragswerte der eigenen PV-Anlage - total.td_kw, hourly_td_kw.0 bis .23, next.3_kw, daytime.morning_kw und so weiter, alle in kW, kWh, W oder Wh. Es veröffentlicht KEINEN einzigen Einstrahlungswert. Damit ist es als Strahlungsquelle für FAO-56 UNBRAUCHBAR - nicht weil die Umrechnung fehlt, sondern weil die Größe eine andere ist: zwischen Ertrag und Einstrahlung liegen Modulfläche, Wirkungsgrad, Neigung, Ausrichtung und Verschattung. Wer total.td_kw hier einträgt, bekommt eine ET0, die plausibel aussieht und um ein Vielfaches danebenliegt. Diese Vorlage passt nur zu einer Quelle, die echte Einstrahlung liefert: ghi (global horizontal irradiance) in W/m2 oder eine Tagessumme in kWh/m2. Eine Wetterstation mit Solarsensor kann das, eine PV-Ertragsprognose nicht. Zweiter Punkt: eine Prognose ist keine Messung. Der Reiter Quellen zeigt die Herkunft, und die Güte der ET0 wird auf \"modellstrahlung\" zurückgestuft - das ist richtig so und kein Fehler.",
       "felder": {
         "strahlung_wm2": {
           "weg": "mqtt",
           "thema": "solcast/forecast/ghi",
           "pfad": "",
           "einheit_quelle": "W/m2",
-          "hinweis": "Thema und Pfad an das eigene Plugin anpassen. Liefert es eine Tagessumme, statt W/m2 die Einheit kWh/m2d waehlen."
+          "hinweis": "Thema und Pfad an das eigene Plugin anpassen. Liefert es eine Tagessumme, statt W/m2 die Einheit kWh/m2d wählen.",
+          "hinweis_en": "Adjust topic and path to your own plugin. If it delivers a daily total, choose the unit kWh/m2d instead of W/m2."
         }
-      }
+      },
+      "text_en": "Irradiance from an external source (real W/m2, not a PV forecast)",
+      "hinweis_en": "ESTABLISHED ON 10.08.2026 AGAINST THE TOPIC LIST OF THE PLUGIN \"PV Solcast NG\": that plugin delivers EXCLUSIVELY yield values of your own PV system - total.td_kw, hourly_td_kw.0 to .23, next.3_kw, daytime.morning_kw and so on, all in kW, kWh, W or Wh. It publishes NOT A SINGLE irradiance value. It is therefore UNUSABLE as a radiation source for FAO-56 - not because a conversion is missing, but because the quantity is a different one: between yield and irradiance lie module area, efficiency, tilt, orientation and shading. Anyone entering total.td_kw here gets an ET0 that looks plausible and is off by a multiple. This template only fits a source that delivers real irradiance: ghi (global horizontal irradiance) in W/m2, or a daily total in kWh/m2. A weather station with a solar sensor can do that, a PV yield forecast cannot. Second point: a forecast is not a measurement. The Sources tab shows the origin, and the quality of the ET0 is downgraded to \"model radiation\" - that is correct and not an error."
     }
   },
   "einheiten": {
@@ -366,13 +397,15 @@
       "faktor": 41.66667,
       "offset": 0.0,
       "nach": "W/m2",
-      "hinweis": "Tagessumme der Einstrahlung in kWh je Quadratmeter. Wird in das Tagesmittel in W/m2 umgerechnet, das die FAO-56-Rechnung braucht."
+      "hinweis": "Tagessumme der Einstrahlung in kWh je Quadratmeter. Wird in das Tagesmittel in W/m2 umgerechnet, das die FAO-56-Rechnung braucht.",
+      "hinweis_en": "Daily total of irradiance in kWh per square metre. Converted into the daily mean in W/m2 that the FAO-56 calculation needs."
     },
     "MJ/m2d": {
       "faktor": 11.57407,
       "offset": 0.0,
       "nach": "W/m2",
-      "hinweis": "Tagessumme der Einstrahlung in Megajoule je Quadratmeter."
+      "hinweis": "Tagessumme der Einstrahlung in Megajoule je Quadratmeter.",
+      "hinweis_en": "Daily total of irradiance in megajoule per square metre."
     }
   },
   "kennungen": {

@@ -72,9 +72,12 @@ function bw_paths()
     if ($p !== null) { return $p; }
     $home = getenv('LBHOMEDIR');
     if (!$home || !is_dir($home)) {
-        foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-            if (is_dir($k)) { $home = $k; break; }
-        }
+        /* Kein fester Systempfad als Rueckfall mehr: den frueher hier
+         * stehenden gibt es auf dem gemessenen Geraet nicht - dessen Wurzel
+         * liegt woanders -, und ein Systempfad im Quelltext ist gegen den
+         * Hausstandard. Der Rueckfall war toter Code, der nur die Regel riss. */
+        $k = lb_wurzel_ermitteln();
+        if ($k && is_dir($k)) { $home = $k; }
     }
     // Pluginordner aus dem Ablageort DIESER Datei - nicht ueber den
     // MD5-Schluessel der plugindatabase.json, der sich bei jedem Fork aendert.
@@ -92,6 +95,13 @@ function bw_paths()
             'zonen'     => $home . '/config/plugins/' . $dir . '/zonen.json',
             'quellen'   => $home . '/config/plugins/' . $dir . '/quellen_zuordnung.json',
             'sicherung' => $home . '/config/plugins/' . $dir . '.backup.json',
+            /* Genau die Namen, die preupgrade.sh ohnehin schreibt und
+             * postinstall.sh zurueckholt - EIN Sicherungsverfahren, nicht
+             * zwei. Bis 0.9.21 entstanden sie nur beim Update; zwischen
+             * zwei Updates gab es fuer Zonen und Quellenzuordnung gar
+             * keine Zweitschrift und keine Selbstheilung. */
+            'sicherung_zonen'   => $home . '/config/plugins/' . $dir . '.backup.zonen.json',
+            'sicherung_quellen' => $home . '/config/plugins/' . $dir . '.backup.quellen_zuordnung.json',
             'datadir'   => $home . '/data/plugins/' . $dir,
             'bindir'    => $home . '/bin/plugins/' . $dir,
             'logdir'    => $home . '/log/plugins/' . $dir,
@@ -105,6 +115,8 @@ function bw_paths()
             'configdir' => $b . '/config', 'config' => $b . '/config/bewaesserung.json',
             'zonen' => $b . '/config/zonen.json', 'quellen' => $b . '/config/quellen_zuordnung.json',
             'sicherung' => $b . '/config/bewaesserung.backup.json',
+            'sicherung_zonen' => $b . '/config/bewaesserung.backup.zonen.json',
+            'sicherung_quellen' => $b . '/config/bewaesserung.backup.quellen_zuordnung.json',
             'datadir' => $b . '/data', 'bindir' => $b . '/bin', 'logdir' => $b . '/log',
             'log' => $b . '/log/bewaesserung.log',
             'vorlagen' => $b . '/templates/quellen.json',
@@ -338,6 +350,32 @@ function bw_config_speichern($cfg)
  * zwei Stellen genau den einen Namen _hinweis - eine Auswahlliste zeigte
  * deshalb jede weitere Erklaerungszeile als waehlbaren Eintrag.
  */
+/**
+ * Einen Anzeigetext aus quellen.json / pflanzen.json holen - zweisprachig.
+ *
+ * Die Texte in den beiden Tabellendateien (Messgroessen, Vorlagen,
+ * Bepflanzung, Boden, Regner) gingen bis 0.9.21 unuebersetzt durch: es gab
+ * nur den Schluessel 'text'. Der englische Anwender bekam die
+ * Messgroessentabelle, die Vorlagenliste, die Hinweiskaesten und die
+ * Zonenauswahl auf Deutsch, waehrend die Reiterleiste englisch war -
+ * sechsundzwanzig Texte. sprachschluessel_pruefen.py sieht das nicht: es
+ * misst nur bw_t()-Schluessel und meldete zu Recht "ok".
+ *
+ * Statt die Texte in die .ini zu verlagern (die Schluesselnamen stehen in
+ * zonen.json gespeichert und muessen bleiben) traegt jeder Eintrag jetzt
+ * '<feld>_en' daneben. Fehlt er, bleibt es beim deutschen Text - das ist
+ * dasselbe Verhalten wie bisher und nicht schlechter.
+ */
+function bw_txt($eintrag, $feld = 'text')
+{
+    if (!is_array($eintrag)) { return ''; }
+    if (bw_sprache() !== 'de' && isset($eintrag[$feld . '_en'])
+        && (string) $eintrag[$feld . '_en'] !== '') {
+        return (string) $eintrag[$feld . '_en'];
+    }
+    return isset($eintrag[$feld]) ? (string) $eintrag[$feld] : '';
+}
+
 function bw_tabelle($feld)
 {
     $aus = array();
@@ -376,6 +414,9 @@ function bw_pflanzen()
 
 function bw_zonen()
 {
+    /* Erst heilen, dann lesen - wie bei der Konfiguration. Merkwort ist
+     * 'zonen': eine Zweitschrift ohne diesen Schluessel ist keine. */
+    bw_datei_heilen('zonen', 'sicherung_zonen', 'zonen');
     $d = bw_json_lesen(bw_paths()['zonen']);
     return isset($d['zonen']) && is_array($d['zonen']) ? $d['zonen'] : array();
 }
@@ -385,7 +426,18 @@ function bw_zonen_speichern($liste)
     $d = bw_json_lesen(bw_paths()['zonen']);
     $d['zonen'] = array_values($liste);
     $d['geaendert'] = time();
-    return bw_json_schreiben(bw_paths()['zonen'], $d);
+    /* 0600 wie bei bewaesserung.json und quellen_zuordnung.json.
+     *
+     * bw_json_schreiben() setzt die Rechte nur, wenn sie uebergeben werden,
+     * und ersetzt die Datei anschliessend per rename() - die neue Datei
+     * traegt sonst die Rechte der Nebendatei (umask). Nach dem ersten
+     * Speichern einer Zone stand zonen.json damit anders da als seine
+     * beiden Nachbarn, die postinstall.sh auf 0600 gesetzt hatte. In
+     * zonen.json steht kein Geheimnis; es ist die unbeabsichtigte
+     * Ausnahme, und eine Ausnahme, die niemand beabsichtigt hat, ist keine. */
+    if (!bw_json_schreiben(bw_paths()['zonen'], $d, 0600)) { return false; }
+    bw_zweitschrift_ziehen('zonen', 'sicherung_zonen');
+    return true;
 }
 
 function bw_zone($schluessel)
@@ -396,11 +448,73 @@ function bw_zone($schluessel)
     return null;
 }
 
-function bw_quellen()      { return bw_json_lesen(bw_paths()['quellen']); }
+function bw_quellen()
+{
+    /* Merkwort ist 'felder': die Zuordnung ohne sie ist leer und taugt
+     * nicht als Zweitschrift. */
+    bw_datei_heilen('quellen', 'sicherung_quellen', 'felder');
+    return bw_json_lesen(bw_paths()['quellen']);
+}
 /* 0600: in 'http_url' kann eine Adresse der Form
  * http://benutzer:kennwort@station/... stehen - bei Wetterstationen im
  * Heimnetz nicht ungewoehnlich. */
-function bw_quellen_speichern($q) { return bw_json_schreiben(bw_paths()['quellen'], $q, 0600); }
+function bw_quellen_speichern($q)
+{
+    if (!bw_json_schreiben(bw_paths()['quellen'], $q, 0600)) { return false; }
+    bw_zweitschrift_ziehen('quellen', 'sicherung_quellen');
+    return true;
+}
+
+/**
+ * Eine Zweitschrift NEBEN den Konfigordner ziehen.
+ *
+ * Neben ihn, nicht hinein: der Installateur raeumt config/plugins/<ordner>/
+ * bei jedem Upgrade ab, der Nachbar mit dem Punkt im Namen ueberlebt es.
+ * Dieselben Rechte wie das Original (0600) - in quellen_zuordnung.json kann
+ * in 'http_url' eine Anmeldung stehen.
+ *
+ * Der Rueckgabewert wird gelesen und ein Fehlschlag protokolliert: eine
+ * stille Zweitschrift, die es nicht gibt, ist schlimmer als keine.
+ */
+function bw_zweitschrift_ziehen($was, $wohin)
+{
+    $p = bw_paths();
+    if (!isset($p[$was], $p[$wohin]) || !is_file($p[$was])) { return false; }
+    if (@copy($p[$was], $p[$wohin])) {
+        @chmod($p[$wohin], 0600);
+        return true;
+    }
+    bw_log('Die Zweitschrift ' . basename($p[$wohin]) . ' liess sich nicht erneuern.');
+    return false;
+}
+
+/**
+ * Eine beschaedigte oder fehlende Datei einmal aus ihrer Zweitschrift holen.
+ *
+ * Dieselbe Bauart wie bw_config_heilen(): nach INHALT entscheiden (traegt
+ * die Zweitschrift das Merkwort?), einmal wiederherstellen, einmal melden.
+ * Der statische Riegel je Datei verhindert, dass ein Seitenaufbau mit
+ * mehreren Lesevorgaengen dieselbe Meldung mehrfach schreibt.
+ */
+function bw_datei_heilen($was, $wohin, $merkwort)
+{
+    static $getan = array();
+    if (isset($getan[$was])) { return false; }
+    $p = bw_paths();
+    if (!isset($p[$was], $p[$wohin])) { return false; }
+    list($lage, $_d) = bw_json_lage($p[$was]);
+    if ($lage === 'ok') { return false; }
+    $z = bw_json_lesen($p[$wohin]);
+    if (!is_array($z) || !array_key_exists($merkwort, $z)) { return false; }
+    $getan[$was] = true;
+    if (bw_json_schreiben($p[$was], $z, 0600)) {
+        bw_log(basename($p[$was]) . ' war ' . $lage
+             . ' und wurde aus der Zweitschrift zurueckgeholt.');
+        return true;
+    }
+    bw_log(basename($p[$was]) . ' liess sich nicht aus der Zweitschrift zurueckholen.');
+    return false;
+}
 function bw_abbild()       { return bw_json_lesen(bw_paths()['datadir'] . '/abbild.json'); }
 function bw_verlauf()      { return bw_json_lesen(bw_paths()['datadir'] . '/verlauf.json'); }
 
@@ -584,6 +698,19 @@ function bw_durchlaeufe()
     $a = bw_abbild();
     $plan = isset($a['plan']) && is_array($a['plan']) ? $a['plan'] : array();
     $fest = isset($a['nachtplan']) && is_array($a['nachtplan']) ? $a['nachtplan'] : array();
+    $sp = isset($a['sperre']) && is_array($a['sperre']) ? $a['sperre'] : array();
+    /* Eine Sperre schlaegt auch den eingefrorenen Plan.
+     *
+     * Der Python-Zweig macht das seit jeher (bewaesserung_dienst.py,
+     * veroeffentlichen()), diese Funktion nicht. Gemessen am 06.09.2026 mit
+     * DEMSELBEN Abbild, beide PHP-Fassungen: ueber HTTP ging
+     * "GIESSEN=1;DURCHLAEUFE=5;...;GESPERRT=1" hinaus, ueber MQTT
+     * "giessen=0 durchlaeufe=0 gesperrt=1". Welche der beiden Zahlen der
+     * Miniserver befolgt, entscheidet die Verdrahtung - und das ist keine
+     * Frage, die eine Schnittstelle offenlassen darf. */
+    if (!empty($sp['aktiv'])) {
+        return 0;
+    }
     if (!empty($fest)) {
         return (int) (isset($fest['durchlaeufe']) ? $fest['durchlaeufe'] : 0);
     }
@@ -658,9 +785,19 @@ function bw_zonenzeile($schluessel)
     // das Plugin fuer diese Zone verbucht hat - damit laesst sich die eigene
     // Rueckmeldung gegenpruefen, ohne in Dateien zu sehen.
     $a2 = bw_abbild();
-    $jz = isset($a2['plan']['je_zone'][$schluessel])
-        && is_array($a2['plan']['je_zone'][$schluessel])
-        ? $a2['plan']['je_zone'][$schluessel] : array();
+    /* Der eingefrorene Plan gilt AUCH je Zone - siehe veroeffentlichen()
+     * in bin/bewaesserung_dienst.py. Bis 0.9.21 nahm diese Zeile immer den
+     * frisch gerechneten Plan, waehrend bw_durchlaeufe() daneben die Zahl
+     * des eingefrorenen lieferte. */
+    $jz = array();
+    if (isset($a2['nachtplan']['je_zone'][$schluessel])
+        && is_array($a2['nachtplan']['je_zone'][$schluessel])) {
+        $jz = $a2['nachtplan']['je_zone'][$schluessel];
+    }
+    if (!$jz && isset($a2['plan']['je_zone'][$schluessel])
+        && is_array($a2['plan']['je_zone'][$schluessel])) {
+        $jz = $a2['plan']['je_zone'][$schluessel];
+    }
     return sprintf('ZONE;OK=1;DEFIZIT=%.1f;FUELLSTAND=%.0f;BEDARF=%.1f;LITER=%.0f;MINUTEN=%.0f;GEMESSEN=%d;SEKUNDEN=%d;DURCHLAEUFE=%d;GEGOSSEN=%.1f',
         (float) $z['dr'], (float) $z['fuellstand'], (float) $z['bedarf_mm'],
         (float) (isset($z['liter']) ? $z['liter'] : 0),
@@ -1188,11 +1325,10 @@ function bw_t($schluessel)
     if ($texte === null) {
         $home = getenv('LBHOMEDIR');
         if (!$home || !is_dir($home)) {
-            foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-                if (is_dir($k)) {
-                    $home = $k;
-                    break;
-                }
+            /* Siehe bw_paths(): kein fester Systempfad. */
+            $k = lb_wurzel_ermitteln();
+            if ($k && is_dir($k)) {
+                $home = $k;
             }
         }
         $ordner = basename(dirname(__FILE__));
@@ -1258,11 +1394,56 @@ function bw_wert_taugt($w)
  * nichtnegative ganze Zahl, ein float eine Zahl, alles Uebrige eine
  * Zeichenkette mit eigenem Muster.
  */
+/**
+ * Die zulaessigen Wertebereiche - an EINER Stelle.
+ *
+ * Bis 0.9.21 standen sie ausschliesslich im Formularzweig von
+ * webfrontend/htmlauth/index.php. bw_wert_pruefen() prueft dagegen nur die
+ * ART eines Wertes (ganzzahlig >= 0 bzw. numerisch) und kannte keinen
+ * einzigen Bereich. Gemessen am 06.09.2026: elf vom Formular verbotene
+ * Werte, elfmal "angenommen" - darunter 'breite' = 999. Die laeuft
+ * ungebremst in fao56.extraterrestrische_strahlung (math.radians(999)),
+ * und die Verdunstung wird still falsch. Der Docstring von
+ * bw_sicherung_lesen() sagt zu, eine halb gueltige Datei aendere gar
+ * nichts; das galt fuer fremde Schluessel, nicht fuer unmoegliche Werte.
+ *
+ * Die Zahlen sind woertlich die des Formulars. Wer eine Grenze aendert,
+ * aendert sie hier, und beide Wege ziehen mit.
+ */
+function bw_grenzen()
+{
+    return array(
+        'breite'              => array(-90.0, 90.0),
+        'laenge'              => array(-180.0, 180.0),
+        'hoehe'               => array(-500.0, 5000.0),
+        'wind_hoehe'          => array(0.5, 50.0),
+        'vorschautage'        => array(1, 7),
+        'zonendauer_s'        => array(30, 3600),
+        'pause_min'           => array(0, 240),
+        'max_durchlaeufe'     => array(1, 24),
+        'takt'                => array(60, 3600),
+        'zonendauer_max_s'    => array(60, 7200),
+        'hoechstalter'        => array(300, 86400),
+        'melden_limit_tage'   => array(1, 30),
+        'melden_station_tage' => array(1, 30),
+        'frost_c'             => array(-20.0, 15.0),
+        'wind_kmh_max'        => array(5.0, 150.0),
+        'regen_mmh_max'       => array(0.1, 50.0),
+    );
+}
+
 function bw_wert_pruefen($k, $w)
 {
     $v = bw_vorgaben();
     if (!array_key_exists($k, $v)) { return false; }
     $soll = $v[$k];
+    /* Der Bereich zuerst: er gilt fuer beide Zahlenarten. */
+    $gr = bw_grenzen();
+    if (isset($gr[$k])) {
+        if (is_bool($w) || !is_numeric($w)) { return false; }
+        $z = (float) $w;
+        if ($z < $gr[$k][0] || $z > $gr[$k][1]) { return false; }
+    }
     if (is_int($soll)) {
         if (is_bool($w)) { return true; }
         return is_numeric($w) && (float) $w >= 0 && (float) $w == (int) (float) $w;
@@ -1303,12 +1484,225 @@ function bw_wert_pruefen($k, $w)
  *
  * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
  */
+/**
+ * Die Schluessel, die eine Zone tragen darf - und wie sie zu lesen sind.
+ *
+ * Woertlich die Liste, die der Speicher-Handler in
+ * webfrontend/htmlauth/index.php aufbaut. Wer dort einen Schluessel
+ * ergaenzt, ergaenzt ihn hier: eine Sicherung mit unbekanntem Schluessel
+ * wird abgelehnt, nicht still beschnitten.
+ */
+function bw_zonen_schluessel()
+{
+    return array(
+        'schluessel' => 'text', 'name' => 'text',
+        'flaeche' => 'zahl', 'bepflanzung' => 'text', 'boden' => 'text',
+        'kc' => 'zahl', 'zr' => 'zahl', 'p' => 'zahl',
+        'theta_fc' => 'zahl', 'theta_wp' => 'zahl',
+        'theta_fc_eigen' => 'zahl', 'theta_wp_eigen' => 'zahl',
+        'rate_mmh' => 'zahl', 'mikroklima' => 'zahl',
+        'rate_gemessen' => 'zahl', 'im_zyklus' => 'zahl',
+        'feuchte_thema' => 'text', 'sensor_gewicht' => 'zahl',
+        'dr' => 'zahl', 'regner' => 'text', 'dauer_s' => 'zahl',
+        'hoehe_pflanze' => 'zahl', 'abfluss' => 'zahl',
+        'giess_thema' => 'text', 'giess_art' => 'text',
+        'rate_gemessen_am' => 'text',
+    );
+}
+
+/**
+ * Eine Zonenliste aus einer Sicherungsdatei pruefen.
+ *
+ * Rueckgabe: array(Liste|null, Beanstandungen[]). Wie bei der
+ * Konfiguration gilt: eine einzige Beanstandung heisst, dass GAR NICHTS
+ * uebernommen wird - eine zur Haelfte zurueckgespielte Zonentabelle ist
+ * schlimmer als die alte, und man sieht es ihr nicht an.
+ */
+function bw_zonen_pruefen($liste)
+{
+    $mangel = array();
+    if (!is_array($liste)) {
+        return array(null, array(bw_t('EINST.SICH_ZONEN_KEINE_LISTE')));
+    }
+    $erlaubt = bw_zonen_schluessel();
+    $gesehen = array();
+    $aus = array();
+    foreach (array_values($liste) as $i => $z) {
+        if (!is_array($z)) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_KAPUTT'), (int) $i + 1);
+            continue;
+        }
+        $s = isset($z['schluessel']) ? (string) $z['schluessel'] : '';
+        /* Derselbe Schluesselraum wie am Endpunkt (webfrontend/html/index.php):
+         * Kleinbuchstaben, Ziffern, Strich, Unterstrich. Ein Schluessel mit
+         * Schraegstrich oder Leerzeichen ergaebe ein MQTT-Thema, das niemand
+         * abonnieren kann. */
+        if (!preg_match('/^[a-z0-9_-]{1,40}$/', $s)) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_SCHLUESSEL'),
+                                htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        if (isset($gesehen[$s])) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_DOPPELT'),
+                                htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        $gesehen[$s] = 1;
+        $neu = array();
+        foreach ($z as $k => $w) {
+            if (!isset($erlaubt[$k])) {
+                $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_FREMD'),
+                                    htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
+                                    htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                continue;
+            }
+            if (!bw_wert_taugt($w)) {
+                $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_WERT'),
+                                    htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
+                                    htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                continue;
+            }
+            if ($erlaubt[$k] === 'zahl') {
+                if (!is_numeric($w) && !is_bool($w)) {
+                    $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_WERT'),
+                                        htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
+                                        htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                    continue;
+                }
+                $neu[$k] = (float) $w;
+            } else {
+                $neu[$k] = (string) $w;
+            }
+        }
+        $aus[] = $neu;
+    }
+    return array($mangel ? null : $aus, $mangel);
+}
+
+/**
+ * Die Quellenzuordnung aus einer Sicherungsdatei pruefen.
+ *
+ * Vier Schluessel sind zugelassen; 'felder' traegt je Messgroesse ein
+ * Verzeichnis mit Weg, Thema, Pfad und Einheit. Steuerzeichen und
+ * Anfuehrungszeichen fliegen heraus - dieselbe Saeuberung wie im Formular.
+ */
+function bw_quellen_pruefen($q)
+{
+    $mangel = array();
+    if (!is_array($q)) {
+        return array(null, array(bw_t('EINST.SICH_QUELLEN_KEINE')));
+    }
+    $aus = array();
+    foreach ($q as $k => $w) {
+        if (!in_array($k, array('felder', 'http_url', 'vorlage', 'mqtt_thema'), true)) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_FREMD'),
+                                htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        if ($k === 'felder') {
+            if (!is_array($w)) {
+                $mangel[] = bw_t('EINST.SICH_QUELLEN_FELDER');
+                continue;
+            }
+            $f = array();
+            foreach ($w as $g => $e) {
+                if (!is_array($e) || !isset($e['weg'])
+                    || !in_array((string) $e['weg'], array('mqtt', 'http'), true)) {
+                    $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_WEG'),
+                                        htmlspecialchars((string) $g, ENT_QUOTES, 'UTF-8'));
+                    continue;
+                }
+                $e2 = array('weg' => (string) $e['weg']);
+                foreach (array('thema', 'pfad', 'einheit_quelle') as $t) {
+                    if (isset($e[$t]) && bw_wert_taugt($e[$t])) {
+                        $e2[$t] = preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $e[$t]);
+                    }
+                }
+                $f[(string) $g] = $e2;
+            }
+            $aus['felder'] = $f;
+            continue;
+        }
+        if (!bw_wert_taugt($w)) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_WERT'),
+                                htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        $aus[$k] = preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $w);
+    }
+    return array($mangel ? null : $aus, $mangel);
+}
+
+/**
+ * Was der Knopf "Einstellungen sichern" ausgibt.
+ *
+ * Drei Abschnitte statt einer flachen Liste. Der Zweck der Knoepfe ist der
+ * Umzug auf einen zweiten LoxBerry; bis 0.9.21 standen dort danach die
+ * Einstellungen und das Token, aber keine Zone und keine Quellenzuordnung -
+ * samt der Becherprobe, die der Anwender von Hand gemessen hatte.
+ *
+ * Der lesbare Kopf '_stand' sagt, woher die Datei stammt; '_fassung' sagt
+ * dem Lesecode, welche Gestalt er vor sich hat.
+ */
+/**
+ * Die Fassungsnummer aus plugin.cfg lesen.
+ *
+ * Keine zweite Stelle im Quelltext: 'Fassungsnummer aus einer Quelle' ist
+ * Hausstandard, und eine Konstante hier waere beim naechsten Release
+ * genau die Stelle, die niemand nachzieht. Findet sich die Datei nicht,
+ * bleibt das Feld leer - der Kopf der Sicherungsdatei ist Lesehilfe, kein
+ * Pruefmerkmal.
+ */
+function bw_plugin_fassung()
+{
+    static $f = null;
+    if ($f !== null) { return $f; }
+    $f = '';
+    foreach (array(dirname(dirname(dirname(__DIR__))) . '/plugin.cfg',
+                   bw_paths()['home'] . '/data/system/plugindatabase.json') as $k) {
+        if (!is_file($k)) { continue; }
+        $t = (string) @file_get_contents($k);
+        if (preg_match('/^VERSION=([0-9][0-9.]*)/m', $t, $m)) { $f = $m[1]; break; }
+    }
+    return $f;
+}
+
+function bw_sicherung_bauen()
+{
+    return array(
+        /* Die Fassung kommt aus plugin.cfg, nicht aus einer zweiten
+         * Konstante im Quelltext: eine Fassungsnummer hat EINE Quelle. */
+        '_stand'   => sprintf('%s %s, gesichert %s', bw_t('ALLG.TITEL'),
+                              bw_plugin_fassung(), date('Y-m-d H:i:s')),
+        '_fassung' => 2,
+        'config'   => bw_config(),
+        'zonen'    => bw_zonen(),
+        'quellen'  => bw_quellen(),
+    );
+}
+
 function bw_sicherung_lesen($roh)
 {
     $mangel = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(bw_t('EINST.SICH_KEIN_JSON')), 0);
+        return array(null, array(bw_t('EINST.SICH_KEIN_JSON')), 0, null, null);
+    }
+    /* Zwei Gestalten werden angenommen.
+     *
+     * Fassung 2 (seit 0.9.22) traegt drei Abschnitte; eine flache Liste ist
+     * eine Datei aus 0.9.21 oder aelter und dann eben nur die
+     * Konfiguration. Eine alte Sicherung muss sich zurueckspielen lassen -
+     * sonst waere die Umstellung ein stiller Datenverlust. */
+    $zonen_roh = null;
+    $quellen_roh = null;
+    if (isset($daten['config']) && is_array($daten['config'])) {
+        $zonen_roh = isset($daten['zonen']) ? $daten['zonen'] : null;
+        $quellen_roh = isset($daten['quellen']) ? $daten['quellen'] : null;
+        $daten = $daten['config'];
+    } else {
+        /* Der lesbare Kopf gehoert nicht zur Konfiguration. */
+        unset($daten['_stand'], $daten['_fassung']);
     }
     $vorgaben = bw_vorgaben();
     $neu = $vorgaben;
@@ -1339,7 +1733,24 @@ function bw_sicherung_lesen($roh)
     if ($anzahl === 0) {
         $mangel[] = bw_t('EINST.SICH_LEER');
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    /* Die beiden anderen Teile werden GEPRUEFT, auch wenn die Konfiguration
+     * schon beanstandet ist: der Anwender bekommt alle Beanstandungen auf
+     * einmal, nicht die erste. */
+    $zonen = null;
+    if ($zonen_roh !== null) {
+        list($zonen, $zm) = bw_zonen_pruefen($zonen_roh);
+        $mangel = array_merge($mangel, $zm);
+    }
+    $quellen = null;
+    if ($quellen_roh !== null) {
+        list($quellen, $qm) = bw_quellen_pruefen($quellen_roh);
+        $mangel = array_merge($mangel, $qm);
+    }
+    if ($mangel) {
+        /* Eine Beanstandung in EINEM Teil laesst ALLE drei unberuehrt. */
+        return array(null, $mangel, $anzahl, null, null);
+    }
+    return array($neu, $mangel, $anzahl, $zonen, $quellen);
 }
 
 

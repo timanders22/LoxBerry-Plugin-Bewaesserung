@@ -112,8 +112,13 @@ if ($bw_post && isset($_POST['vorlage_laden'])) {
 /* ---------------- Einstellungen ---------------- */
 if ($bw_post && isset($_POST['speichern'])) {
     $bw_cfg = bw_config();
-    foreach (array('breite' => array(-90, 90), 'laenge' => array(-180, 180),
-                   'hoehe' => array(-500, 5000), 'wind_hoehe' => array(0.5, 50)) as $f => $g) {
+    /* Die Grenzen kommen aus bw_grenzen() (bw_lib.php) - EINE Stelle fuer
+     * das Formular und fuer das Zurueckspielen einer Sicherungsdatei. Bis
+     * 0.9.21 standen sie nur hier, und der Rueckspielweg kannte gar keine:
+     * elf vom Formular verbotene Werte wurden elfmal angenommen. */
+    $bw_gr = bw_grenzen();
+    foreach (array('breite', 'laenge', 'hoehe', 'wind_hoehe') as $f) {
+        $g = $bw_gr[$f];
         $w = $bw_kommazahl($bw_sauber($f));
         if (!preg_match('/^-?[0-9]+(\.[0-9]+)?$/', $w)) {
             $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_ZAHL'), bw_t('EINST.L_' . strtoupper($f)));
@@ -124,9 +129,9 @@ if ($bw_post && isset($_POST['speichern'])) {
             $bw_cfg[$f] = (float) $w;
         }
     }
-    foreach (array('vorschautage' => array(1, 7), 'zonendauer_s' => array(30, 3600),
-                   'pause_min' => array(0, 240), 'max_durchlaeufe' => array(1, 24),
-                   'takt' => array(60, 3600)) as $f => $g) {
+    foreach (array('vorschautage', 'zonendauer_s', 'pause_min',
+                   'max_durchlaeufe', 'takt') as $f) {
+        $g = $bw_gr[$f];
         $w = $bw_sauber($f);
         if (!preg_match('/^[0-9]+$/', $w)) {
             $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_ZAHL'), bw_t('EINST.L_' . strtoupper($f)));
@@ -181,10 +186,9 @@ if ($bw_post && isset($_POST['speichern'])) {
         $bw_cfg['rechenzeit'] = $bw_rz;
     }
 
-    foreach (array('zonendauer_max_s' => array(60, 7200),
-                   'hoechstalter' => array(300, 86400),
-                   'melden_limit_tage' => array(1, 30),
-                   'melden_station_tage' => array(1, 30)) as $bw_f => $bw_g) {
+    foreach (array('zonendauer_max_s', 'hoechstalter',
+                   'melden_limit_tage', 'melden_station_tage') as $bw_f) {
+        $bw_g = $bw_gr[$bw_f];
         $bw_w = $bw_sauber($bw_f);
         if (!preg_match('/^[0-9]+$/', $bw_w)) {
             $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_ZAHL'), bw_t('EINST.L_' . strtoupper($bw_f)));
@@ -198,9 +202,8 @@ if ($bw_post && isset($_POST['speichern'])) {
 
     // Die drei Sperrgrenzen. Sie duerfen negativ sein - Frost bei -3 Grad
     // ist der Regelfall, nicht die Ausnahme.
-    foreach (array('frost_c' => array(-20, 15),
-                   'wind_kmh_max' => array(5, 150),
-                   'regen_mmh_max' => array(0.1, 50)) as $bw_f => $bw_g) {
+    foreach (array('frost_c', 'wind_kmh_max', 'regen_mmh_max') as $bw_f) {
+        $bw_g = $bw_gr[$bw_f];
         $bw_w = $bw_kommazahl($bw_sauber($bw_f));
         if (!preg_match('/^-?[0-9]+(\.[0-9]+)?$/', $bw_w)) {
             $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_ZAHL'), bw_t('EINST.L_' . strtoupper($bw_f)));
@@ -739,7 +742,7 @@ if ($bw_post && isset($_POST['selbsttest'])) {
  * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
  * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
 if ($bw_post && isset($_POST['bw_sichern'])) {
-    $bw_js = json_encode(bw_config(),
+    $bw_js = json_encode(bw_sicherung_bauen(),
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($bw_js !== false) {
         header('Content-Type: application/json; charset=utf-8');
@@ -770,7 +773,7 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
     } elseif ((int) $_FILES['bw_sicherung']['size'] > 262144) {
         $bw_fehler[] = bw_t('EINST.SICH_ZU_GROSS');
     } else {
-        list($bw_neu, $bw_mangel, $bw_n) = bw_sicherung_lesen(
+        list($bw_neu, $bw_mangel, $bw_n, $bw_szonen, $bw_squellen) = bw_sicherung_lesen(
             (string) @file_get_contents($_FILES['bw_sicherung']['tmp_name']));
         if ($bw_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
@@ -793,6 +796,32 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
             }
             if (bw_config_speichern($bw_neu)) {
                 $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
+                /* Die beiden anderen Teile, jeder mit gelesenem
+                 * Rueckgabewert. Sie sind zu diesem Zeitpunkt bereits
+                 * geprueft - bw_sicherung_lesen() haette sonst null
+                 * geliefert und dieser Zweig liefe gar nicht. */
+                if (is_array($bw_szonen)) {
+                    if (bw_zonen_speichern($bw_szonen)) {
+                        $bw_meldungen[] = sprintf(bw_t('EINST.SICH_ZONEN_OK'),
+                                                  count($bw_szonen));
+                    } else {
+                        $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'),
+                                               bw_e($bw_p['zonen']));
+                    }
+                }
+                if (is_array($bw_squellen)) {
+                    if (bw_quellen_speichern($bw_squellen)) {
+                        $bw_meldungen[] = sprintf(bw_t('EINST.SICH_QUELLEN_OK'),
+                            count(isset($bw_squellen['felder']) ? $bw_squellen['felder'] : array()));
+                    } else {
+                        $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'),
+                                               bw_e($bw_p['quellen']));
+                    }
+                }
+                /* Der Dienst rechnet mit Zonen und Zuordnung. Er merkt die
+                 * Aenderung von selbst (_stand_der_dateien beobachtet beide
+                 * Dateien), aber der Anwender soll es lesen. */
+                $bw_meldungen[] = bw_t('EINST.SICH_DIENST');
             } else {
                 $bw_fehler[] = bw_t('EINST.SICH_SCHREIBFEHLER');
             }
@@ -872,7 +901,13 @@ if ($bw_rahmen) {
 .sm-tabelle th, .sm-tabelle td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
 .sm-tabelle th { background: #f5f5f5; font-weight: 600; }
 .sm-b { border: 0; border-radius: 6px; padding: 9px 18px; font-size: 0.93em; cursor: pointer; color: #fff; margin: 4px 6px 4px 0; }
-.sm-b-lesen { background: #4f7d17; } .sm-b-technik { background: #6b7280; } .sm-b-aktion { background: #d97706; }
+/* Die drei verbindlichen Hausfarben (Regeln/04, "Farblegende der Knoepfe").
+   Bis 0.9.21 standen hier #4f7d17 / #6b7280 / #d97706 - gemessen am
+   06.09.2026 fuehrten 173 Pluginordner des Bestands #6dac20, und diese
+   Linie war die einzige Abweichung. Die Klassennamen (sm-b statt sm-btn,
+   kein sm-punkt, keine sm-knopfreihe) bleiben, wie sie sind: die sind fuer
+   diese Linie ausdruecklich zugelassen. */
+.sm-b-lesen { background: #6dac20; } .sm-b-technik { background: #546e7a; } .sm-b-aktion { background: #e0620d; }
 .sm-legende { font-size: 0.83em; color: #666; margin: 6px 0 14px; line-height: 1.8; }
 .sm-legende span { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
 .sm-step { border-left: 3px solid #6dac20; padding: 2px 0 2px 14px; margin: 18px 0; }
@@ -935,13 +970,16 @@ if ($bw_rahmen) {
 
 <h2><?= bw_e(bw_t('EINST.H_DIENST')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
-  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-lesen"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-  <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="start"><?= bw_e(bw_t('EINST.K_START')) ?></button>
+  <?php /* Gruen: der Start stoert den Betrieb nicht. Die Trennlinie
+           Gruen/Orange ist "kann den Betrieb stoeren", nicht "hat eine
+           Wirkung" (Regeln/04). Anhalten und Neustarten bleiben orange. */ ?>
+  <button data-role="none" class="sm-b sm-b-lesen" name="dienst" value="start"><?= bw_e(bw_t('EINST.K_START')) ?></button>
   <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="restart"><?= bw_e(bw_t('EINST.K_NEUSTART')) ?></button>
   <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="stop"><?= bw_e(bw_t('EINST.K_STOP')) ?></button>
 </form>
@@ -1069,8 +1107,8 @@ if ($bw_rahmen) {
 <div class="sm-seite<?= $bw_tab === 'tab-sources' ? ' sm-active' : '' ?>" id="tab-sources">
 <h2><?= bw_e(bw_t('QUELL.H_TITEL')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
-  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-lesen"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <div class="sm-hinweis"><?= bw_t('QUELL.ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= bw_t('QUELL.WEG_ERKLAERUNG') ?></div>
@@ -1082,7 +1120,7 @@ if ($bw_rahmen) {
   <label for="vorlage"><?= bw_e(bw_t('QUELL.L_VORLAGE')) ?></label>
   <select data-role="none" name="vorlage" id="vorlage">
   <?php foreach (bw_tabelle($bw_vorl['vorlagen']) as $bw_k => $bw_v) { ?>
-    <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_q['vorlage']) && $bw_q['vorlage'] === $bw_k) ? ' selected' : '' ?>><?= bw_e($bw_v['text']) ?></option>
+    <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_q['vorlage']) && $bw_q['vorlage'] === $bw_k) ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_v)) ?></option>
   <?php } ?>
   </select>
   <p class="sm-hilfe"><?= bw_t('QUELL.H_VORLAGE') ?></p>
@@ -1090,7 +1128,7 @@ if ($bw_rahmen) {
 <button data-role="none" class="sm-b sm-b-aktion" name="vorlage_waehlen" value="1"><?= bw_e(bw_t('QUELL.K_VORLAGE')) ?></button>
 </form>
 <?php if (isset($bw_q['vorlage']) && isset($bw_vorl['vorlagen'][$bw_q['vorlage']]['hinweis'])) { ?>
-<div class="sm-warnung"><?= bw_e($bw_vorl['vorlagen'][$bw_q['vorlage']]['hinweis']) ?></div>
+<div class="sm-warnung"><?= bw_e(bw_txt($bw_vorl['vorlagen'][$bw_q['vorlage']], 'hinweis')) ?></div>
 <?php } ?>
 
 <form action="index.php" method="post">
@@ -1111,10 +1149,12 @@ if ($bw_rahmen) {
     <th><?= bw_e(bw_t('QUELL.T_EINHEIT')) ?></th><th><?= bw_e(bw_t('QUELL.T_HERKUNFT')) ?></th></tr>
 <?php
 $bw_h = isset($bw_a['herkunft']) && is_array($bw_a['herkunft']) ? $bw_a['herkunft'] : array();
+$bw_hgr = isset($bw_a['herkunft_grund']) && is_array($bw_a['herkunft_grund'])
+        ? $bw_a['herkunft_grund'] : array();
 foreach (bw_tabelle($bw_vorl['groessen']) as $bw_g => $bw_gd) {
     $bw_f = isset($bw_q['felder'][$bw_g]) ? $bw_q['felder'][$bw_g] : array(); ?>
 <tr>
-  <td><?= bw_e($bw_gd['text']) ?><?= !empty($bw_gd['pflicht']) ? ' <span class="sm-aus">*</span>' : '' ?>
+  <td><?= bw_e(bw_txt($bw_gd)) ?><?= !empty($bw_gd['pflicht']) ? ' <span class="sm-aus">*</span>' : '' ?>
       <div class="sm-hilfe sm-mono"><?= bw_e($bw_g) ?> [<?= bw_e($bw_gd['einheit']) ?>]</div></td>
   <td><select data-role="none" name="weg[<?= bw_e($bw_g) ?>]" style="min-width:88px">
       <?php foreach (array('' => bw_t('QUELL.WEG_KEINE'), 'mqtt' => 'MQTT', 'http' => 'HTTP') as $bw_wk => $bw_wt) { ?>
@@ -1126,10 +1166,21 @@ foreach (bw_tabelle($bw_vorl['groessen']) as $bw_g => $bw_gd) {
              value="<?= bw_e(isset($bw_f['pfad']) ? $bw_f['pfad'] : '') ?>"></td>
   <td><input data-role="none" type="text" name="einheit[<?= bw_e($bw_g) ?>]" size="5"
              value="<?= bw_e(isset($bw_f['einheit_quelle']) ? $bw_f['einheit_quelle'] : '') ?>"></td>
+  <?php /* Der GRUND steht dabei.
+           Bis 0.9.21 ueberschrieb der Open-Meteo-Rueckfall die Herkunft, und
+           die Spalte zeigte "Open-Meteo" - auch dann, wenn die Groesse
+           eingerichtet war und nur der Pfad fehlte. Genau diese
+           Verwechslung hat den Geraetebefund vom 06.09.2026 sechseinhalb
+           Stunden lang verdeckt: Nutzlasten kamen an, uebernommen wurde
+           nichts, und nirgends stand, warum. */ ?>
   <td><?php $bw_hw = isset($bw_h[$bw_g]) ? $bw_h[$bw_g] : '';
+      $bw_hg = isset($bw_hgr[$bw_g]) ? (string) $bw_hgr[$bw_g] : '';
       echo $bw_hw === 'station' ? '<span class="sm-an">' . bw_e(bw_t('QUELL.HK_STATION')) . '</span>'
          : ($bw_hw === 'open-meteo' ? bw_e(bw_t('QUELL.HK_ONLINE'))
-         : '<span class="sm-hilfe">' . bw_e($bw_hw !== '' ? $bw_hw : bw_t('QUELL.HK_KEINE')) . '</span>'); ?></td>
+         : '<span class="sm-hilfe">' . bw_e($bw_hw !== '' ? $bw_hw : bw_t('QUELL.HK_KEINE')) . '</span>');
+      if ($bw_hg !== '' && $bw_hw !== 'station' && !empty($bw_f['weg'])) {
+          echo '<div class="sm-hilfe sm-aus">' . bw_e(bw_t('QUELL.HKG_' . strtoupper($bw_hg))) . '</div>';
+      } ?></td>
 </tr>
 <?php } ?>
 </table>
@@ -1329,7 +1380,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 <div class="sm-seite<?= $bw_tab === 'tab-zones' ? ' sm-active' : '' ?>" id="tab-zones">
 <h2><?= bw_e(bw_t('ZONE.H_TITEL')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <p class="sm-hilfe"><?= bw_t('ZONE.ERKLAERUNG') ?></p>
 <form action="index.php" method="post">
@@ -1337,11 +1388,21 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-zones">
 <div class="sm-breit">
 <table class="sm-tabelle">
-<tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_SCHLUESSEL')) ?></th>
+<?php /* 'im Zyklus' steht seit 0.9.22 an zweiter Stelle.
+         Bis 0.9.21 war es die NEUNTE und letzte Spalte, hinter der breiten
+         Themen-Eingabe fuer die Bodenfeuchte - auf einem gewoehnlichen
+         Bildschirm ausserhalb des Bildes, obwohl die Tabelle waagerecht
+         scrollt. Ohne diesen Haken rechnet das Plugin fuer die Zone gar
+         nicht (zonen_im_zyklus = 0 heisst durchlaeufe = 0), und genau das
+         ist am 06.09.2026 passiert: drei Zonen angelegt, kein Haken
+         gefunden, Plan leer. Der wichtigste Schalter der Tabelle gehoert
+         ins Bild. */ ?>
+<tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_ZYKLUS')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_SCHLUESSEL')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_FLAECHE')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEPFLANZUNG')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_BODEN')) ?></th><th><?= bw_e(bw_t('ZONE.T_RATE')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_MIKRO')) ?></th>
-    <th><?= bw_e(bw_t('ZONE.T_FEUCHTE')) ?></th><th><?= bw_e(bw_t('ZONE.T_ZYKLUS')) ?></th></tr>
+    <th><?= bw_e(bw_t('ZONE.T_FEUCHTE')) ?></th></tr>
 <?php /* Acht Zeilen sind die Vorgabe, aber NIE weniger, als es Zonen
          gibt: der Speichern-Handler baut die Liste aus dem Formular
          neu auf. Stuenden in zonen.json neun Zonen und die Tabelle
@@ -1354,24 +1415,25 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 <tr>
   <td><input data-role="none" type="text" name="z_name[<?= $bw_i ?>]" size="16"
              value="<?= bw_e(isset($bw_z['name']) ? $bw_z['name'] : '') ?>"></td>
+  <td style="text-align:center"><input data-role="none" type="checkbox" name="z_zyklus[<?= $bw_i ?>]" value="1"<?= !empty($bw_z['im_zyklus']) ? ' checked' : '' ?>></td>
   <td><input data-role="none" type="text" name="z_schluessel[<?= $bw_i ?>]" size="9"
              value="<?= bw_e(isset($bw_z['schluessel']) ? $bw_z['schluessel'] : '') ?>"></td>
   <td><input data-role="none" type="text" name="z_flaeche[<?= $bw_i ?>]" size="6"
              value="<?= bw_e(isset($bw_z['flaeche']) ? $bw_z['flaeche'] : '') ?>"></td>
   <td><select data-role="none" name="z_bepflanzung[<?= $bw_i ?>]">
       <?php foreach (bw_tabelle($bw_pf['bepflanzung']) as $bw_k => $bw_v) { ?>
-      <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['bepflanzung']) ? $bw_z['bepflanzung'] : 'rasen_kuehl') === $bw_k ? ' selected' : '' ?>><?= bw_e($bw_v['text']) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
+      <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['bepflanzung']) ? $bw_z['bepflanzung'] : 'rasen_kuehl') === $bw_k ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_v)) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
       <?php } ?></select></td>
   <td><select data-role="none" name="z_boden[<?= $bw_i ?>]">
       <?php foreach (bw_tabelle($bw_pf['boden']) as $bw_k => $bw_v) { ?>
-      <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['boden']) ? $bw_z['boden'] : 'lehm') === $bw_k ? ' selected' : '' ?>><?= bw_e($bw_v['text']) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
+      <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['boden']) ? $bw_z['boden'] : 'lehm') === $bw_k ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_v)) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
       <?php } ?></select></td>
   <td><input data-role="none" type="text" name="z_rate[<?= $bw_i ?>]" size="5"
              value="<?= bw_e(isset($bw_z['rate_mmh']) ? $bw_z['rate_mmh'] : '') ?>">
       <select data-role="none" name="z_regner[<?= $bw_i ?>]" style="margin-top:3px">
       <option value=""><?= bw_e(bw_t('ZONE.REGNER_KEINER')) ?></option>
-      <?php foreach (bw_tabelle($bw_pf['regner']) as $bw_rk => $bw_rv) { ?>inue; } ?>
-      <option value="<?= bw_e($bw_rk) ?>"<?= (isset($bw_z['regner']) ? $bw_z['regner'] : '') === $bw_rk ? ' selected' : '' ?>><?= bw_e($bw_rv['text']) ?> (<?= bw_e($bw_rv['mmh']) ?>)</option>
+      <?php foreach (bw_tabelle($bw_pf['regner']) as $bw_rk => $bw_rv) { ?>
+      <option value="<?= bw_e($bw_rk) ?>"<?= (isset($bw_z['regner']) ? $bw_z['regner'] : '') === $bw_rk ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_rv)) ?> (<?= bw_e($bw_rv['mmh']) ?> mm/h)</option>
       <?php } ?></select>
       <?php if (!empty($bw_z['schluessel'])) { ?>
       <div class="sm-hilfe"><?= !empty($bw_z['rate_gemessen'])
@@ -1386,7 +1448,6 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
   <td><input data-role="none" type="text" name="z_feuchte[<?= $bw_i ?>]" size="16"
              value="<?= bw_e(isset($bw_z['feuchte_thema']) ? $bw_z['feuchte_thema'] : '') ?>"
              placeholder="<?= bw_e(bw_t('ZONE.P_FEUCHTE')) ?>"></td>
-  <td style="text-align:center"><input data-role="none" type="checkbox" name="z_zyklus[<?= $bw_i ?>]" value="1"<?= !empty($bw_z['im_zyklus']) ? ' checked' : '' ?>></td>
 </tr>
 <?php } ?>
 </table>
@@ -1451,6 +1512,15 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 
 <h2><?= bw_e(bw_t('ZONE.H_BECHER')) ?></h2>
 <div class="sm-warnung"><?= bw_t('ZONE.BECHER_ERKLAERUNG') ?></div>
+<?php /* Die vier Absaetze beantworten die Fragen, die der Text darueber
+         offen liess - allen voran die des Hausherrn vom 06.09.2026:
+         welchen Durchmesser muessen die Becher haben? Keinen bestimmten,
+         und der Grund dafuer ist derselbe, aus dem 'gerade' das
+         entscheidende Wort ist. */ ?>
+<p class="sm-hilfe"><?= bw_t('ZONE.BECHER_DURCHMESSER') ?></p>
+<p class="sm-hilfe"><?= bw_t('ZONE.BECHER_ZEIT') ?></p>
+<p class="sm-hilfe"><?= bw_t('ZONE.BECHER_TROPF') ?></p>
+<p class="sm-hilfe"><?= bw_t('ZONE.BECHER_ML') ?></p>
 <?php if ($bw_zonen) { ?>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
@@ -1471,6 +1541,13 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 
 <?php if ($bw_a && !empty($bw_a['zonen'])) { ?>
 <h2><?= bw_e(bw_t('ZONE.H_STAND')) ?></h2>
+<?php /* Acht Spalten - sie gehoert in sm-breit (Regeln/04: mehr als sechs
+         Spalten oder Eingabefelder). Ohne Ueberlauf macht
+         .sm-tabelle{width:100%} in einem .sm-wrap mit max-width:980px die
+         rechten Spalten unerreichbar; genau das ist dieser Linie am
+         18.08.2026 schon einmal passiert. Die drei Eingabetabellen der
+         Datei liegen laengst richtig. */ ?>
+<div class="sm-breit">
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_FUELLSTAND')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_DEFIZIT')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEDARF')) ?></th>
@@ -1488,8 +1565,18 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
     <td><?= number_format((float) $bw_e['bedarf_mm'], 1, ',', '.') ?> mm</td>
     <td><?= number_format((float) (isset($bw_e['liter']) ? $bw_e['liter'] : 0), 0, ',', '.') ?><?= $bw_ges ? ' <span class="sm-schaetz">*</span>' : '' ?></td>
     <td><?= number_format((float) (isset($bw_e['minuten']) ? $bw_e['minuten'] : 0), 0, ',', '.') ?><?= $bw_ges ? ' <span class="sm-schaetz">*</span>' : '' ?></td>
-<?php   $bw_jz = isset($bw_plan['je_zone'][$bw_s]) && is_array($bw_plan['je_zone'][$bw_s])
-            ? $bw_plan['je_zone'][$bw_s] : array();
+<?php   /* Erst der eingefrorene Nachtplan, dann der frische - dieselbe
+             Reihenfolge wie in bw_zonenzeile() und im Sendeweg. Sonst zeigt
+             die Tabelle eine andere Ventilzeit, als in Loxone ankommt. */
+        $bw_jz = array();
+        if (isset($bw_a['nachtplan']['je_zone'][$bw_s])
+            && is_array($bw_a['nachtplan']['je_zone'][$bw_s])) {
+            $bw_jz = $bw_a['nachtplan']['je_zone'][$bw_s];
+        }
+        if (!$bw_jz) {
+            $bw_jz = isset($bw_plan['je_zone'][$bw_s]) && is_array($bw_plan['je_zone'][$bw_s])
+                   ? $bw_plan['je_zone'][$bw_s] : array();
+        }
         $bw_ged = in_array((string) $bw_z['name'],
             isset($bw_plan['ventilzeit_gedeckelt']) && is_array($bw_plan['ventilzeit_gedeckelt'])
                 ? $bw_plan['ventilzeit_gedeckelt'] : array(), true); ?>
@@ -1500,6 +1587,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
         : '<span class="sm-hilfe">&mdash;</span>' ?></td></tr>
 <?php } ?>
 </table>
+</div>
 <p class="sm-hilfe"><?= bw_t('ZONE.STAND_FUSSNOTE') ?></p>
 <?php
 /* Die Zonen ohne Niederschlagsrate BENENNEN.
@@ -1614,7 +1702,7 @@ if (!$bw_vt) { ?>
          Knopfreihe gibt es in dieser Linie nicht - bis 0.9.18 standen beide
          als Namen im HTML, ohne dass der Stilblock sie kannte. */ ?>
 <div class="sm-legende">
-  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <button data-role="none" class="sm-b sm-b-aktion" type="submit"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
@@ -1632,33 +1720,65 @@ if (!$bw_vt) { ?>
 <p><span class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/#</span></p>
 
 <h3><?= bw_e(bw_t('MQTT.H_THEMEN')) ?></h3>
+<?php
+/* Welche Themen ZURUECKBEHALTEN werden.
+ *
+ * Die Liste steht woertlich so in bin/bewaesserung_dienst.py
+ * (RETAINED_GLOBAL, RETAINED_ZONE). Wer eine aendert, aendert beide - VON HAND.
+ *
+ * Kein Werkzeug deckt das ab, und der Kommentar sagte bis 06.09.2026 das
+ * Gegenteil ("der Reiter Test misst die Uebereinstimmung nach"). Gemessen:
+ * die Pruefzeile (1) im Reiter Test vergleicht die THEMENNAMEN der Tabelle
+ * gegen p["..."] im Dienst - die Retain-Einstufung liest sie nicht, die
+ * Zeichenfolge RETAINED kommt in bw_test.php nicht ein einziges Mal vor. Ein
+ * Kommentar, der eine Deckung zusagt, die es nicht gibt, ist schlimmer als
+ * gar keiner: er haelt den naechsten Leser davon ab, selbst nachzusehen.
+ *
+ * Eine Pruefzeile, die $bw_ret gegen RETAINED_GLOBAL und $bw_ret_zone gegen
+ * RETAINED_ZONE haelt, waere die richtige Antwort darauf und ist vorgeschlagen,
+ * aber nicht gebaut - deshalb steht hier, was gilt, und nicht, was gut klingt.
+ *
+ * Hausstandard seit 03.09.2026: Zustaende retained, Messwerte mit
+ * Zeitbezug nicht, das Lebenszeichen nie. Bis 0.9.21 ging KEIN Thema
+ * dieser Linie retained hinaus, und die Tabelle sagte dazu gar nichts. */
+$bw_ret = array('ok', 'giessen', 'reicht', 'gesperrt', 'sperrgrund',
+                'plan_fest', 'deckt', 'durchlaeufe', 'noetige_durchlaeufe');
+$bw_ret_zone = array('ok', 'sekunden', 'durchlaeufe');
+?>
+<div class="sm-breit">
 <table class="sm-tabelle">
-<tr><th><?= bw_e(bw_t('MQTT.T_THEMA')) ?></th><th><?= bw_e(bw_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
+<tr><th><?= bw_e(bw_t('MQTT.T_THEMA')) ?></th><th><?= bw_e(bw_t('MQTT.T_BEDEUTUNG')) ?></th><th><?= bw_e(bw_t('MQTT.T_RETAIN')) ?></th></tr>
 <?php foreach (array('ok' => 'MQTT.B_OK', 'et0' => 'MQTT.B_ET0', 'giessen' => 'MQTT.B_GIESSEN',
                      'durchlaeufe' => 'MQTT.B_DURCHLAEUFE', 'noetige_durchlaeufe' => 'MQTT.B_NOETIG',
-                     'reicht' => 'MQTT.B_REICHT', 'alter' => 'MQTT.B_ALTER',
+                     'reicht' => 'MQTT.B_REICHT', 'deckt' => 'MQTT.B_DECKT',
+                     'alter' => 'MQTT.B_ALTER', 'ts' => 'MQTT.B_TS',
+                     'zaehler' => 'MQTT.B_ZAEHLER',
                      'gesperrt' => 'MQTT.B_GESPERRT', 'sperrgrund' => 'MQTT.B_SPERRGRUND',
                      'plan_fest' => 'MQTT.B_PLANFEST') as $bw_k => $bw_v) { ?>
-<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?></td></tr>
+<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?></td>
+    <td><?= in_array($bw_k, $bw_ret, true) ? bw_e(bw_t('MQTT.RETAIN_JA')) : '<span class="sm-hilfe">' . bw_e(bw_t('MQTT.RETAIN_NEIN')) . '</span>' ?></td></tr>
 <?php } ?>
 <?php foreach ($bw_zonen as $bw_z) { $bw_s = bw_e($bw_z['schluessel']);
-    foreach (array('defizit_mm' => 'MQTT.B_ZONE_DEFIZIT', 'bedarf_mm' => 'MQTT.B_ZONE_BEDARF',
+    foreach (array('ok' => 'MQTT.B_ZONE_OK',
+                   'defizit_mm' => 'MQTT.B_ZONE_DEFIZIT', 'bedarf_mm' => 'MQTT.B_ZONE_BEDARF',
                    'dr_mm' => 'MQTT.B_ZONE_DR', 'fuellstand' => 'MQTT.B_ZONE_FUELLSTAND',
                    'liter' => 'MQTT.B_ZONE_LITER', 'minuten' => 'MQTT.B_ZONE_MINUTEN',
                    'sekunden' => 'MQTT.B_ZONE_SEKUNDEN',
                    'durchlaeufe' => 'MQTT.B_ZONE_DURCHLAEUFE',
                    'gegossen_mm' => 'MQTT.B_ZONE_GEGOSSEN') as $bw_zk => $bw_zv) { ?>
-<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/<?= $bw_s ?>/<?= bw_e($bw_zk) ?></td><td><?= sprintf(bw_t($bw_zv), bw_e($bw_z['name'])) ?></td></tr>
+<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/<?= $bw_s ?>/<?= bw_e($bw_zk) ?></td><td><?= sprintf(bw_t($bw_zv), bw_e($bw_z['name'])) ?></td>
+    <td><?= in_array($bw_zk, $bw_ret_zone, true) ? bw_e(bw_t('MQTT.RETAIN_JA')) : '<span class="sm-hilfe">' . bw_e(bw_t('MQTT.RETAIN_NEIN')) . '</span>' ?></td></tr>
 <?php } } ?>
 </table>
+</div>
 </div>
 
 <!-- ============ Einbindung in Loxone ============ -->
 <div class="sm-seite<?= $bw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <h2><?= bw_e(bw_t('LOX.H_TITEL')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
-  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-lesen"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <p class="sm-hilfe"><?= bw_t('LOX.EINLEITUNG') ?></p>
 
@@ -1668,7 +1788,22 @@ if (!$bw_vt) { ?>
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('LOX.T_TITEL')) ?></th><th><?= bw_e(bw_t('LOX.T_BEFEHL')) ?></th><th><?= bw_e(bw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
 <?php foreach (bw_status_felder() as $bw_feld => $bw_info) { ?>
-<tr><td class="sm-mono">BEW_<?= bw_e($bw_feld) ?></td><td class="sm-mono">\i<?= bw_e($bw_feld) ?>=\i\v</td>
+<?php /* Titel UND Suchmuster kommen aus derselben Quelle wie die
+         Importvorlage - bw_status_felder() und bw_check().
+
+         Bis 0.9.21 stand hier beides von Hand: als Titel "BEW_<FELD>",
+         waehrend die Vorlage laengst "Bewaesserung heute Nacht giessen"
+         anlegt, und als Muster eines OHNE das fuehrende Semikolon,
+         waehrend die Baustein-Liste zwei Absaetze weiter unten eines
+         MIT Semikolon zeigt. Die beiden Muster stehen hier absichtlich
+         NICHT woertlich: die Pruefzeile im Reiter Test sucht genau
+         diese Zeichenfolge, und ein Kommentar darf nicht enthalten,
+         wonach ein Werkzeug sucht. Gemessen an der gerenderten Seite:
+         0 von 10 Mustern der Tabelle trugen das Trennzeichen, 4 von 4 der
+         Liste. Wer abschrieb, baute etwas anderes als das Plugin
+         dokumentiert - und wer beides tat, hatte zwei Eingaenge auf
+         derselben Adresse. */ ?>
+<tr><td class="sm-mono"><?= bw_e(bw_t($bw_info[2])) ?></td><td class="sm-mono"><?= bw_e(bw_check($bw_feld)) ?></td>
     <td><?= bw_t($bw_info[1]) ?><?= $bw_info[0] !== '' ? ' [' . bw_e($bw_info[0]) . ']' : '' ?></td></tr>
 <?php } ?>
 </table>
@@ -1676,8 +1811,14 @@ if (!$bw_vt) { ?>
 <form action="index.php" method="post" style="display:inline">
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-  <button data-role="none" class="sm-b sm-b-lesen" name="vorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_VORLAGE')) ?></button>
+  <?php /* Grau: Vorlage-Knoepfe im Reiter "Einbindung in Loxone" sind
+           technische Auskunft, nicht "liest nur" (Regeln/04). */ ?>
+  <button data-role="none" class="sm-b sm-b-technik" name="vorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_VORLAGE')) ?></button>
 </form>
+<?php /* Der Satz gehoert sichtbar in den Reiter, nicht nur in die Hilfe:
+         zweimal importiert heisst doppelte Objekte (Regeln/04). Bis 0.9.21
+         stand er in keiner der beiden Sprachdateien. */ ?>
+<p class="sm-hilfe"><?= bw_t('LOX.IMPORT_HINWEIS') ?></p>
 </div>
 
 <div class="sm-step">
@@ -1736,6 +1877,21 @@ foreach ($bw_liste as $bw_z2) { ?>
     onclick="return confirm(<?= bw_e(json_encode(strip_tags(html_entity_decode(bw_t('LOX.TOKEN_FRAGE'), ENT_QUOTES, 'UTF-8')))) ?>)"><?= bw_e(bw_t('LOX.K_TOKEN_NEU')) ?></button>
 </form>
 </div>
+
+<?php /* Schritt 5 und 6 sind seit 0.9.22 dabei. Der Hausstandard verlangt
+         sieben Schritte, dieser Reiter hatte vier: es fehlten die
+         AUSFALLERKENNUNG (das Feld ALTER liefert die Zahl - nirgends stand,
+         wie man daraus in Loxone eine Meldung baut) und die GEGENPROBE. */ ?>
+<div class="sm-step">
+<h3><?= bw_e(bw_t('LOX.S5_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('LOX.S5_TEXT') ?></p>
+</div>
+
+<div class="sm-step">
+<h3><?= bw_e(bw_t('LOX.S6_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('LOX.S6_TEXT') ?></p>
+<p class="sm-hilfe sm-mono">http://<?= bw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'loxberry') ?>/plugins/<?= bw_e($bw_p['plugin']) ?>/index.php?token=<?= bw_e($bw_token) ?>&amp;selftest=1</p>
+</div>
 </div>
 
 <!-- ============ Test ============ -->
@@ -1755,9 +1911,9 @@ foreach ($bw_liste as $bw_z2) { ?>
 
 <h2><?= bw_e(bw_t('TEST.H_LESEN')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-b-lesen" style="background:#4f7d17"></span><?= bw_t('LEGENDE.LESEN') ?><br>
-  <span class="sm-b-technik" style="background:#6b7280"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
-  <span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION') ?>
+  <span class="sm-b-lesen"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-technik"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
+  <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
@@ -1765,6 +1921,20 @@ foreach ($bw_liste as $bw_z2) { ?>
   <button data-role="none" class="sm-b sm-b-lesen" name="test" value="status"><?= bw_e(bw_t('TEST.K_STATUS')) ?></button>
   <button data-role="none" class="sm-b sm-b-technik" name="test" value="roh"><?= bw_e(bw_t('TEST.K_ROH')) ?></button>
   <button data-role="none" class="sm-b sm-b-technik" name="selbsttest" value="1"><?= bw_e(bw_t('TEST.K_SELBSTTEST')) ?></button>
+</form>
+
+<?php /* Schaltende Knoepfe stehen unter EIGENER Ueberschrift, nie in
+         derselben Reihe wie lesende (Regeln/04). "Jetzt rechnen" ruft
+         dienst.sh einmal auf: es schreibt abbild.json und veroeffentlicht
+         die MQTT-Themen neu, aus denen der Miniserver GIESSEN und
+         DURCHLAEUFE liest. Bis 0.9.21 stand der Knopf zwischen "Status
+         ansehen" und "Selbstpruefung", unter der Ueberschrift
+         "Ansehen und rechnen". */ ?>
+<h2><?= bw_e(bw_t('TEST.H_SCHALTEN')) ?></h2>
+<div class="sm-warnung"><?= bw_t('TEST.SCHALTEN_HINWEIS') ?></div>
+<form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-test">
   <button data-role="none" class="sm-b sm-b-aktion" name="test" value="rechnen"><?= bw_e(bw_t('TEST.K_RECHNEN')) ?></button>
 </form>
 <?php if ($bw_ausgabe !== '') { ?>
@@ -1791,7 +1961,7 @@ if (!$bw_zeilen) { ?>
 <?php } else { ?>
 <div class="sm-log"><?= bw_e(implode("\n", $bw_zeilen)) ?></div>
 <?php } ?>
-<div class="sm-legende"><span class="sm-b-aktion" style="background:#d97706"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
+<div class="sm-legende"><span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION_LOG') ?></div>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-log">

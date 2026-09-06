@@ -392,22 +392,47 @@ def plan_bauen(zonen: list[dict], ergebnisse: dict, cfg: dict) -> dict:
         durchlaeufe -= 1
         gekuerzt = 1
         sekunden, summe_s, gedeckelt = _ventilzeiten(durchlaeufe)
-    # Ein 'if gedeckelt: reicht = 0' stand hier zwischenzeitlich und ist
-    # wieder heraus: es ist beweisbar wirkungslos. Reichen die Durchlaeufe
-    # (reicht = 1), so ist bedarf <= durchlaeufe * rate * wg * dauer_s/3600,
-    # also sekunden_soll <= dauer_s <= dauer_max_s - der Deckel greift dann
-    # gar nicht. Und die Kuerzungsschleife laeuft in diesem Fall ebenfalls
-    # nicht an. Die Eichung hat es gezeigt: mit und ohne die Zeile blieb die
-    # Pruefung gruen, also pruefte sie nichts.
+    # Ein gedeckelter Plan deckt den Bedarf NICHT - also sagt 'reicht' das.
     #
-    # Was der Deckel wirklich beitraegt, steht in 'ventilzeit_gedeckelt'
-    # (WELCHE Zone) und 'ventilzeit_deckt' (decken die gerechneten
-    # Ventilzeiten den Bedarf) - beides ist geeicht.
+    # Hier stand bis 0.9.21 die Begruendung, ein 'if gedeckelt: reicht = 0'
+    # sei "beweisbar wirkungslos": reichen die Durchlaeufe, so sei
+    # bedarf <= durchlaeufe * rate * wg * dauer_s/3600 und damit
+    # sekunden_soll <= dauer_s <= dauer_max_s. Der Beweis rechnet mit
+    # 'dauer_s', der ALLGEMEINEN Zonendauer. Gedeckelt wird aber gegen die
+    # EIGENE Dauer der Zone ('dauern[s]', seit 0.9.7, in der Oberflaeche bis
+    # 3600 s zulaessig), und 'dauer_max_s' oben bildet das Maximum aus der
+    # allgemeinen Dauer und 'zonendauer_max_s' - die eigene kommt darin gar
+    # nicht vor. Liegt sie darueber, greift der Deckel, und 'reicht' blieb
+    # trotzdem 1.
+    #
+    # Gemessen am 06.09.2026, nur mit Werten, die das Formular zulaesst:
+    # eigene Dauer 2400 s, Deckel 1800 s (Werkseinstellung), Rate 2 mm/h,
+    # Bedarf 2,47 mm -> 3 von 3 noetigen Durchlaeufen, sekunden_soll 1800,
+    # ausgebracht 2,25 mm, REICHT = 1. Ueber 720 zulaessige Kombinationen:
+    # 274 mit REICHT = 1 und ventilzeit_deckt = 0, groesster Fehlbetrag
+    # 18,50 von 20,00 mm. Die Eichung blieb damals gruen, weil ihr
+    # Pruefstueck eine Zone OHNE eigene Dauer benutzt - dort kommt der
+    # Deckel nie zum Zuge.
+    #
+    # 'zonendauer_max_s' ist eine harte Grenze des Anwenders ("Die laengste
+    # Ventilzeit, die das Plugin fuer eine Zone errechnen darf"). Sie wird
+    # deshalb NICHT angehoben - die Zone bekommt weiter nur so viel, wie
+    # der Anwender zulaesst. Berichtigt wird die AUSSAGE darueber.
+    #
+    # 'ventilzeit_gedeckelt' (WELCHE Zone) und 'ventilzeit_deckt' bleiben
+    # daneben stehen: sie beantworten die feinere Frage.
+    if gedeckelt:
+        reicht = 0
     for s2, sek in sekunden.items():
         je_zone[s2]["sekunden_soll"] = round(sek)
         je_zone[s2]["durchlaeufe"] = durchlaeufe if sek > 0 else 0
 
     grund = ""
+    if gedeckelt and not grund:
+        # Der Grund wird benannt. "Es reicht nicht" ohne Grund schickt den
+        # Anwender an die falsche Stelle - hier ist nicht das Giessfenster
+        # zu kurz, sondern die laengste zugelassene Ventilzeit zu klein.
+        grund = "ventilzeit_gedeckelt"
     if fenster_min <= 0:
         grund = "fenster_ungueltig"
     elif ohne_rate and noetig == 0:
@@ -872,9 +897,47 @@ def selbstpruefung() -> list[tuple[bool, str]]:
               "Gedeckelte Ventilzeit: reicht=0, ventilzeit_deckt=0, Zone "
               "benannt (%s)" % ", ".join(pl_k["ventilzeit_gedeckelt"])))
     e.append((pl_k["grund"] == "anlage_am_limit",
-              "Der Grund bleibt der aus 0.9.6: '%s' - ein eigener Grund fuer "
-              "die Ventilzeit waere unerreichbar (1944 Faelle gemessen)"
+              "Der Grund bleibt hier der aus 0.9.6: '%s' - in DIESEM Fall "
+              "ist die Anlage ohnehin am Limit, und dieser Grund geht vor"
               % pl_k["grund"]))
+
+    # --- A5 (neu in 0.9.22): eigene Zonendauer UEBER dem Deckel -----------
+    #
+    # Die Pruefung darueber benutzt eine Zone OHNE eigene 'dauer_s'. Dort
+    # kann der Deckel gar nicht mit der eigenen Dauer kollidieren, und
+    # deshalb blieb sie gruen, waehrend 'reicht' in 274 von 720 zulaessigen
+    # Kombinationen faelschlich 1 meldete. Diese Zeile misst genau den Fall,
+    # den die andere nicht erreicht.
+    # Der Bedarf wird hier unmittelbar gesetzt, nicht ueber zone_rechnen():
+    # gemessen wurde der Fall mit 2,47 mm Bedarf - bei einem grossen Bedarf
+    # ist die Anlage ohnehin am Limit, und dann misst die Zeile nicht mehr
+    # den Deckel, sondern die Fenstergrenze.
+    tief = {"schluessel": "tief", "name": "Tropfbeet", "rate_mmh": 2.0,
+            "im_zyklus": 1, "dauer_s": 2400}
+    e_t = {"tief": {"ok": 1, "bedarf_mm": 2.47, "dr": 2.47, "fuellstand": 10.0}}
+    pl_t = plan_bauen([tief], e_t, dict(cfg_w, zonendauer_max_s=1800,
+                                        zonendauer_s=240, pause_min=45,
+                                        max_durchlaeufe=8, wirkungsgrad=0.75,
+                                        fenster_von="22:00", fenster_bis="08:00"))
+    e.append((pl_t["ventilzeit_deckt"] == 0 and pl_t["reicht"] == 0,
+              "Eigene Zonendauer (2400 s) ueber dem Deckel (1800 s): "
+              "reicht=%d, ventilzeit_deckt=%d - bis 0.9.21 stand hier "
+              "reicht=1" % (pl_t["reicht"], pl_t["ventilzeit_deckt"])))
+    e.append((pl_t["grund"] == "ventilzeit_gedeckelt",
+              "... und der Grund benennt den Deckel: '%s'" % pl_t["grund"]))
+    # GEGENPROBE: dieselbe Zone, eigene Dauer UNTER dem Deckel. Ohne diese
+    # Zeile ginge eine Korrektur durch, die 'reicht' einfach immer auf 0
+    # setzt.
+    flach = dict(tief, schluessel="flach", dauer_s=1200)
+    e_f = {"flach": {"ok": 1, "bedarf_mm": 2.47, "dr": 2.47, "fuellstand": 10.0}}
+    pl_f = plan_bauen([flach], e_f, dict(cfg_w, zonendauer_max_s=1800,
+                                         zonendauer_s=240, pause_min=45,
+                                         max_durchlaeufe=8, wirkungsgrad=0.75,
+                                         fenster_von="22:00", fenster_bis="08:00"))
+    e.append((pl_f["ventilzeit_deckt"] == 1 and pl_f["reicht"] == 1,
+              "GEGENPROBE eigene Zonendauer (1200 s) unter dem Deckel: "
+              "reicht=%d, ventilzeit_deckt=%d" % (pl_f["reicht"],
+                                                  pl_f["ventilzeit_deckt"])))
     # Gegenprobe mit einer Zone, deren Bedarf in die laengste Ventilzeit
     # hineinpasst: dort darf keine Beanstandung stehen. Ohne diese Zeile
     # wuerde eine Wache, die IMMER anschlaegt, als richtig durchgehen.

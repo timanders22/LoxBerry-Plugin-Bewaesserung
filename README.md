@@ -5,7 +5,7 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.21 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.22 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
@@ -56,9 +56,37 @@ das der Regelfall an heißen Tagen, und man sollte es wissen.
 
 Für Liter und Minuten braucht es die Niederschlagsrate der Regner. Die steht in
 keinem Katalog verlässlich. Deshalb gibt es die **Becherprobe**: Behälter
-aufstellen, Zone 15 Minuten laufen lassen, Höhe messen, eintragen. Bis dahin
-sind alle Liter- und Minutenangaben mit einem Stern als geschätzt markiert —
-auch am Endpunkt (`geschaetzt: 1`).
+aufstellen, Zone laufen lassen, Höhe messen, eintragen. Bis dahin sind alle
+Liter- und Minutenangaben mit einem Stern als geschätzt markiert — auch am
+Endpunkt (`geschaetzt: 1`).
+
+**Der Durchmesser der Behälter ist gleichgültig.** Das Plugin rechnet
+`Rate = Höhe / Laufzeit` — es nimmt die Höhe, nicht das Volumen, und in einem
+geraden Gefäß kürzt sich die Öffnungsfläche heraus. Ein breiter Becher fängt
+mehr Wasser und verteilt es über entsprechend mehr Fläche.
+
+Entscheidend ist stattdessen dreierlei:
+
+* **Senkrechte Wände.** Ein konischer Eimer fängt über die weite Öffnung und
+  sammelt in einen engeren Querschnitt: die Höhe liest sich zu hoch, die Rate
+  kommt zu hoch heraus, und das Plugin gießt dauerhaft zu wenig — derselbe
+  Fehler wie gar keine Messung, nur unsichtbar.
+* **Genug Millimeter.** Der Ablesefehler liegt bei etwa 0,5 mm, unabhängig von
+  der Bechergröße. Bei 5 mm sind das ±10 %, bei 2,5 mm ±20 %. Richtwerte:
+  Sprühdüsen 15 Minuten, Viereck-, Impuls- und Versenkregner 30.
+* **Mehrere Becher**, über die Zone verteilt, auf Pflanzenhöhe, waagerecht,
+  nicht unmittelbar neben dem Regner — und der Mittelwert wird eingetragen.
+
+Bei **Perlschlauch und Tropfern** taugt die Becherprobe nicht, es fällt nichts
+von oben. Dort wird der Durchfluss gemessen und auf die Fläche umgerechnet:
+ein Liter je Quadratmeter ist genau ein Millimeter, also
+`Rate [mm/h] = Durchfluss [l/h] / Fläche [m²]`. Das Ergebnis als Höhe mit
+60 Minuten Laufzeit eintragen.
+
+Wer nur einen Messbecher mit Milliliter-Strichen hat, braucht den Durchmesser
+doch — dann gilt `Höhe [mm] = 10 · Volumen [ml] / Fläche [cm²]` mit
+`Fläche = π · (d/2)²`. Bei 10 cm Durchmesser sind das 78,5 cm², ein Millimeter
+also 7,85 ml.
 
 ## Aufbau
 
@@ -79,6 +107,103 @@ Kein Pflichtpaket. `paho-mqtt` ist freiwillig und nur für MQTT-Quellen nötig.
 Er liefert Werte und sonst nichts. Ein Endpunkt im unangemeldeten Bereich, der
 Wasser aufdrehen kann, wäre eine Angriffsfläche ohne Gegenwert — geschaltet
 wird vom Bewässerungsbaustein im Miniserver.
+
+## Neu in 0.9.22 — eine vollständige Durchsicht, 36 Befunde
+
+0.9.22 ist keine neue Funktion, sondern eine Durchsicht: am 06.09.2026 wurde
+die Fassung 0.9.21 von Grund auf gegengelesen und gemessen — beide
+PHP-Fassungen, die Dienstschleife, der Installateur, der MQTT-Weg. Alles
+Folgende ist gemessen, nicht vermutet.
+
+**Was im Betrieb wirkt**
+
+* **Ein gedeckelter Plan meldet nicht mehr „reicht".** Trug eine Zone eine
+  eigene Laufzeit über der längsten zugelassenen Ventilzeit, kürzte das Plugin
+  die Ventilzeit — und meldete an Loxone trotzdem `REICHT=1`. Über 720
+  zulässige Einstellungen gemessen: 274 solche Fälle, im schlimmsten bekam die
+  Zone 1,5 von 20 mm und galt als versorgt.
+* **Sperre und Ventilzeit sagen auf beiden Wegen dasselbe.** Bei Frost, Wind
+  oder Regen gingen über HTTP `GESPERRT=1` **und** `GIESSEN=1` gleichzeitig
+  hinaus, während über MQTT `giessen=0` stand. Ebenso beim eingefrorenen
+  Nachtplan: die Gesamtzahl kam aus dem eingefrorenen Plan, die Ventilzeit je
+  Zone aus dem frisch gerechneten — sie änderte sich also mitten in der Nacht,
+  obwohl der Plan festgehalten war.
+* **Zustände gehen retained hinaus.** Bis 0.9.21 ging kein einziges Thema
+  zurückbehalten hinaus; nach einem Neustart des Miniservers oder des Gateways
+  standen alle Eingänge leer, bis der nächste Vollversand kam — frühestens
+  zehn Minuten später. Jetzt gehen die Zustände zurückbehalten hinaus: neun der
+  dreizehn allgemeinen Themen (`ok`, `giessen`, `reicht`, `gesperrt`,
+  `sperrgrund`, `plan_fest`, `deckt`, `durchlaeufe`, `noetige_durchlaeufe`) und
+  drei der zehn Themen je Zone (`ok`, `sekunden`, `durchlaeufe`). Die übrigen
+  vier allgemeinen (`et0`, `alter`, `ts`, `zaehler`) und sieben je Zone sind
+  Messwerte mit Zeitbezug und gehen bewusst ohne Retain hinaus.
+* **Ausfall ist erkennbar.** Neu sind `ts` (Zeitpunkt des Rechengangs) und
+  `zaehler` (Lebenszeichen, 0…999). Das bisherige `alter` behält Name und
+  Bedeutung, war über MQTT aber immer 0 — es entsteht im selben Augenblick wie
+  der Zeitstempel, gegen den es rechnet. Ein gescheiterter Rechengang sendet
+  jetzt `ok=0`, statt zu schweigen; eine Zone, die nicht rechnet, sendet
+  `<zone>/ok = 0`, statt ihre alte Ventilzeit stehen zu lassen.
+* **Der Broker wird wieder versucht.** Wies er die Anmeldung ab (falsches
+  Kennwort, CONNACK 5), blieb der Dienst bis zum Neustart stumm. Jetzt wird
+  erneut versucht — nach einer Minute, dann immer seltener, höchstens alle
+  fünf Minuten.
+* **Ein Thema, das später eingetragen wird, wird auch abonniert.** Wer den
+  Dienst laufen ließ und danach seine Station einrichtete, las im Protokoll
+  „wird neu abonniert" und bekam nie einen Wert.
+* **Der Lückenfüller trägt einen Tag ohne ET0 wirklich nach.** Er übersprang
+  ihn, weil der Tag „dasteht" — die Bilanz rechnete ihn dauerhaft als Tag ohne
+  jede Verdunstung, also in Richtung zu wenig Wasser.
+* **„Größtes Alter eines Stationswerts" wirkt.** Die Einstellung galt bisher
+  nur für die Gießrückmeldung und die Bodenfeuchte; für Temperatur, Wind,
+  Strahlung, Regen und Luftfeuchte galten unverändert 3600 s.
+* **Der Takt wirkt sofort**, nicht erst nach einem Neustart des Dienstes.
+
+**Beim Aktualisieren**
+
+* **`postinstall.sh` prüfte die Konfiguration nie wirklich.** Die Prüfung, ob
+  die vorhandene Datei lesbar ist, benutzte den Python-Pfad 59 Zeilen vor
+  seiner Zuweisung — sie schlug also immer fehl, und die Zweitschrift wurde
+  bedingungslos darüber kopiert. Gemessen: eine heile Konfiguration wurde von
+  einer überholten Sicherung ersetzt.
+* **`preupgrade.sh` bricht jetzt wirklich ab**, wenn es nicht sichern kann.
+  Sein `exit 1` war für den Installateur nur eine Fehlerzeile; das Löschen der
+  alten Installation lief danach trotzdem. Zusätzlich wird am Ende nachgezählt,
+  ob wirklich gesichert wurde.
+* **`postupgrade.sh` ist entfallen.** Es rief `postinstall.sh` ein zweites Mal
+  auf — der Installateur ruft es ohnehin bei jedem Lauf.
+* Die Rettung der Langzeitwerte bleibt liegen, wenn das Zurückholen scheiterte,
+  statt weggeworfen zu werden. Die Fehlerausgabe des minütlichen Wächters geht
+  ins Protokoll statt nach `/dev/null`.
+
+**In der Oberfläche**
+
+* Im Auswahlfeld „Regnertyp" stand ein Rest Quelltext — 48-mal in der Seite.
+* Der Reiter „Einbindung in Loxone" zeigte zwei verschiedene Suchmuster für
+  dasselbe Feld (die abzuschreibende Tabelle ohne Semikolon, die Bausteinliste
+  darunter mit) und zwei verschiedene Namen für denselben virtuellen Eingang.
+  Beides kommt jetzt aus einer Quelle. Dazu zwei neue Schritte
+  (Ausfallerkennung, Gegenprobe) und der Satz, dass Loxone Config beim Import
+  neu anlegt.
+* Vier Bausteine hießen anders als im Loxone-Katalog — „Vergleicher" gibt es
+  dort nicht.
+* Die Spalte „Herkunft" nennt jetzt den Grund: bisher zeigte sie „Open-Meteo",
+  auch wenn die Größe eingerichtet war und nur ein Pfad fehlte.
+* Die Anzeigetexte der Tabellen (Bepflanzung, Boden, Regner, Messgrößen,
+  Vorlagen) sind zweisprachig und in richtiger deutscher Schreibweise; bisher
+  waren sie durchgehend deutsch und in Umschrift.
+* Knopffarben nach Hausstandard, Dienststart grün, Vorlage-Knopf grau,
+  „Jetzt rechnen" unter eigener Überschrift, die achtspaltige Standtabelle
+  scrollbar.
+* Drei neue Prüfzeilen im Reiter Test: Themenliste gegen Sendecode,
+  Suchmuster mit Trennzeichen, Bausteinnamen gegen die Vorlagentitel.
+
+**Sonst**
+
+* Eine zurückgespielte Sicherungsdatei wird jetzt gegen dieselben
+  Wertebereiche geprüft wie das Formular. Vorher wurden elf von elf
+  unmöglichen Werten angenommen, darunter ein Breitengrad von 999.
+* `zonen.json` wird mit 0600 geschrieben wie seine beiden Nachbarn.
+* Dienstschleife und „Jetzt rechnen" rechnen nicht mehr gleichzeitig.
 
 ## Neu in 0.9.21 — drei Dinge, die eine Messung am Gerät gefunden hat
 

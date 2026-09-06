@@ -17,9 +17,22 @@ if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     SELF=$(cd "$(dirname "$0")" && pwd)
     BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
 fi
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    echo "<FAIL> Der LoxBerry-Ordner ist nicht bestimmbar - es wird NICHTS gesichert."
-    exit 1
+if [ -z "$BASE" ] || [ ! -f "$BASE/config/system/general.json" ]; then
+    echo "<FAIL> Der LoxBerry-Ordner ist nicht bestimmbar ($BASE) - es wird NICHTS gesichert."
+    # exit 2, nicht 1.
+    #
+    # Gemessen an sbin/plugininstall.pl eines LoxBerry 4, Zeilen
+    # 854-864: Rueckgabewert 1 erzeugt nur eine Fehlerzeile und ein
+    # push(@errors,...), 'exit > 1' ruft &fail(). Unmittelbar danach steht
+    # bei :872-874 "# Purge old installation" und &purge_installation. Mit
+    # 'exit 1' sagte dieses Skript also "es wird NICHTS gesichert" - und
+    # liess anschliessend genau das geschehen, wovor es warnt:
+    # config/plugins/<x>/ und data/plugins/<x>/ waren weg, samt
+    # Aktionstoken, Zonen, Quellenzuordnung und Wasserhaushalt.
+    #
+    # Zusaetzlich wird jetzt gegen config/system/general.json geprueft: ein
+    # LoxBerry hat sie immer, ein Rest aus einem Pruefstand nie.
+    exit 2
 fi
 
 # Anhalten ueber dienst.sh, nicht mit einem eigenen kill.
@@ -104,6 +117,22 @@ VLB="$BASE/config/plugins/$PFOLDER.backup.verlauf.json"
 if [ -f "$VL" ] && cp -p "$VL" "$VLB"; then
     chmod 600 "$VLB" 2>/dev/null
     echo "<INFO> Verlauf des Wasserhaushalts gesichert."
+fi
+# Die WIRKUNG pruefen, nicht den Rueckgabewert: liegt hinterher etwas da?
+#
+# Scheiterte 'cp' (volles Dateisystem, Rechte), fehlte bis 0.9.21 nur eine
+# <INFO>-Zeile, und 'exit 0' am Ende meldete Erfolg - waehrend der Purge
+# gleich danach das Original loeschte.
+BW_FEHLT=""
+for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
+    if [ -f "$BASE/config/plugins/$PFOLDER/$f" ] \
+       && [ ! -f "$BASE/config/plugins/$PFOLDER.backup.$f" ]; then
+        BW_FEHLT="$BW_FEHLT $f"
+    fi
+done
+if [ -n "$BW_FEHLT" ]; then
+    echo "<FAIL> Nicht gesichert:$BW_FEHLT - das Update wird abgebrochen, damit der Purge die Originale nicht loescht."
+    exit 2
 fi
 echo "<OK> preupgrade abgeschlossen."
 

@@ -1,4 +1,12 @@
 #!/bin/sh
 # Bewaesserung vorausschauend - Waechter, minuetlich.
 # REPLACELBPBINDIR wird bei der Installation durch den bin-Pfad ersetzt.
-"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>&1
+# Die Fehlerausgabe geht ins Protokoll, nicht nach /dev/null.
+#
+# LoxBerry ruft jeden Eintrag ohnehin mit '> /dev/null 2>&1' auf
+# (/etc/cron.d/lbdefaults); wer sie behalten will, muss sie selbst
+# umleiten - Hausstandard seit MarstekVenus 1.0.17. Ohne das steht
+# nirgends, wenn dienst.sh vor seiner ersten Protokollzeile scheitert
+# (kein python3, 'su' bricht ab, bin/plugins/<x>/ gerade im Umbau):
+# der Waechter ist dann stumm tot.
+"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"

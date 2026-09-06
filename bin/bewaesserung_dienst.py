@@ -91,9 +91,16 @@ def _home() -> str:
     h = os.environ.get("LBHOMEDIR", "")
     if h and os.path.isdir(h):
         return h
-    for k in (lb_wurzel_ermitteln(), "/home/loxberry/loxberry"):
-        if os.path.isdir(k):
-            return k
+    # Kein fester Systempfad als Rueckfall mehr.
+    #
+    # Der frueher hier stehende feste Rueckfallpfad gibt es auf dem
+    # gemessenen Geraet nicht - dessen Wurzel liegt woanders -, und ein
+    # Systempfad im Quelltext ist gegen den Hausstandard. Der Rueckfall war
+    # damit toter Code, der nur die Regel riss. Findet die Aufwaertssuche
+    # nichts, bleibt der eigene Ablageort - so wie bisher auch.
+    k = lb_wurzel_ermitteln()
+    if k and os.path.isdir(k):
+        return k
     return str(HIER.parent.parent)
 
 
@@ -338,7 +345,14 @@ def stationslage_protokollieren(abbild: dict) -> bool:
     eingerichtet = sorted(g for g, f in felder.items()
                           if isinstance(f, dict) and f.get("weg"))
     liefern = sorted(g for g in eingerichtet if herkunft.get(g) == "station")
-    stumm = [g for g in eingerichtet if g not in liefern]
+    # Der GRUND gehoert in die Zeile. "tmin, tmax, wind" sagt, WELCHE
+    # Groessen schweigen; erst "tmin (pfad_fehlt)" sagt, wonach zu suchen
+    # ist. Ohne ihn ist "eingerichtet und stumm" von "nie eingerichtet"
+    # nicht zu unterscheiden - genau daran hing der Geraetebefund vom
+    # 06.09.2026 sechseinhalb Stunden lang.
+    gruende = abbild.get("herkunft_grund") or {}
+    stumm = ["%s (%s)" % (g, gruende[g]) if gruende.get(g) else g
+             for g in eingerichtet if g not in liefern]
 
     if not eingerichtet:
         _LOG.info("Eigene Messquellen: keine eingerichtet - gerechnet wird "
@@ -379,6 +393,62 @@ CONNACK_TEXT = {
     5: "nicht berechtigt - Benutzername oder Kennwort falsch, oder der "
        "Broker verlangt eine Anmeldung",
 }
+
+
+class _Uebersprungen(Exception):
+    """Kein Fehler: dieser Takt wurde ausgelassen, weil ein anderer Lauf
+    gerade rechnet. Eigene Klasse, damit der Auffangzweig sie nicht als
+    "Rechengang fehlgeschlagen" protokolliert und keine Stoerung meldet."""
+
+
+class Rechensperre:
+    """Verhindert, dass Dienstschleife und "Jetzt rechnen" zugleich rechnen.
+
+    json_schreiben() ist unteilbar (Nebendatei, fsync, os.replace) - eine
+    halb geschriebene Datei kann nicht entstehen. Ein VERLORENES Schreiben
+    schon: zwei Laeufe lesen denselben Verlauf, beide schreiben, und die
+    Gieß-Rueckmeldung des ersten ist fort. Gemessen mit verschraenkten
+    Lese-/Schreibfolgen am 06.09.2026.
+
+    Die Sperre faellt OFFEN aus: gibt es kein fcntl (Bau-Rechner, Windows)
+    oder laesst sich die Datei nicht anlegen, wird gerechnet wie bisher.
+    Ein Schutz, der den Dienst anhaelt, waere schlimmer als der Schaden.
+    Das Betriebssystem gibt die Sperre beim Prozessende von selbst frei;
+    eine liegengebliebene Sperrdatei blockiert deshalb nichts.
+    """
+
+    def __init__(self, warte_s: float = 0.0) -> None:
+        self.warte_s = float(warte_s)
+        self._f = None
+
+    def __enter__(self) -> bool:
+        try:
+            import fcntl
+        except ImportError:
+            return True
+        try:
+            os.makedirs(DATADIR, exist_ok=True)
+            self._f = open(os.path.join(DATADIR, "rechnen.lock"), "w")
+        except OSError:
+            self._f = None
+            return True
+        ende = time.time() + self.warte_s
+        while True:
+            try:
+                fcntl.flock(self._f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except OSError:
+                if time.time() >= ende:
+                    return False
+                time.sleep(0.5)
+
+    def __exit__(self, *_a) -> None:
+        if self._f is not None:
+            try:
+                self._f.close()
+            except OSError:
+                pass
+            self._f = None
 
 
 def json_lesen(p: str) -> dict:
@@ -519,34 +589,102 @@ def mqtt_gateway() -> dict:
     }
 
 
-def mqtt_senden(paare: dict, praefix: str) -> int:
+# Welche Themen zurueckbehalten werden.
+#
+# Hausstandard seit 03.09.2026: Zustaende retained, Messwerte mit Zeitbezug
+# nicht, das Lebenszeichen nie. Zustand ist hier alles, was einen Sollwert
+# oder ein Flag traegt - nach einem Neustart des Miniservers oder des
+# Gateways muss es sofort wieder dastehen. Messwerte (et0, liter, minuten,
+# fuellstand, bedarf, defizit, gegossen) gehen bewusst OHNE Retain hinaus,
+# damit nach einem Ausfall kein alter Wert als aktuell erscheint; ebenso
+# 'alter', 'ts' und 'zaehler'.
+#
+# Bis 0.9.21 ging KEIN einziges Thema retained hinaus. Ueber Gateway v1
+# heisst das UDP-Verb dafuer 'retain' statt 'publish' - gemessen am
+# 06.09.2026 im Quelltext des Geraets (mqttgateway.pl:293: der UDP-Eingang
+# kennt genau publish, retain, reconnect, save_relayed_states).
+RETAINED_GLOBAL = {
+    "ok", "giessen", "reicht", "gesperrt", "sperrgrund", "plan_fest",
+    "deckt", "durchlaeufe", "noetige_durchlaeufe",
+}
+RETAINED_ZONE = ("ok", "sekunden", "durchlaeufe")
+
+
+def mqtt_senden(paare: dict, praefix: str, retained: set | None = None) -> int:
     """Ueber den UDP-Eingang des Gateways veroeffentlichen.
 
     Der Weg ueber UDP braucht keine Zugangsdaten - das Gateway setzt sie
     selbst. Ein eigener Broker-Anmeldeversuch waere ein zweiter Ort, an dem
     ein Kennwort liegt.
+
+    'retained' nennt die Themen (ohne Praefix), die mit dem Verb 'retain'
+    statt 'publish' hinausgehen sollen.
     """
     g = mqtt_gateway()
     if not g.get("gefunden") or not g.get("udpport"):
         return 0
     gesendet = 0
+    s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         for name, wert in paare.items():
-            # 'publish ' davor - das ist die Form, die der UDP-Eingang des
-            # LoxBerry-Gateways erwartet und die auch die uebrigen Plugins
-            # dieser Reihe benutzen. Bis 0.9.0 fehlte das Verb hier als
-            # einzigem Plugin.
-            zeile = "publish %s/%s %s" % (
-                _mqtt_thema(praefix.strip("/")), _mqtt_thema(name),
+            # 'publish ' bzw. 'retain ' davor - das ist die Form, die der
+            # UDP-Eingang des LoxBerry-Gateways erwartet und die auch die
+            # uebrigen Plugins dieser Reihe benutzen. Bis 0.9.0 fehlte das
+            # Verb hier als einzigem Plugin.
+            verb = "retain" if (retained and name in retained) else "publish"
+            zeile = "%s %s/%s %s" % (
+                verb, _mqtt_thema(praefix.strip("/")), _mqtt_thema(name),
                 mqtt_wert_saeubern(_mqtt_sauber(wert)))
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", int(g["udpport"])))
             gesendet += 1
-        s.close()
     except OSError as f:
-        _LOG.warning("MQTT-Gateway nicht erreichbar: %s", f)
-        return 0
+        # Die schon gesendeten Themen werden GENANNT. Bis 0.9.21 gab die
+        # Funktion hier 0 zurueck, und das Protokoll meldete "0 Themen
+        # gesendet", obwohl die Haelfte draussen war.
+        _LOG.warning("MQTT-Gateway nicht erreichbar nach %d Thema/Themen: %s",
+                     gesendet, f)
+        return gesendet
+    finally:
+        # In einem finally, nicht hinter der Schleife: brach sendto ab,
+        # blieb der Dateizeiger bis zum Verlassen der Funktion offen.
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
     return gesendet
+
+
+_ZAEHLER = -1
+
+
+def _lauf_zaehler() -> int:
+    """Das Lebenszeichen: 0...999, umlaufend, eins weiter je Vollversand.
+
+    Nie retained (Hausstandard): ein zurueckbehaltenes Lebenszeichen zeigt
+    nach einem Ausfall fuer immer "lebt". Wer in Loxone eine Ausfallerkennung
+    baut, sieht an einer stehenden Zahl, dass nichts mehr kommt.
+    """
+    global _ZAEHLER
+    _ZAEHLER = 0 if _ZAEHLER >= 999 else _ZAEHLER + 1
+    return _ZAEHLER
+
+
+def stoerung_veroeffentlichen(cfg: dict) -> int:
+    """Nach einem gescheiterten Rechengang wenigstens 'ok=0' hinausgeben.
+
+    Bis 0.9.21 stand veroeffentlichen() im selben try wie rechnen(): warf
+    der Rechengang, wurde gar nichts gesendet, und der Broker behielt das
+    letzte 'ok=1'. Die eine Zahl, an der Loxone eine Stoerung erkennen soll,
+    fehlte ausgerechnet im Stoerungsfall.
+    """
+    if not int(cfg.get("mqtt_ein") or 0):
+        return 0
+    return mqtt_senden({"ok": 0, "ts": int(time.time()),
+                        "zaehler": _lauf_zaehler()},
+                       str(cfg.get("mqtt_topic") or "bewaesserung"),
+                       {"ok"})
 
 
 def _mqtt_sauber(wert: Any) -> str:
@@ -625,15 +763,38 @@ def verlauf_luecken_fuellen(nach_datum: dict, heute_s: str) -> list:
     v = verlauf_lesen()
     neu = []
     for datum in sorted(nach_datum):
-        if datum >= heute_s or datum in v["tage"]:
+        if datum >= heute_s:
+            continue
+        vorhanden = v["tage"].get(datum)
+        # Ein Tag, der DASTEHT, aber kein 'et0' traegt, ist eine Luecke.
+        #
+        # Bis 0.9.21 stand hier nur "datum in v['tage']". Der Rechengang
+        # legt fuer einen Tag ohne ET0 absichtlich einen Eintrag OHNE den
+        # Schluessel an (siehe rechnen(), Abschnitt "Verlauf") - eigens
+        # damit der Lueckenfueller ihn nachtragen kann. Genau das tat er
+        # nicht: der Tag stand da, und giessplan.py las ihn dauerhaft als
+        # 0,0 mm Verdunstung. Der Fehler ging in dieselbe Richtung wie die
+        # Luecke selbst - zu wenig Wasser.
+        if vorhanden is not None and vorhanden.get("et0") is not None:
             continue
         t = nach_datum[datum]
         if t.get("et0") is None:
             continue
-        v["tage"][datum] = {"et0": float(t["et0"]),
-                            "regen": float(t.get("regen") or 0.0),
-                            "quelle": "open-meteo", "guete": "modell",
-                            "nachgetragen": 1}
+        # Der vorhandene Eintrag wird ERGAENZT, nicht ersetzt: die
+        # Gieß-Rueckmeldung des Tages ('bewaesserung') steht darin und
+        # laesst sich nicht wiederbeschaffen.
+        eintrag = dict(vorhanden or {})
+        eintrag["et0"] = float(t["et0"])
+        eintrag["nachgetragen"] = 1
+        # Regen aus dem Modell nur, wenn der Tag keinen gemessenen traegt.
+        # Der Eintrag eines Tages ohne ET0 setzt 'regen' auf 0.0, ohne dass
+        # das jemand gemessen haette - das ist dieselbe stille Behauptung.
+        if vorhanden is None or str(vorhanden.get("quelle") or "") in \
+                ("", "keine", "unlesbar"):
+            eintrag["regen"] = float(t.get("regen") or 0.0)
+            eintrag["quelle"] = "open-meteo"
+            eintrag["guete"] = "modell"
+        v["tage"][datum] = eintrag
         neu.append(datum)
     if neu:
         schluessel = sorted(v["tage"])
@@ -776,6 +937,11 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         sammler_lokal = quellen.Sammler({}, vorlagen())
     else:
         sammler_lokal = sammler
+        # Die Einstellung "Groesstes Alter eines Stationswerts" gilt ab
+        # 0.9.22 auch fuer die Wetterwerte. Bis 0.9.21 stand sie in der
+        # Oberflaeche, liess sich zwischen 300 und 86400 s stellen - und
+        # wirkte nur auf die Gieß-Rueckmeldung und die Bodenfeuchte.
+        sammler_lokal.hoechstalter = float(cfg.get("hoechstalter") or 3600)
         sammler.http_abholen()
         # Den Tagesverlauf fortschreiben, BEVOR die Werte gelesen werden -
         # sonst fehlt dem heutigen Tag genau der letzte Messpunkt.
@@ -981,6 +1147,12 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         "et0_teile": et0_eigen or {},
         "regen_heute": regen_heute,
         "herkunft": zus["herkunft"],
+        # 'herkunft_grund' steht NEBEN 'herkunft': warum eine eingerichtete
+        # Groesse nichts geliefert hat ('pfad_fehlt', 'mqtt_veraltet',
+        # 'mqtt_kein_json', 'unlesbar', ...). Bis 0.9.21 ueberschrieb der
+        # Open-Meteo-Rueckfall die Herkunft, und die Oberflaeche zeigte
+        # "Open-Meteo", wo in Wahrheit ein Pfad fehlte.
+        "herkunft_grund": zus.get("grund") or {},
         "online_ok": online.get("ok", 0), "online_fehler": online_fehler,
         "vorschau": vorschau,
         "zonen": ergebnisse,
@@ -1108,13 +1280,55 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     p["reicht"] = int(plan.get("reicht") or 0)
     p["giessen"] = 1 if durchlaeufe > 0 else 0
     p["alter"] = max(0, int(time.time()) - int(abbild.get("ts") or 0))
+    # 'ts' und 'zaehler' stehen NEBEN 'alter', nicht an seiner Stelle.
+    #
+    # 'alter' rechnet richtig, misst hier aber nichts: veroeffentlichen()
+    # laeuft unmittelbar hinter rechnen(), und rechnen() setzt abbild['ts']
+    # auf die aktuelle Zeit - die Differenz ist immer 0. Gemessen am
+    # 06.09.2026 ueber drei Rechengaenge: dreimal 0; dasselbe Abbild zwei
+    # Stunden alt ergibt richtig 7200. Ueber MQTT war ein toter Dienst damit
+    # von einem gesunden nicht zu unterscheiden, waehrend der HTTP-Weg
+    # dieselbe Zahl richtig bildet (er liest das Abbild von der Platte).
+    #
+    # Das Thema 'alter' haengt auf jeder bestehenden Anlage an einem
+    # virtuellen Eingang. Es behaelt deshalb Namen und Bedeutung, und die
+    # brauchbare Zahl kommt eindeutig benannt daneben: 'ts' ist der
+    # Zeitpunkt des Rechengangs in Unix-Sekunden, 'zaehler' das
+    # Lebenszeichen.
+    p["ts"] = int(abbild.get("ts") or 0)
+    p["zaehler"] = _lauf_zaehler()
     p["gesperrt"] = int(sperre.get("aktiv") or 0)
     p["sperrgrund"] = str(sperre.get("grund") or "")
     p["plan_fest"] = 1 if fest else 0
+    # 'deckt' fehlte auf dem MQTT-Weg, waehrend der HTTP-Weg es seit jeher
+    # als DECKT fuehrt. Ein reiner MQTT-Anwender bekam ausgerechnet die
+    # Zahl nicht, die eine gedeckelte Ventilzeit sichtbar macht.
+    p["deckt"] = int(plan.get("ventilzeit_deckt") or 0)
     for s, e in (abbild.get("zonen") or {}).items():
+        # Der eingefrorene Plan gilt AUCH je Zone.
+        #
+        # Bis 0.9.21 kam 'durchlaeufe' oben aus 'fest', die Zahlen hier aus
+        # 'plan'. Ein neuer Modelllauf um 01:00 aenderte damit die
+        # Ventilzeit mitten in der Nacht, obwohl der Plan festgehalten war,
+        # und '<zone>/durchlaeufe' widersprach 'durchlaeufe' im selben Takt.
+        # Eine Zone, die es beim Einfrieren noch nicht gab, faellt auf den
+        # frischen Plan zurueck - sonst bekaeme sie gar keine Ventilzeit.
+        jz = {}
+        if fest:
+            jz = (fest.get("je_zone") or {}).get(s) or {}
+        if not jz:
+            jz = (plan.get("je_zone") or {}).get(s) or {}
+        # '<zone>/ok' geht IMMER hinaus, auch wenn die Zone nicht rechnet.
+        #
+        # Bis 0.9.21 sprang die Schleife bei 'ok=0' heraus, und die Zone
+        # sendete gar nichts. Der virtuelle Eingang behielt seine letzte
+        # Ventilzeit, und Loxone goss weiter mit einer Zahl aus einem
+        # Rechengang, der seither jedes Mal scheiterte. Die uebrigen
+        # Zonenthemen bleiben in diesem Fall bewusst aus - sie behalten
+        # ihren Stand, und '<zone>/ok' sagt, was davon zu halten ist.
+        p["%s/ok" % s] = 1 if e.get("ok") else 0
         if not e.get("ok"):
             continue
-        jz = (plan.get("je_zone") or {}).get(s) or {}
         p["%s/defizit_mm" % s] = round(e["bedarf_mm"], 1)   # unveraendert
         p["%s/bedarf_mm" % s] = round(e["bedarf_mm"], 1)
         p["%s/dr_mm" % s] = round(e["dr"], 1)
@@ -1122,10 +1336,22 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
         p["%s/liter" % s] = round(e.get("liter") or 0.0, 0)
         p["%s/minuten" % s] = round(e.get("minuten") or 0.0, 0)
         p["%s/sekunden" % s] = int(jz.get("sekunden_soll") or 0)
-        p["%s/durchlaeufe" % s] = int(jz.get("durchlaeufe") or 0)
+        # Eine Sperre schlaegt auch die Zahl JE ZONE.
+        #
+        # Oben setzt die Sperre 'durchlaeufe' auf 0. Ohne diese Zeile stuende
+        # daneben '<zone>/durchlaeufe = 4' - dieselbe Klasse Widerspruch im
+        # selben Takt, nur eine Ebene tiefer. Die Ventilzeit
+        # ('<zone>/sekunden') bleibt stehen: sie ist ein Sollwert, kein
+        # Befehl, und Tv1..Tv8 sollen nicht bei jedem Frost auf 0 fallen.
+        p["%s/durchlaeufe" % s] = 0 if int(sperre.get("aktiv") or 0)             else int(jz.get("durchlaeufe") or 0)
         if e.get("gegossen_mm") is not None:
             p["%s/gegossen_mm" % s] = round(float(e["gegossen_mm"]), 1)
-    return mqtt_senden(p, str(cfg.get("mqtt_topic") or "bewaesserung"))
+    behalten = set(RETAINED_GLOBAL)
+    for s in (abbild.get("zonen") or {}):
+        for f in RETAINED_ZONE:
+            behalten.add("%s/%s" % (s, f))
+    return mqtt_senden(p, str(cfg.get("mqtt_topic") or "bewaesserung"),
+                       behalten)
 
 
 # --------------------------------------------------------------- Betrieb
@@ -1176,6 +1402,11 @@ class Dienst:
         self.laeuft = True
         self.themen: set = set()
         self.themen_neu = False
+        # Merker fuer eine vom Broker ABGELEHNTE Anmeldung (CONNACK != 0).
+        # Er steht hier und nicht erst vor dem Verbindungsaufbau, damit der
+        # Auffangzweig ihn auch dann lesen kann, wenn schon das Anlegen des
+        # Klienten scheitert.
+        self.abgewiesen = False
 
     def anhalten(self, *_a) -> None:
         self.laeuft = False
@@ -1194,9 +1425,17 @@ class Dienst:
                       sammler.tag["datum"], len(sammler.tag.get("werte") or {}))
         self.themen = _themen_sammeln(sammler, zonen(), zuordnung)
         self.themen_neu = True
-        if self.themen:
-            _LOG.info("MQTT-Themen abonniert: %d", len(self.themen))
-            asyncio.ensure_future(self.mqtt_horchen(sammler))
+        # Der Horcher wird IMMER gestartet, auch wenn beim Start kein Thema
+        # dasteht.
+        #
+        # Bis 0.9.21 stand hier "if self.themen:". mqtt_horchen() hat genau
+        # eine Aufrufstelle - diese. Wer den Dienst laufen liess und danach
+        # im Reiter Quellen seine Station eintrug, bekam die Protokollzeile
+        # "Zuordnung geaendert: n Themen, wird neu abonniert" und trotzdem
+        # nie einen Wert, weil der Horcher nie anlief. Er wartet jetzt auf
+        # Themen, statt sie vorauszusetzen.
+        _LOG.info("MQTT-Themen beim Start: %d", len(self.themen))
+        asyncio.ensure_future(self.mqtt_horchen(sammler))
 
         letzte_rechnung = 0.0
         stand = _stand_der_dateien()
@@ -1204,6 +1443,13 @@ class Dienst:
         while self.laeuft:
             try:
                 cfg = config()
+                # Der Takt wird in JEDEM Durchgang neu gebildet.
+                #
+                # Bis 0.9.21 stand die Zeile vor der Schleife. 'cfg' wurde
+                # zwar jedes Mal neu gelesen, 'takt' nie - wer den Takt in
+                # der Oberflaeche aenderte, wartete bis zum naechsten
+                # Dienstneustart weiter mit dem alten Wert, ohne Hinweis.
+                takt = max(60, min(3600, int(cfg.get("takt") or 300)))
                 jetzt = time.time()
 
                 # Hat jemand in der Oberflaeche etwas geaendert? Dann die
@@ -1235,40 +1481,79 @@ class Dienst:
                     letzte_rechnung = 0.0      # sofort neu rechnen
 
                 if jetzt - letzte_rechnung >= max(600, takt):
-                    abbild = rechnen(cfg, sammler)
-                    json_schreiben(DATEI_ABBILD, abbild)
-                    alt_stand = json_lesen(DATEI_ZUSTAND)
-                    json_schreiben(DATEI_ZUSTAND, {
-                        "ok": abbild["ok"], "ts": abbild["ts"],
-                        "et0": abbild.get("et0"),
-                        "durchlaeufe": (abbild.get("plan") or {}).get("durchlaeufe", 0),
-                        "gesperrt": (abbild.get("sperre") or {}).get("aktiv", 0),
-                        "meldezaehler": alt_stand.get("meldezaehler") or {},
-                        "fehler": abbild.get("et0_fehler") or abbild.get("online_fehler") or ""})
-                    n = veroeffentlichen(abbild, cfg)
-                    meldungen_pruefen(abbild, cfg)
-                    # Unabhaengig von 'melden_ein' und genau einmal
-                    # je Tag - siehe die Funktion selbst.
-                    stationslage_protokollieren(abbild)
-                    sp = abbild.get("sperre") or {}
-                    _LOG.info("Gerechnet: ET0 %s mm (%s), %d Durchlaeufe, "
-                              "%d Themen gesendet%s",
-                              ("%.2f" % abbild["et0"]) if abbild.get("et0") is not None else "-",
-                              abbild.get("et0_quelle"),
-                              (abbild.get("plan") or {}).get("durchlaeufe", 0), n,
-                              (" - GESPERRT (%s)" % sp.get("grund")) if sp.get("aktiv") else "")
-                    letzte_rechnung = jetzt
+                    # Der ganze Rechengang steht unter einer Sperre.
+                    #
+                    # json_schreiben() ist unteilbar - eine halbe Datei kann
+                    # nicht entstehen. Ein VERLORENES Schreiben schon: der
+                    # Dienst und "Jetzt rechnen" lesen denselben Verlauf,
+                    # beide schreiben, und die Gieß-Rueckmeldung des einen
+                    # ist fort. Ohne Warten: bekommt die Schleife die Sperre
+                    # nicht, hat der Anwender gerade selbst rechnen lassen -
+                    # dann ist der Stand frisch, und der naechste Takt kommt.
+                    with Rechensperre(0.0) as frei:
+                        if not frei:
+                            _LOG.info("Ein anderer Lauf rechnet gerade - "
+                                      "dieser Takt wird ausgelassen.")
+                            letzte_rechnung = jetzt
+                            raise _Uebersprungen()
+                        abbild = rechnen(cfg, sammler)
+                        json_schreiben(DATEI_ABBILD, abbild)
+                        alt_stand = json_lesen(DATEI_ZUSTAND)
+                        json_schreiben(DATEI_ZUSTAND, {
+                            "ok": abbild["ok"], "ts": abbild["ts"],
+                            "et0": abbild.get("et0"),
+                            "durchlaeufe": (abbild.get("plan") or {}).get("durchlaeufe", 0),
+                            "gesperrt": (abbild.get("sperre") or {}).get("aktiv", 0),
+                            "meldezaehler": alt_stand.get("meldezaehler") or {},
+                            # Die beiden TAGESMARKEN werden uebernommen.
+                            #
+                            # Bis 0.9.21 ersetzte diese Zeile sie: 'stationstag'
+                            # war nach jedem Rechengang fort, und die Zeile
+                            # "Eigene Messquellen", die genau einmal am Tag
+                            # erscheinen soll, stand in JEDEM Rechengang im
+                            # Protokoll - bei Zehnminutentakt 144-mal am Tag.
+                            # Gemessen: drei Rechengaenge desselben Tages, drei
+                            # Zeilen; einmal() machte es schon richtig und kam
+                            # im selben Versuch auf eine.
+                            "meldetag": alt_stand.get("meldetag") or "",
+                            "stationstag": alt_stand.get("stationstag") or "",
+                            "fehler": abbild.get("et0_fehler") or abbild.get("online_fehler") or ""})
+                        n = veroeffentlichen(abbild, cfg)
+                        meldungen_pruefen(abbild, cfg)
+                        # Unabhaengig von 'melden_ein' und genau einmal
+                        # je Tag - siehe die Funktion selbst.
+                        stationslage_protokollieren(abbild)
+                        sp = abbild.get("sperre") or {}
+                        _LOG.info("Gerechnet: ET0 %s mm (%s), %d Durchlaeufe, "
+                                  "%d Themen gesendet%s",
+                                  ("%.2f" % abbild["et0"]) if abbild.get("et0") is not None else "-",
+                                  abbild.get("et0_quelle"),
+                                  (abbild.get("plan") or {}).get("durchlaeufe", 0), n,
+                                  (" - GESPERRT (%s)" % sp.get("grund")) if sp.get("aktiv") else "")
+                        letzte_rechnung = jetzt
+            except _Uebersprungen:
+                pass
             except Exception as f:
-                _LOG.error("Rechengang fehlgeschlagen: %s", f)
+                # exc_info: ein KeyError erschien bis 0.9.21 als eine einzige
+                # Zeile mit einem Schluesselnamen - ohne Typ, ohne
+                # Rueckverfolgung, ohne Zeilennummer.
+                _LOG.error("Rechengang fehlgeschlagen: %s", f, exc_info=True)
                 # Der Meldezaehler wird UEBERNOMMEN. Bis 0.9.18 ersetzte
                 # diese Zeile die ganze Datei: ausgerechnet die Lage, die
                 # zum Melden fuehren soll, setzte den Zaehler auf null
-                # zurueck, sobald dabei etwas schiefging.
+                # zurueck, sobald dabei etwas schiefging. Seit 0.9.22 stehen
+                # beide Tagesmarken daneben, aus demselben Grund.
                 alt_stand = json_lesen(DATEI_ZUSTAND)
                 json_schreiben(DATEI_ZUSTAND, {
                     "ok": 0, "ts": int(time.time()), "fehler": str(f),
                     "meldezaehler": alt_stand.get("meldezaehler") or {},
-                    "meldetag": alt_stand.get("meldetag") or ""})
+                    "meldetag": alt_stand.get("meldetag") or "",
+                    "stationstag": alt_stand.get("stationstag") or ""})
+                # ... und die Stoerung geht auch nach aussen.
+                try:
+                    stoerung_veroeffentlichen(cfg)
+                except Exception as f2:
+                    _LOG.warning("Stoerungsmeldung nicht absetzbar: %s", f2)
             for _ in range(takt * 2):
                 if not self.laeuft:
                     break
@@ -1291,6 +1576,7 @@ class Dienst:
         broker = g.get("broker") or "localhost"
         if broker in ("localhost", ""):
             broker = "127.0.0.1"
+        warte = 60
         while self.laeuft:
             try:
                 # Fassungsfest: paho-mqtt ab 2.0 verlangt die Angabe der
@@ -1322,6 +1608,17 @@ class Dienst:
                             client.disconnect()
                         except Exception:
                             pass
+                        # Merker statt 'return'.
+                        #
+                        # Bis 0.9.21 kehrte der Rueckruf hier einfach zurueck.
+                        # Eine Ausnahme flog dabei nicht, die innere Schleife
+                        # lief weiter in ihrem sleep(1), und der aeussere
+                        # Wiederversuch griff nie: nach EINER abgelehnten
+                        # Anmeldung blieb der Dienst bis zum Neustart stumm.
+                        # An dieser Anlage ist der Fall erreichbar - der
+                        # Broker laeuft mit allow_anonymous false und weist
+                        # ein falsches Kennwort mit CONNACK 5 ab.
+                        self.abgewiesen = True
                         return
                     for t in sorted(self.themen):
                         client.subscribe(t)
@@ -1334,11 +1631,12 @@ class Dienst:
                                         msg.payload.decode("utf-8", "replace"))
 
                 abonniert = set(self.themen)
+                self.abgewiesen = False
                 c.on_connect = bei_verbindung
                 c.on_message = bei_nachricht
                 c.connect(broker, int(g.get("brokerport") or 1883), 60)
                 c.loop_start()
-                while self.laeuft:
+                while self.laeuft and not self.abgewiesen:
                     await asyncio.sleep(1)
                     if self.themen_neu:
                         # Weggefallene Themen abbestellen: ein entferntes
@@ -1365,13 +1663,26 @@ class Dienst:
                 # Die Meldung nennt, OB eine Anmeldung mitging - sonst sucht
                 # man bei einer abgelehnten Anmeldung im Netz.
                 _LOG.warning("Broker %s:%s nicht erreichbar (%s: %s) - "
-                             "Anmeldung %s, neuer Versuch in 30 s",
+                             "Anmeldung %s, neuer Versuch in %d s",
                              broker, g.get("brokerport"), type(f).__name__, f,
-                             ("als '%s'" % g["user"]) if g.get("user") else "ohne Benutzer")
-                for _ in range(60):
-                    if not self.laeuft:
-                        return
-                    await asyncio.sleep(0.5)
+                             ("als '%s'" % g["user"]) if g.get("user") else "ohne Benutzer",
+                             warte)
+            # Nachfassen erst nach einer Minute, dann immer seltener,
+            # hoechstens alle fuenf Minuten (Hausstandard).
+            #
+            # Bis 0.9.21 waren es fest 30 s. Zusammen mit dem Merker oben
+            # waere daraus bei falschem Kennwort eine Protokollzeile alle
+            # 30 Sekunden geworden - rund 2 900 Zeilen in der Nacht, bei
+            # einer Rotationsmarke von 512 000 Byte. Der Ausfall haette das
+            # ganze uebrige Protokoll aus der Datei gerollt.
+            if self.abgewiesen:
+                _LOG.warning("Anmeldung am Broker abgelehnt - neuer Versuch "
+                             "in %d s.", warte)
+            for _ in range(warte * 2):
+                if not self.laeuft:
+                    return
+                await asyncio.sleep(0.5)
+            warte = min(300, warte * 2)
 
 
 def einmal() -> int:
@@ -1391,23 +1702,36 @@ def einmal() -> int:
     # liegen im anderen Prozess. Die Tagesextremwerte aber liegen auf der
     # Platte, und sie sind es, aus denen Tmin und Tmax entstehen.
     s.tag_laden(json_lesen(DATEI_EXTREME))
-    a = rechnen(cfg, s)
-    json_schreiben(DATEI_ABBILD, a)
-    # Die drei Tagesmarken werden UEBERNOMMEN, nicht ersetzt. Bis 0.9.20
-    # schrieb diese Zeile eine frische Zustandsdatei: ein Druck auf
-    # "Jetzt rechnen" setzte den Meldezaehler und die Tagesmarke der
-    # Stationslage auf null zurueck. Dieselbe Klasse wie der Fehler, den
-    # 0.9.19 in der Dienstschleife behoben hat.
-    alt = json_lesen(DATEI_ZUSTAND)
-    json_schreiben(DATEI_ZUSTAND, {"ok": a["ok"], "ts": a["ts"],
-                                   "et0": a.get("et0"),
-                                   "durchlaeufe": (a.get("plan") or {}).get("durchlaeufe", 0),
-                                   "meldezaehler": alt.get("meldezaehler") or {},
-                                   "meldetag": alt.get("meldetag") or "",
-                                   "stationstag": alt.get("stationstag") or "",
-                                   "fehler": a.get("et0_fehler") or ""})
-    stationslage_protokollieren(a)
-    n = veroeffentlichen(a, cfg)
+    # Dieselbe Einstellung wie im Dienst - sonst rechnete "Jetzt rechnen"
+    # mit einer anderen Altersgrenze als der Takt daneben.
+    s.hoechstalter = float(cfg.get("hoechstalter") or 3600)
+    # "Jetzt rechnen" WARTET auf die Sperre, es laesst nicht aus: der
+    # Anwender hat gerade gedrueckt und will ein Ergebnis sehen. Zwanzig
+    # Sekunden reichen fuer einen Rechengang der Dienstschleife; danach
+    # wird ohne Sperre gerechnet und gesagt, dass zwei Laeufe zugleich
+    # geschrieben haben koennten.
+    with Rechensperre(20.0) as frei:
+        if not frei:
+            print("Hinweis: der Dienst rechnet gerade selbst. Es wird "
+                  "trotzdem gerechnet - der Verlauf koennte dabei einen "
+                  "Eintrag verlieren.")
+        a = rechnen(cfg, s)
+        json_schreiben(DATEI_ABBILD, a)
+        # Die drei Tagesmarken werden UEBERNOMMEN, nicht ersetzt. Bis 0.9.20
+        # schrieb diese Zeile eine frische Zustandsdatei: ein Druck auf
+        # "Jetzt rechnen" setzte den Meldezaehler und die Tagesmarke der
+        # Stationslage auf null zurueck. Dieselbe Klasse wie der Fehler, den
+        # 0.9.19 in der Dienstschleife behoben hat.
+        alt = json_lesen(DATEI_ZUSTAND)
+        json_schreiben(DATEI_ZUSTAND, {"ok": a["ok"], "ts": a["ts"],
+                                       "et0": a.get("et0"),
+                                       "durchlaeufe": (a.get("plan") or {}).get("durchlaeufe", 0),
+                                       "meldezaehler": alt.get("meldezaehler") or {},
+                                       "meldetag": alt.get("meldetag") or "",
+                                       "stationstag": alt.get("stationstag") or "",
+                                       "fehler": a.get("et0_fehler") or ""})
+        stationslage_protokollieren(a)
+        n = veroeffentlichen(a, cfg)
     plan = a.get("plan") or {}
     print("ET0 heute: %s mm (%s, %s)" % (
         ("%.2f" % a["et0"]) if a.get("et0") is not None else "-",

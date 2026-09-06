@@ -348,8 +348,25 @@ class Sammler:
         self.roh_http: Any = None
         self.roh_http_ts: float = 0.0
         self.letzter_http_fehler = ""
+        # Groesstes Alter eines Stationswerts, in Sekunden.
+        #
+        # Bis 0.9.21 stand die Zahl nur als Vorgabewert im Kopf von wert()
+        # (3600.0), und KEINE der drei Aufrufstellen im Betrieb hat sie
+        # uebergeben - beobachten(), messwerte_zusammenstellen() und
+        # regen_tag() riefen wert(g) ohne Argument. Die Einstellung
+        # "Groesstes Alter eines Stationswerts", die die Oberflaeche
+        # zwischen 300 und 86400 s zulaesst, wirkte damit auf tmin, tmax,
+        # Wind, Strahlung, Regen und Luftfeuchte gar nicht; nur die
+        # Gieß-Rueckmeldung und die Bodenfeuchte lasen sie (an einer
+        # zweiten Stelle im Dienst). Jetzt traegt der Sammler sie, und
+        # wert() nimmt sie als Vorgabe.
+        self.hoechstalter: float = 3600.0
         # Tagesspeicher: datum -> groesse -> Kennzahlen (siehe beobachten()).
         self.tag: dict[str, Any] = {"datum": "", "werte": {}}
+        # Warum eine eingerichtete Groesse zuletzt nichts geliefert hat.
+        # Wird von beobachten() gefuellt und von
+        # messwerte_zusammenstellen() weitergereicht.
+        self.gruende: dict[str, str] = {}
 
     # ---- MQTT ----
 
@@ -420,8 +437,16 @@ class Sammler:
             self.letzter_http_fehler = str(f)
             _LOG.warning("HTTP-Quelle antwortet nicht: %s", f)
 
-    def wert(self, groesse: str, hoechstalter: float = 3600.0) -> tuple[float | None, str]:
-        """Eine Messgroesse holen. Rueckgabe: (Wert, Herkunft)."""
+    def wert(self, groesse: str,
+             hoechstalter: float | None = None) -> tuple[float | None, str]:
+        """Eine Messgroesse holen. Rueckgabe: (Wert, Herkunft).
+
+        Ohne Angabe gilt das 'hoechstalter' des Sammlers, das der Dienst aus
+        der Konfiguration setzt. Ein fester Vorgabewert im Kopf hat bis
+        0.9.21 dafuer gesorgt, dass die Einstellung nirgends ankam.
+        """
+        if hoechstalter is None:
+            hoechstalter = float(self.hoechstalter or 3600.0)
         f = self.felder.get(groesse)
         if not isinstance(f, dict) or not f.get("weg"):
             return None, "fehlt"
@@ -484,9 +509,21 @@ class Sammler:
         if self.tag.get("datum") != datum:
             self.tag = {"datum": datum, "werte": {}}
         n = 0
+        # Der Grund wird MITGESCHRIEBEN, nicht weggeworfen.
+        #
+        # Bis 0.9.21 stand hier "w, _woher = self.wert(g)". wert() nennt
+        # sauber, warum eine eingerichtete Groesse nichts liefert
+        # ('pfad_fehlt', 'mqtt_veraltet', 'mqtt_kein_json', 'unlesbar' ...) -
+        # und beobachten() warf es weg, waehrend messwerte_zusammenstellen()
+        # es anschliessend mit 'open-meteo' ueberschrieb. Uebrig blieb eine
+        # Oberflaeche, die "Open-Meteo" anzeigt, wo in Wahrheit ein Pfad
+        # fehlt. Genau diese Verwechslung steht hinter dem Geraetebefund vom
+        # 06.09.2026: Nutzlasten kamen an, uebernommen wurde nichts.
+        self.gruende = {}
         for g in self.felder:
-            w, _woher = self.wert(g)
+            w, woher = self.wert(g)
             if w is None:
+                self.gruende[g] = woher
                 continue
             n += 1
             k = self.tag["werte"].setdefault(
@@ -567,6 +604,9 @@ def messwerte_zusammenstellen(sammler: Sammler, online_heute: dict | None,
     Ohne 'datum' verhaelt sich die Funktion wie bis 0.9.6.
     """
     herkunft: dict[str, str] = {}
+    # 'grund' steht NEBEN 'herkunft', es ersetzt es nicht: 'herkunft' haengt
+    # in der Oberflaeche und im Abbild und behaelt seine Bedeutung.
+    grund: dict[str, str] = {}
     m: dict[str, Any] = {}
 
     fuer_online = {
@@ -585,6 +625,12 @@ def messwerte_zusammenstellen(sammler: Sammler, online_heute: dict | None,
             m[g] = w
             herkunft[g] = "station"
             continue
+        # Hier ist der Grund noch bekannt. Ein paar Zeilen weiter unten
+        # ueberschreibt der Open-Meteo-Rueckfall 'herkunft' - und damit war
+        # bis 0.9.21 nicht mehr zu unterscheiden, ob die Groesse nie
+        # eingerichtet war oder ob sie eingerichtet ist und schweigt.
+        if woher not in ("", "fehlt"):
+            grund[g] = woher
         if online_heute:
             if g in fuer_online and online_heute.get(fuer_online[g]) is not None:
                 m[g] = online_heute[fuer_online[g]]
@@ -614,7 +660,13 @@ def messwerte_zusammenstellen(sammler: Sammler, online_heute: dict | None,
     m["laenge"] = float(standort.get("laenge") or 0.0)
     m["hoehe"] = float(standort.get("hoehe") or 0.0)
     m["kuestennah"] = bool(standort.get("kuestennah"))
-    return {"messwerte": m, "herkunft": herkunft}
+    # Was beobachten() ueber den Tag gesammelt hat, kommt dazu: eine
+    # Groesse, die im Takt nichts liefert, aber gerade zufaellig einen
+    # Tageswert hat, soll ihren Grund nicht verlieren.
+    for g, w in (getattr(sammler, "gruende", None) or {}).items():
+        if g not in grund and herkunft.get(g) != "station":
+            grund[g] = w
+    return {"messwerte": m, "herkunft": herkunft, "grund": grund}
 
 
 # --------------------------------------------------------------------------
