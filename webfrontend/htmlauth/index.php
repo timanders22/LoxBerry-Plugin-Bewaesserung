@@ -294,7 +294,6 @@ if ($bw_post && isset($_POST['vorlage_waehlen'])) {
          * dasteht, bleibt stehen, und die Meldung sagt beide Zahlen.
          */
         $bw_q = bw_quellen();
-        $bw_q['vorlage'] = $bw_v;
         $bw_vorl_f = isset($bw_alle['vorlagen'][$bw_v]['felder'])
             ? (array) $bw_alle['vorlagen'][$bw_v]['felder'] : array();
         $bw_hat = isset($bw_q['felder']) && is_array($bw_q['felder'])
@@ -306,6 +305,19 @@ if ($bw_post && isset($_POST['vorlage_waehlen'])) {
             $bw_neu_n++;
         }
         $bw_q['felder'] = $bw_hat;
+
+        /* Der Name der Vorlage wird nur uebernommen, wenn wenigstens ein
+         * Feld aus ihr stammt.
+         *
+         * Bis 0.9.22 stand er ueber der Schleife und wurde bedingungslos
+         * gesetzt. Wer eine zweite Vorlage waehlte, obwohl schon alles
+         * eingerichtet war, aenderte damit NUR den Namen - die Oberflaeche
+         * nannte danach eine Vorlage, von der kein einziges Feld stammte,
+         * und der Reiter Test las daraus eine falsche Ursache ab. Genau
+         * dieser Stand lag am 06.09.2026 auf der Anlage:
+         * vorlage='ecowitt_mqtt_direkt' bei acht HTTP-Pfaden, 0 von 8
+         * lesbar. Gemessen in 7.4 und 8.4 mit vorlagenbruch_probe.py. */
+        if ($bw_neu_n > 0) { $bw_q['vorlage'] = $bw_v; }
 
         /* Die Adresse: ein Platzhalter wird NIE gespeichert, und eine
          * vorhandene Adresse wird nie ueberschrieben. Der Platzhalter steht
@@ -1142,6 +1154,32 @@ if ($bw_rahmen) {
        value="<?= bw_e(isset($bw_q['http_url']) ? $bw_q['http_url'] : '') ?>">
 <h2><?= bw_e(bw_t('QUELL.S3_TITEL')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('QUELL.S3_TEXT') ?></p>
+<?php
+/* Die Summe ueber die Spalte Herkunft.
+ *
+ * Je Groesse stand 'unlesbar' schon immer da. Am 06.09.2026 standen acht
+ * davon untereinander, monatelang, und niemand hat es bemerkt - eine Zahl
+ * faellt auf, eine Spalte nicht. Die Zeile sagt ausdruecklich, dass sie
+ * die LETZTE Rechnung beurteilt und nicht den Augenblick; sonst waere sie
+ * unmittelbar nach einer Aenderung falsch. */
+$bw_ein = 0; $bw_von_station = 0;
+foreach (bw_tabelle($bw_vorl['groessen']) as $bw_zg => $bw_zu) {
+    if (empty($bw_q['felder'][$bw_zg]['weg'])) { continue; }
+    $bw_ein++;
+    if (isset($bw_a['herkunft'][$bw_zg]) && $bw_a['herkunft'][$bw_zg] === 'station') {
+        $bw_von_station++;
+    }
+}
+if ($bw_ein > 0) {
+    $bw_wann = isset($bw_a['ts']) && $bw_a['ts']
+             ? date('d.m.Y H:i', (int) $bw_a['ts']) : '?';
+    $bw_kl = ($bw_von_station === 0) ? 'sm-fehler'
+           : (($bw_von_station < $bw_ein) ? 'sm-warnung' : 'sm-hinweis');
+    ?>
+<div class="<?= $bw_kl ?>"><?= sprintf(bw_t('QUELL.SUMME_HERKUNFT'),
+    (int) $bw_von_station, (int) $bw_ein, bw_e($bw_wann)) ?><?php
+    if ($bw_von_station === 0) { ?> <?= bw_t('QUELL.SUMME_NULL') ?><?php } ?></div>
+<?php } ?>
 <div class="sm-breit">
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('QUELL.T_GROESSE')) ?></th><th><?= bw_e(bw_t('QUELL.T_WEG')) ?></th>
@@ -1777,7 +1815,7 @@ $bw_ret_zone = array('ok', 'sekunden', 'durchlaeufe');
 <div class="sm-seite<?= $bw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <h2><?= bw_e(bw_t('LOX.H_TITEL')) ?></h2>
 <div class="sm-legende">
-  <span class="sm-b-lesen"></span><?= bw_t('LEGENDE.LESEN') ?><br>
+  <span class="sm-b-technik"></span><?= bw_t('LEGENDE.TECHNIK') ?><br>
   <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <p class="sm-hilfe"><?= bw_t('LOX.EINLEITUNG') ?></p>

@@ -5,7 +5,7 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.22 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.23 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
@@ -107,6 +107,30 @@ Kein Pflichtpaket. `paho-mqtt` ist freiwillig und nur für MQTT-Quellen nötig.
 Er liefert Werte und sonst nichts. Ein Endpunkt im unangemeldeten Bereich, der
 Wasser aufdrehen kann, wäre eine Angriffsfläche ohne Gegenwert — geschaltet
 wird vom Bewässerungsbaustein im Miniserver.
+
+## Neu in 0.9.23 — zwei Punkte aus einer Messung an der Anlage
+
+* **Der Name der Vorlage wird nur noch übernommen, wenn wenigstens eine Größe
+  aus ihr stammt.** Bis 0.9.22 wurde er bedingungslos gesetzt: Wer eine zweite
+  Vorlage wählte, obwohl schon alles eingerichtet war, änderte damit **nur den
+  Namen** — die Oberfläche nannte danach eine Vorlage, von der keine einzige
+  Größe kam, und der Reiter Test las daraus eine falsche Ursache ab. Genau
+  dieser Stand lag am 06.09.2026 auf der Anlage: eingetragen war
+  `ecowitt_mqtt_direkt`, hinterlegt waren acht HTTP-Pfade, gelesen wurden
+  0 von 8 Größen. Die Größen selbst überschreibt eine Vorlage schon lange nicht
+  mehr (in 0.9.16 nachgemessen, dem ältesten hier vorliegenden Archiv) — es war
+  allein der Name, der log.
+* **Der Reiter „Quellen" zieht die Herkunft jetzt zusammen:** „Bei der letzten
+  Rechnung (Zeitpunkt) kamen *N* von *M* eingerichteten Messgrößen von der
+  Station." Je Größe stand „unlesbar" schon immer da; am 06.09.2026 standen
+  acht davon untereinander, monatelang, und es ist niemandem aufgefallen —
+  **eine Zahl fällt auf, eine Spalte nicht.** Kommt keine einzige Größe von der
+  Station, sagt die Zeile ausdrücklich, dass mit Open-Meteo gerechnet wurde.
+  Sie beurteilt die **letzte Rechnung**, nicht den Augenblick, und nennt deren
+  Zeitpunkt mit — sonst stünde sie unmittelbar nach einer Änderung falsch da.
+
+Beides ist Anzeige und Eingabepfad; an der Rechnung, am Dienst und am
+MQTT-Weg ist nichts geändert.
 
 ## Neu in 0.9.22 — eine vollständige Durchsicht, 36 Befunde
 
