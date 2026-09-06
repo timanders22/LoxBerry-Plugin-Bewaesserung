@@ -298,16 +298,86 @@ def meldungen_pruefen(abbild: dict, cfg: dict) -> list:
     return [t for _s, t in raus]
 
 
+def stationslage_protokollieren(abbild: dict) -> bool:
+    """Einmal je Tag ins Protokoll: greift die eigene Zuordnung ueberhaupt?
+
+    Anlass, am Geraet gemessen am 06.09.2026: eine Anlage lief sechseinhalb
+    Stunden mit eingerichteter Wetterstation, mit empfangenen Nutzlasten
+    (34 Sekunden alt) - und NULL uebernommenen Werten. Jede Groesse kam von
+    Open-Meteo, 'et0_abdeckung_h' blieb bei 0.0, 'tagesextreme.json' blieb
+    leer, und die eigene Rechnung wurde in JEDEM Rechengang verworfen. Im
+    Protokoll stand davon nichts.
+
+    Den Waechter dafuer gibt es in meldungen_pruefen() - aber der steigt in
+    seiner ersten Zeile aus, wenn 'melden_ein' nicht gesetzt ist, und das
+    ist es ab Werk. Eine Benachrichtigung ist auch der falsche Ort: sie ist
+    eine Beigabe. Das Protokoll ist der Ort, an dem man nachsieht.
+
+    Deshalb hier, UNABHAENGIG von 'melden_ein' - und genau einmal je Tag.
+    In jedem Rechengang waeren es bei einem Zehnminutentakt 144 Zeilen am
+    Tag, und das ist dasselbe wie keine.
+
+    Gezaehlt wird gegen die ZUORDNUNG, nicht gegen 'herkunft' allein: fuer
+    tmin, tmax, rh_min, rh_max, wind, strahlung_wm2 und regen_tag
+    ueberschreibt der Open-Meteo-Rueckfall in quellen.py die Herkunft,
+    bevor der Grund gemerkt wird. Wer nur auf 'herkunft' sieht, kann "nie
+    eingerichtet" nicht von "eingerichtet und stumm" unterscheiden - genau
+    diese Verwechslung hat den Befund oben so lange verdeckt.
+
+    Rueckgabe: True, wenn eine Zeile geschrieben wurde.
+    """
+    herkunft = abbild.get("herkunft") or {}
+    heute = str(abbild.get("datum") or "")
+    if not herkunft or not heute:
+        return False
+    stand = json_lesen(DATEI_ZUSTAND)
+    if stand.get("stationstag") == heute:
+        return False
+
+    felder = (json_lesen(DATEI_QUELLEN) or {}).get("felder") or {}
+    eingerichtet = sorted(g for g, f in felder.items()
+                          if isinstance(f, dict) and f.get("weg"))
+    liefern = sorted(g for g in eingerichtet if herkunft.get(g) == "station")
+    stumm = [g for g in eingerichtet if g not in liefern]
+
+    if not eingerichtet:
+        _LOG.info("Eigene Messquellen: keine eingerichtet - gerechnet wird "
+                  "mit dem Modell.")
+    elif not liefern:
+        _LOG.warning("Eigene Messquellen: %d eingerichtet, KEIN einziger Wert "
+                     "uebernommen (%s) - gerechnet wird mit dem Modell. "
+                     "Die Zuordnung im Reiter Quellen passt nicht mehr zu "
+                     "dem, was die Station sendet.",
+                     len(eingerichtet), ", ".join(stumm))
+    elif stumm:
+        _LOG.info("Eigene Messquellen: %d von %d liefern; ohne Wert: %s.",
+                  len(liefern), len(eingerichtet), ", ".join(stumm))
+    else:
+        _LOG.info("Eigene Messquellen: alle %d liefern.", len(eingerichtet))
+
+    stand["stationstag"] = heute
+    json_schreiben(DATEI_ZUSTAND, stand)
+    return True
+
+
 # ---------------------------------------------------------------- Dateien
 
 # Die Rueckgabecodes der MQTT-Anmeldung, damit die Meldung den Grund
 # nennt statt einer Zahl. Quelle: MQTT 3.1.1, Abschnitt 3.2.2.3.
+# Am Geraet gemessen (06.09.2026, mosquitto mit allow_anonymous false):
+# ein falsches Kennwort wird mit 5 abgewiesen, NICHT mit 4. Mosquitto
+# fasst "Kennwort falsch" und "gar keine Anmeldung" zu einem Code
+# zusammen. Der Text zu 5 muss deshalb beide Faelle nennen - bis 0.9.20
+# nannte er nur den selteneren und schickte den Anwender damit an die
+# falsche Stelle.
 CONNACK_TEXT = {
     1: "Protokollfassung abgelehnt",
     2: "Kennung abgelehnt",
     3: "Broker nicht verfuegbar",
+    # 4 benutzt mosquitto nicht; andere Broker schon.
     4: "Benutzername oder Kennwort falsch",
-    5: "nicht berechtigt - verlangt der Broker eine Anmeldung?",
+    5: "nicht berechtigt - Benutzername oder Kennwort falsch, oder der "
+       "Broker verlangt eine Anmeldung",
 }
 
 
@@ -1177,6 +1247,9 @@ class Dienst:
                         "fehler": abbild.get("et0_fehler") or abbild.get("online_fehler") or ""})
                     n = veroeffentlichen(abbild, cfg)
                     meldungen_pruefen(abbild, cfg)
+                    # Unabhaengig von 'melden_ein' und genau einmal
+                    # je Tag - siehe die Funktion selbst.
+                    stationslage_protokollieren(abbild)
                     sp = abbild.get("sperre") or {}
                     _LOG.info("Gerechnet: ET0 %s mm (%s), %d Durchlaeufe, "
                               "%d Themen gesendet%s",
@@ -1320,10 +1393,20 @@ def einmal() -> int:
     s.tag_laden(json_lesen(DATEI_EXTREME))
     a = rechnen(cfg, s)
     json_schreiben(DATEI_ABBILD, a)
+    # Die drei Tagesmarken werden UEBERNOMMEN, nicht ersetzt. Bis 0.9.20
+    # schrieb diese Zeile eine frische Zustandsdatei: ein Druck auf
+    # "Jetzt rechnen" setzte den Meldezaehler und die Tagesmarke der
+    # Stationslage auf null zurueck. Dieselbe Klasse wie der Fehler, den
+    # 0.9.19 in der Dienstschleife behoben hat.
+    alt = json_lesen(DATEI_ZUSTAND)
     json_schreiben(DATEI_ZUSTAND, {"ok": a["ok"], "ts": a["ts"],
                                    "et0": a.get("et0"),
                                    "durchlaeufe": (a.get("plan") or {}).get("durchlaeufe", 0),
+                                   "meldezaehler": alt.get("meldezaehler") or {},
+                                   "meldetag": alt.get("meldetag") or "",
+                                   "stationstag": alt.get("stationstag") or "",
                                    "fehler": a.get("et0_fehler") or ""})
+    stationslage_protokollieren(a)
     n = veroeffentlichen(a, cfg)
     plan = a.get("plan") or {}
     print("ET0 heute: %s mm (%s, %s)" % (

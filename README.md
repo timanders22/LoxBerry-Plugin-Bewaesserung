@@ -5,7 +5,7 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.19 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.21 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
@@ -79,6 +79,62 @@ Kein Pflichtpaket. `paho-mqtt` ist freiwillig und nur für MQTT-Quellen nötig.
 Er liefert Werte und sonst nichts. Ein Endpunkt im unangemeldeten Bereich, der
 Wasser aufdrehen kann, wäre eine Angriffsfläche ohne Gegenwert — geschaltet
 wird vom Bewässerungsbaustein im Miniserver.
+
+## Neu in 0.9.21 — drei Dinge, die eine Messung am Gerät gefunden hat
+
+Am 05./06.09.2026 lief 0.9.19 zum ersten Mal seit 0.9.11 auf einer echten
+Anlage und wurde dort nachgemessen. Drei Befunde, drei Korrekturen.
+
+**1. Das Protokoll sagt jetzt einmal am Tag, ob die eigene Station greift.**
+Auf der gemessenen Anlage lief das Plugin sechseinhalb Stunden mit
+eingerichteter Wetterstation, empfing ihre Nachrichten im Minutentakt — und
+übernahm **keinen einzigen Wert**. Jede Größe kam aus dem Modell, die eigene
+Rechnung wurde in jedem Durchgang verworfen, und im Protokoll stand davon
+nichts. Den Wächter dafür gab es, aber er hing an den Benachrichtigungen, und
+die sind ab Werk aus. Jetzt steht die Lage im Protokoll, unabhängig davon —
+genau einmal je Tag:
+
+    Eigene Messquellen: 3 eingerichtet, KEIN einziger Wert uebernommen
+    (rh_mittel, taupunkt, regen_stunde) - gerechnet wird mit dem Modell.
+    Die Zuordnung im Reiter Quellen passt nicht mehr zu dem, was die
+    Station sendet.
+
+Gezählt wird gegen die **Zuordnung**, nicht gegen die angezeigte Herkunft: für
+Tmin, Tmax, Feuchte, Wind, Strahlung und Tagesregen überschreibt der Rückfall
+auf das Modell die Herkunft, bevor der Grund gemerkt wird. Wer nur dorthin
+sieht, kann „nie eingerichtet" nicht von „eingerichtet und stumm"
+unterscheiden — und genau das hat den Befund monatelang verdeckt. Dazu:
+**„Jetzt rechnen" wirft die Tagesmarken nicht mehr weg.** Bis 0.9.20 setzte
+der Knopf Meldezähler und Tagesmarke zurück; dieselbe Fehlerklasse, die 0.9.19
+in der Dienstschleife behoben hat.
+
+**2. Die Zweitschrift des Verlaufs steht auf 0600.** Beim Update sichert das
+Plugin die Konfiguration neben den Ordner, damit der Installer sie nicht
+mitlöscht. Für die drei Konfigurationsdateien wurde dabei ausdrücklich 0600
+gesetzt — für den Verlauf nicht, und `cp -p` erbt die Rechte der Quelle. Am
+Gerät gemessen: von vier Zweitschriften dieser Linie stand genau diese eine auf
+0664. Im Verlauf steht kein Zugangsdatum und kein Token, aber der
+Konfigurationszweig ist 0600, und eine Ausnahme, die niemand beabsichtigt hat,
+ist keine.
+
+**3. Die Meldung bei abgelehnter Broker-Anmeldung nennt den richtigen Grund.**
+Gemessen mit einem einzigen Anmeldeversuch mit falschem Kennwort: der Broker
+antwortet mit **CONNACK 5**, nicht mit 4 — mosquitto fasst „Kennwort falsch"
+und „gar keine Anmeldung" zu einem Code zusammen. Der Text zu 5 fragte bisher
+nur „verlangt der Broker eine Anmeldung?" und schickte damit an die falsche
+Stelle, während der passende Text unter 4 stand und nie erreicht wurde. Jetzt
+nennt die Zeile beide Fälle.
+
+Für bestehende Anlagen ändert sich nichts an der Rechnung und nichts an den
+MQTT-Themen.
+
+## Neu in 0.9.20
+
+Die erzeugte Loxone-Vorlage nannte das Plugin „Bewaesserung"; sie sagt jetzt
+„Bewässerung", und der Titel in der Plugin-Verwaltung ebenso. Das MQTT-Thema
+`loxone/bewaesserung/rasen` bleibt **unverändert** — ein umbenanntes Thema
+bräche jeden virtuellen Eingang in Loxone und jeden gespeicherten Wert im
+Broker, die daran hängen.
 
 ## Neu in 0.9.7
 

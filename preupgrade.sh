@@ -93,9 +93,18 @@ for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
         echo "<INFO> $f gesichert."
     fi
 done
+# 0600 auch hier. Die Schleife darueber setzt es, diese Kopie liess es
+# bis 0.9.20 aus - und "cp -p" erbt die Rechte der Quelle, die in
+# data/plugins/ 0664 ist. Am Geraet gemessen (06.09.2026): von vier
+# Zweitschriften dieser Linie stand genau diese eine auf 0664. Im
+# Verlauf steht kein Token, aber der Konfigurationszweig ist 0600, und
+# eine Ausnahme, die niemand beabsichtigt hat, ist keine.
 VL="$BASE/data/plugins/$PFOLDER/verlauf.json"
-[ -f "$VL" ] && cp -p "$VL" "$BASE/config/plugins/$PFOLDER.backup.verlauf.json" \
-    && echo "<INFO> Verlauf des Wasserhaushalts gesichert."
+VLB="$BASE/config/plugins/$PFOLDER.backup.verlauf.json"
+if [ -f "$VL" ] && cp -p "$VL" "$VLB"; then
+    chmod 600 "$VLB" 2>/dev/null
+    echo "<INFO> Verlauf des Wasserhaushalts gesichert."
+fi
 echo "<OK> preupgrade abgeschlossen."
 
 # ---------- Langzeitwerte retten ----------

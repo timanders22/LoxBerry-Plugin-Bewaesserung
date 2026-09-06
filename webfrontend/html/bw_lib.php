@@ -717,11 +717,11 @@ function bw_vorlage()
         );
     }
     return array('bewaesserung_status.xml', bw_xml_virtual_in_http(array(
-        'title'   => 'Bewaesserung vorausschauend',
+        'title'   => 'Bewässerung vorausschauend',
         'address' => 'http://' . $host . '/plugins/' . $p['plugin']
                    . '/index.php?token=' . $token . '&aktion=status',
         'polling' => '300',
-        'comment' => 'Erzeugt vom LoxBerry-Plugin Bewaesserung (' . date('d.m.Y') . ')',
+        'comment' => 'Erzeugt vom LoxBerry-Plugin Bewässerung (' . date('d.m.Y') . ')',
     ), $cmds));
 }
 
