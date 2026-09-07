@@ -1655,11 +1655,44 @@ function bw_quellen_pruefen($q)
  */
 function bw_plugin_fassung()
 {
+    /* NEU: zuerst LoxBerry selbst fragen.
+     *
+     * Am Geraet gemessen (07.09.2026): plugininstall.pl liest die
+     * plugin.cfg aus dem Auspackordner und loescht sie danach -
+     * installiert wird sie NIRGENDWOHIN. Eine Fassungsfunktion, die nur
+     * Dateien kennt, gibt auf jeder Installation eine leere Zeichenkette
+     * zurueck; im Arbeitsordner faellt das nie auf, weil dort der
+     * Archivfall der Kandidatenliste immer trifft.
+     *
+     * LBSystem::pluginversion() (loxberry_system.php:403) liest die
+     * plugindatabase.json und ist die Auskunft von LoxBerry selbst.
+     * Die Dateikandidaten darunter bleiben stehen - sie tragen den
+     * Auspackordner, und der ist der Pruefstand. */
+    if (class_exists('LBSystem', false)
+        && method_exists('LBSystem', 'pluginversion')) {
+        $aus = @LBSystem::pluginversion();
+        if ($aus !== null && trim((string) $aus) !== '') {
+            return trim((string) $aus);
+        }
+    }
     static $f = null;
     if ($f !== null) { return $f; }
     $f = '';
-    foreach (array(dirname(dirname(dirname(__DIR__))) . '/plugin.cfg',
-                   bw_paths()['home'] . '/data/system/plugindatabase.json') as $k) {
+    /* BERICHTIGT 07.09.2026, zwei Sachen an dieser Stelle:
+     *
+     * 1. Der zweite Kandidat war die plugindatabase.json - abgefragt mit
+     *    /^VERSION=([0-9][0-9.]*)/m. Dort steht kein VERSION=; die Datei ist
+     *    JSON. Der Rueckfall sah richtig aus und hat NIE getroffen. Das ist
+     *    der gefaehrlichere Fall: ohne Rueckfall waere es aufgefallen. Die
+     *    Datenbank fragt jetzt LBSystem::pluginversion() weiter oben ab.
+     * 2. Der Dateikandidat lag eine Ebene zu hoch: von webfrontend/html aus
+     *    ist der Auspackordner dirname(dirname(...)), nicht
+     *    dirname(dirname(dirname(...))) - letzteres zeigt auf den Ordner
+     *    UEBER dem Plugin. Am Pruefstand gemessen: die Lage "Auspackordner"
+     *    gab eine leere Zeichenkette, obwohl die plugin.cfg dalag. Die alte
+     *    Form bleibt als zweiter Eintrag stehen - sie kostet nichts. */
+    foreach (array(dirname(dirname(__DIR__)) . '/plugin.cfg',
+                   dirname(dirname(dirname(__DIR__))) . '/plugin.cfg') as $k) {
         if (!is_file($k)) { continue; }
         $t = (string) @file_get_contents($k);
         if (preg_match('/^VERSION=([0-9][0-9.]*)/m', $t, $m)) { $f = $m[1]; break; }
