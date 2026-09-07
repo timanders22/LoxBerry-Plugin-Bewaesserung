@@ -1750,6 +1750,33 @@ function bw_sicherung_lesen($roh)
         /* Eine Beanstandung in EINEM Teil laesst ALLE drei unberuehrt. */
         return array(null, $mangel, $anzahl, null, null);
     }
+    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
+     *
+     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
+     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
+     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
+     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
+     * zurueck - quittiert mit "1 Wert uebernommen".
+     *
+     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
+     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
+     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
+     * Bestand ausgerollt (30 Linien).
+     *
+     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
+     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
+     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
+     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
+    $fehlend = array();
+    foreach (array_keys(bw_vorgaben()) as $fk) {
+        if (!array_key_exists($fk, $daten)) {
+            $fehlend[] = $fk;
+        }
+    }
+    if ($fehlend) {
+        $mangel[] = sprintf(bw_t('EINST.SICH_FEHLEND'), count($fehlend),
+            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
+    }
     return array($neu, $mangel, $anzahl, $zonen, $quellen);
 }
 

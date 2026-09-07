@@ -5,7 +5,7 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.24 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.25 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
