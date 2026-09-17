@@ -1670,7 +1670,12 @@ function bw_plugin_fassung()
      * Auspackordner, und der ist der Pruefstand. */
     if (class_exists('LBSystem', false)
         && method_exists('LBSystem', 'pluginversion')) {
-        $aus = @LBSystem::pluginversion();
+        /* Ueber den Ordnernamen fragen (Regeln/03): ohne Argument haengt die
+         * Antwort am ersten eingebundenen Skript - am Geraet gemessen
+         * 17.09.2026: aus einem fremden Einstieg (php -r) NULL, mit dem
+         * Ordnernamen die installierte Fassung. Installiert liegt diese Datei
+         * unter webfrontend/html(auth)/plugins/<ordner>/. */
+        $aus = @LBSystem::pluginversion(basename(__DIR__));
         if ($aus !== null && trim((string) $aus) !== '') {
             return trim((string) $aus);
         }
