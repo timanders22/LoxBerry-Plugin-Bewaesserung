@@ -440,6 +440,12 @@ def stationslage_protokollieren(abbild: dict) -> bool:
 # zusammen. Der Text zu 5 muss deshalb beide Faelle nennen - bis 0.9.20
 # nannte er nur den selteneren und schickte den Anwender damit an die
 # falsche Stelle.
+# Beide Zaehlweisen. paho 1.x liefert die CONNACK-Codes aus MQTT 3.1.1
+# (1-5), paho 2.x bildet dieselben Faelle auf die Ursachencodes von MQTT 5
+# ab (132-136). Bis 0.9.26 kannte die Tabelle nur 1-5: unter paho 2.x stand
+# bei falschen Zugangsdaten "unbekannter Grund" im Protokoll. Heute faellt
+# das nicht auf, weil im Venv dieser Linie paho 1.6.1 steckt (am Geraet
+# gemessen 17.09.2026) - ein 'pip install -U' genuegt, um es zu kippen.
 CONNACK_TEXT = {
     1: "Protokollfassung abgelehnt",
     2: "Kennung abgelehnt",
@@ -448,6 +454,12 @@ CONNACK_TEXT = {
     4: "Benutzername oder Kennwort falsch",
     5: "nicht berechtigt - Benutzername oder Kennwort falsch, oder der "
        "Broker verlangt eine Anmeldung",
+    132: "Protokollfassung abgelehnt",
+    133: "Kennung abgelehnt",
+    136: "Broker nicht verfuegbar",
+    134: "Benutzername oder Kennwort falsch",
+    135: "nicht berechtigt - Benutzername oder Kennwort falsch, oder der "
+         "Broker verlangt eine Anmeldung",
 }
 
 
@@ -659,8 +671,15 @@ def mqtt_gateway() -> dict:
 # heisst das UDP-Verb dafuer 'retain' statt 'publish' - gemessen am
 # 06.09.2026 im Quelltext des Geraets (mqttgateway.pl:293: der UDP-Eingang
 # kennt genau publish, retain, reconnect, save_relayed_states).
+#
+# 'sperrgrund' steht seit 0.9.27 NICHT mehr hier. Das Thema ist fast immer
+# leer, und eine leere Nutzlast mit Retain LOESCHT das zurueckbehaltene
+# Thema (am Broker gemessen 14.09.2026). Am Geraet standen am 17.09.2026
+# deshalb 17 statt der 18 zurueckbehaltenen Themen, die die Tabelle
+# versprach - 'sperrgrund' fehlte. Ob gesperrt ist, sagt 'gesperrt', und
+# das bleibt retained.
 RETAINED_GLOBAL = {
-    "ok", "giessen", "reicht", "gesperrt", "sperrgrund", "plan_fest",
+    "ok", "giessen", "reicht", "gesperrt", "plan_fest",
     "deckt", "durchlaeufe", "noetige_durchlaeufe",
 }
 RETAINED_ZONE = ("ok", "sekunden", "durchlaeufe")
@@ -688,10 +707,14 @@ def mqtt_senden(paare: dict, praefix: str, retained: set | None = None) -> int:
             # UDP-Eingang des LoxBerry-Gateways erwartet und die auch die
             # uebrigen Plugins dieser Reihe benutzen. Bis 0.9.0 fehlte das
             # Verb hier als einzigem Plugin.
-            verb = "retain" if (retained and name in retained) else "publish"
+            wert_text = mqtt_wert_saeubern(_mqtt_sauber(wert))
+            # Ein leerer Wert geht nie retained hinaus: er wuerde das
+            # zurueckbehaltene Thema im Broker loeschen (Hausstandard).
+            verb = ("retain" if (retained and name in retained and wert_text)
+                    else "publish")
             zeile = "%s %s/%s %s" % (
                 verb, _mqtt_thema(praefix.strip("/")), _mqtt_thema(name),
-                mqtt_wert_saeubern(_mqtt_sauber(wert)))
+                wert_text)
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", int(g["udpport"])))
             gesendet += 1
     except OSError as f:

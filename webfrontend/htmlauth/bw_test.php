@@ -118,6 +118,60 @@ function bw_vorgaben_python()
     return $aus;
 }
 
+/**
+ * Welche Themen zurueckbehalten werden - die Seite der Oberflaeche.
+ *
+ * Der Reiter MQTT zeigt daraus die Spalte "zurueckbehalten?". Gesendet wird
+ * aber nach der Tabelle im Dienst; die Zeile "Retain" in bw_pruefungen()
+ * haelt beide gegeneinander. Bis 0.9.26 stand sie hier nur als Kopie, die
+ * niemand verglich.
+ */
+function bw_retain_tabelle()
+{
+    return array(
+        'global' => array('ok', 'giessen', 'reicht', 'gesperrt',
+                          'plan_fest', 'deckt', 'durchlaeufe', 'noetige_durchlaeufe'),
+        'zone'   => array('ok', 'sekunden', 'durchlaeufe'),
+    );
+}
+
+/**
+ * Die Retain-Tabelle aus dem Python-Dienst lesen.
+ *
+ * Rueckgabe array('global' => [...], 'zone' => [...]) oder null, wenn eine
+ * der beiden nicht gefunden wurde oder leer ist. Leer heisst "nicht
+ * gelesen", nicht "nichts retained" - sonst stuende bei einer umbenannten
+ * Konstante ein Haken ueber zwei leeren Mengen.
+ */
+function bw_retain_python()
+{
+    $f = bw_paths()['bindir'] . '/bewaesserung_dienst.py';
+    if (!is_file($f)) { return null; }
+    $t = (string) @file_get_contents($f);
+    $aus = array();
+    $anker = array('global' => array('RETAINED_GLOBAL' . ' = {', "\n}"),
+                   'zone'   => array('RETAINED_ZONE' . ' = (', ')'));
+    foreach ($anker as $k => $a) {
+        $i = strpos($t, $a[0]);
+        if ($i === false) { return null; }
+        $i += strlen($a[0]);
+        $j = strpos($t, $a[1], $i);
+        if ($j === false) { return null; }
+        $namen = array();
+        foreach (explode("\n", substr($t, $i, $j - $i)) as $z) {
+            // Ein Kommentar, der ein Thema nennt, zaehlt nicht mit.
+            $h = strpos($z, '#');
+            if ($h !== false) { $z = substr($z, 0, $h); }
+            if (preg_match_all('/"([a-z0-9_]+)"/', $z, $m)) {
+                $namen = array_merge($namen, $m[1]);
+            }
+        }
+        if (!$namen) { return null; }
+        $aus[$k] = array_values(array_unique($namen));
+    }
+    return $aus;
+}
+
 /** Alle Dateien der Oberflaeche - nicht nur index.php. */
 function bw_oberflaechendateien()
 {
@@ -475,6 +529,32 @@ function bw_pruefungen()
                     : sprintf(bw_t('TEST.A_VORGABEN_FEHL'),
                               bw_e(implode(', ', $nur_py)),
                               bw_e(implode(', ', $nur_php)))));
+    }
+
+    // Zwei Retain-Tabellen, die auseinanderlaufen koennen: der Dienst
+    // entscheidet, was zurueckbehalten wird, die Oberflaeche sagt es an.
+    // Bis 0.9.26 sagte die Spalte bei 'sperrgrund' "ja", waehrend das Thema
+    // im Broker fehlte. Verglichen wird in beide Richtungen und je Ebene.
+    $rp = bw_retain_python();
+    if ($rp === null) {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_RETAIN'), bw_t('TEST.A_RETAIN_UNLESBAR'));
+    } else {
+        $rt = bw_retain_tabelle();
+        $nur_dienst = array();
+        $nur_seite = array();
+        foreach (array('global' => '', 'zone' => '&lt;zone&gt;/') as $k => $vor) {
+            foreach (array_diff($rp[$k], $rt[$k]) as $n) { $nur_dienst[] = $vor . bw_e($n); }
+            foreach (array_diff($rt[$k], $rp[$k]) as $n) { $nur_seite[] = $vor . bw_e($n); }
+        }
+        if (!$nur_dienst && !$nur_seite) {
+            $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_RETAIN'),
+                sprintf(bw_t('TEST.A_RETAIN_OK'), count($rp['global']), count($rp['zone'])));
+        } else {
+            $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_RETAIN'),
+                sprintf(bw_t('TEST.A_RETAIN_FEHL'),
+                        $nur_dienst ? implode(', ', $nur_dienst) : '&mdash;',
+                        $nur_seite ? implode(', ', $nur_seite) : '&mdash;'));
+        }
     }
 
     // Jeder Grund, den der Plan erzeugen kann, braucht seinen Satz. Bis

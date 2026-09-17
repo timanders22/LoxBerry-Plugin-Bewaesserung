@@ -5,12 +5,47 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.26 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.27 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.27
+
+**Das Installationsprotokoll behauptete, einen Dienst angehalten zu haben, der
+gar nicht lief.** Die Meldung hing am Rückgabewert von `dienst.sh stop` — und
+`anhalten()` gibt auch ohne laufenden Dienst 0 zurück („laeuft nicht"). Sie
+hängt jetzt am Merker `lief_vorher`, der zwei Zeilen darüber ohnehin gesetzt
+wird und die Frage wirklich beantwortet.
+
+Dasselbe im **Rückfallweg** ohne `dienst.sh`: dort stand die Meldung hinter
+`rm -f "$PID"` und damit außerhalb der Prüfung, ob der Prozess überhaupt
+lebte — eine liegengebliebene PID-Datei genügte. Jetzt wird nur gemeldet, was
+auch geschehen ist.
+
+Geprüft mit `Werkzeuge/preupgrade_meldung_pruefen.py`: gegen 0.9.27 grün, gegen
+0.9.26 rot. **Am Verhalten ändert sich nichts** — angehalten wird wie bisher,
+nur die Aussage darüber stimmt.
+
+**Eine abgelehnte Anmeldung am Broker wird auch unter paho-mqtt 2.x benannt.**
+paho 1.x meldet die Ablehnungsgründe als Codes 1–5, paho 2.x als 132–136. Die
+Klartexttabelle kannte nur die erste Zählweise; unter paho 2.x stand bei
+falschen Zugangsdaten „unbekannter Grund“ im Protokoll. Das Plugin bringt
+paho 1.6.1 mit, deshalb war es bisher nicht zu sehen.
+
+**`sperrgrund` geht nicht mehr zurückbehalten hinaus.** Das Thema ist fast
+immer leer, und eine leere Nachricht mit Retain löscht das zurückbehaltene
+Thema im Broker — die Tabelle im Reiter MQTT versprach also etwas, das nie
+eintrat. Ob gesperrt ist, sagt weiterhin das zurückbehaltene `gesperrt`.
+Allgemein gilt jetzt: ein leerer Wert geht nie mit Retain hinaus.
+
+**Neue Prüfzeile im Reiter Test: „Sagt der Reiter MQTT richtig an, welche
+Themen zurückbehalten werden?“** Die Spalte „zurückbehalten?“ im Reiter MQTT
+und die Tabelle, nach der der Dienst sendet, waren zwei von Hand gepflegte
+Listen, die niemand verglich. Die Zeile liest jetzt die Tabelle des Dienstes
+und nennt jedes Thema, das nur auf einer Seite steht.
 
 ## Neu in 0.9.24
 
@@ -203,7 +238,8 @@ Folgende ist gemessen, nicht vermutet.
   standen alle Eingänge leer, bis der nächste Vollversand kam — frühestens
   zehn Minuten später. Jetzt gehen die Zustände zurückbehalten hinaus: neun der
   dreizehn allgemeinen Themen (`ok`, `giessen`, `reicht`, `gesperrt`,
-  `sperrgrund`, `plan_fest`, `deckt`, `durchlaeufe`, `noetige_durchlaeufe`) und
+  `sperrgrund` — seit 0.9.27 nicht mehr, siehe oben —, `plan_fest`, `deckt`,
+  `durchlaeufe`, `noetige_durchlaeufe`) und
   drei der zehn Themen je Zone (`ok`, `sekunden`, `durchlaeufe`). Die übrigen
   vier allgemeinen (`et0`, `alter`, `ts`, `zaehler`) und sieben je Zone sind
   Messwerte mit Zeitbezug und gehen bewusst ohne Retain hinaus.

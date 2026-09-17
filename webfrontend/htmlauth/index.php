@@ -1759,29 +1759,17 @@ if (!$bw_vt) { ?>
 
 <h3><?= bw_e(bw_t('MQTT.H_THEMEN')) ?></h3>
 <?php
-/* Welche Themen ZURUECKBEHALTEN werden.
- *
- * Die Liste steht woertlich so in bin/bewaesserung_dienst.py
- * (RETAINED_GLOBAL, RETAINED_ZONE). Wer eine aendert, aendert beide - VON HAND.
- *
- * Kein Werkzeug deckt das ab, und der Kommentar sagte bis 06.09.2026 das
- * Gegenteil ("der Reiter Test misst die Uebereinstimmung nach"). Gemessen:
- * die Pruefzeile (1) im Reiter Test vergleicht die THEMENNAMEN der Tabelle
- * gegen p["..."] im Dienst - die Retain-Einstufung liest sie nicht, die
- * Zeichenfolge RETAINED kommt in bw_test.php nicht ein einziges Mal vor. Ein
- * Kommentar, der eine Deckung zusagt, die es nicht gibt, ist schlimmer als
- * gar keiner: er haelt den naechsten Leser davon ab, selbst nachzusehen.
- *
- * Eine Pruefzeile, die $bw_ret gegen RETAINED_GLOBAL und $bw_ret_zone gegen
- * RETAINED_ZONE haelt, waere die richtige Antwort darauf und ist vorgeschlagen,
- * aber nicht gebaut - deshalb steht hier, was gilt, und nicht, was gut klingt.
+/* Welche Themen ZURUECKBEHALTEN werden - aus bw_retain_tabelle() in
+ * bw_test.php. Die Liste des Dienstes steht in bin/bewaesserung_dienst.py;
+ * seit 0.9.27 haelt die Zeile "Retain" im Reiter Test beide gegeneinander
+ * (bis dahin tat das kein Werkzeug, und dieser Kommentar sagte es selbst).
  *
  * Hausstandard seit 03.09.2026: Zustaende retained, Messwerte mit
  * Zeitbezug nicht, das Lebenszeichen nie. Bis 0.9.21 ging KEIN Thema
  * dieser Linie retained hinaus, und die Tabelle sagte dazu gar nichts. */
-$bw_ret = array('ok', 'giessen', 'reicht', 'gesperrt', 'sperrgrund',
-                'plan_fest', 'deckt', 'durchlaeufe', 'noetige_durchlaeufe');
-$bw_ret_zone = array('ok', 'sekunden', 'durchlaeufe');
+$bw_rt = bw_retain_tabelle();
+$bw_ret = $bw_rt['global'];
+$bw_ret_zone = $bw_rt['zone'];
 ?>
 <div class="sm-breit">
 <table class="sm-tabelle">

@@ -77,8 +77,19 @@ fi
 # Der Rueckgabewert von stop entscheidet. Bis 0.9.18 lief die
 # Rueckfallebene nur, wenn dienst.sh FEHLTE - scheiterte das Anhalten,
 # schrieb der Dienst waehrend des Updates weiter in data/plugins/<x>/.
+# Die Meldung haengt am MERKER, nicht am Rueckgabewert von stop.
+#
+# `anhalten()` in dienst.sh gibt auch dann 0 zurueck, wenn gar kein
+# Dienst lief („laeuft nicht", return 0) - diese Bedingung war also
+# immer wahr, und das Installationsprotokoll meldete bei jedem Update
+# einen angehaltenen Dienst. Gemessen am 11.09.2026 ueber den Bestand;
+# derselbe Fehler steckte in vier Linien.
 if [ -x "$DIENST" ] && "$DIENST" stop >/dev/null 2>&1; then
-    echo "<INFO> Laufender Dienst ueber dienst.sh angehalten."
+    if [ -f "$MERKER" ]; then
+        echo "<INFO> Laufender Dienst ueber dienst.sh angehalten."
+    else
+        echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
+    fi
 elif [ -f "$PID" ]; then
     P=$(cat "$PID" 2>/dev/null)
     if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
@@ -92,9 +103,11 @@ elif [ -f "$PID" ]; then
         if kill -0 "$P" 2>/dev/null && grep -qa "bewaesserung_dienst.py" "/proc/$P/cmdline" 2>/dev/null; then
             kill -9 "$P" 2>/dev/null || true
         fi
+        # Nur hier gemeldet: eine liegengebliebene PID-Datei allein ist
+        # kein laufender Dienst.
+        echo "<INFO> Laufender Dienst angehalten (Rueckfallebene ohne dienst.sh)."
     fi
     rm -f "$PID"
-    echo "<INFO> Laufender Dienst angehalten (Rueckfallebene ohne dienst.sh)."
 fi
 
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
