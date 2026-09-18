@@ -5,12 +5,51 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.29 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.30 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.30 — während eines Updates startet nichts mehr
+
+**In der Lücke eines Updates ließ sich der Dienst starten — und er schickte
+Loxone dann „nicht gießen".** Zwischen `preupgrade.sh` und `postinstall.sh`
+räumt LoxBerry die Ordner des Plugins ab und legt die neuen Dateien hin; am
+Gerät vergeht dabei rund eine Minute. Der Minutentakt startet in dieser Zeit
+nichts. Wer aber die Seite des Plugins öffnete und „Dienst starten", „Dienst
+neu starten" oder im Reiter Test „Jetzt rechnen" drückte, bekam einen Dienst,
+der ohne den Wasserhaushalt der letzten Wochen rechnete: der lag noch in der
+Sicherung. Nachgestellt unter Linux mit den echten Skripten, einer Zone und
+vierzehn trockenen Tagen im Verlauf: vor dem Update gingen `giessen 1` und
+649 s Ventilzeit an Loxone, in der Lücke `giessen 0` und 0 s — beides
+zurückbehalten, also genau das, woran der Bewässerungsbaustein sich hält.
+Danach holte `postinstall.sh` den Verlauf nicht mehr zurück, weil schon einer
+dalag; der Wasserhaushalt war endgültig verloren und die Meldezähler ebenso.
+Ein Druck auf „Dienst starten", während `postinstall.sh` noch das Paket für
+MQTT einrichtet, kostete die Meldezähler auf demselben Weg. Und ein vorher
+bewusst angehaltener Dienst lief nach einem solchen Knopfdruck weiter.
+
+`preupgrade.sh` legt deshalb als Erstes die Marke
+`data/plugins/<ordner>.upgrade_laeuft` mit der Uhrzeit an. Solange sie
+höchstens eine Stunde alt ist, weist `bin/dienst.sh` jeden Start ab — auch
+„Jetzt rechnen" und den Minutentakt —, und die Seite des Plugins zeigt nur
+einen Hinweis. Die Seite zu sperren war eine eigene Messung: ohne die
+Zweitschrift `bewaesserung.backup.json` legte schon der bloße Seitenaufruf in
+der Lücke ein neues Aktionstoken an, und jede in Loxone eingetragene Adresse
+hätte danach 403 bekommen. Ältere, leere, unlesbare oder in der Zukunft
+liegende Marken gelten nicht; ohne lesbare Uhr gilt die Marke. `postinstall.sh`
+— hier das letzte Hakenskript — startet den Dienst, wenn er vorher lief, und
+entfernt die Marke erst danach, auch wenn es vorzeitig aussteigt. Bricht
+`preupgrade.sh` selbst ab, nimmt es die Marke gleich wieder weg. `uninstall`
+räumt sie ebenfalls weg, und der Reiter Test nennt eine liegengebliebene Marke.
+
+Nachgemessen ohne Befund: ein Dienst ohne PID-Datei wird von `preupgrade.sh`
+beendet, nach dem Update läuft genau einer. Nicht am Gerät gemessen — nur
+unter WSL/Ubuntu (Python 3.12, PHP 8.3.6), mit einer nachgebildeten
+Wetterstation und einem mitschreibenden Ersatz für den UDP-Eingang des
+MQTT-Gateways statt eines Miniservers.
 
 ## Neu in 0.9.29 — zwei gemessene Befunde aus dem Bestandslauf vom 18.09.2026
 

@@ -1304,6 +1304,46 @@ function bw_dienst_soll()
     return is_file(bw_paths()['datadir'] . '/soll_laufen') ? 1 : 0;
 }
 
+/**
+ * Liegt die Marke "Aktualisierung laeuft"?
+ *
+ * Rueckgabe array(liegt, gueltig, alter). "liegt" sagt, ob die Datei da ist,
+ * "gueltig", ob bin/dienst.sh deswegen jeden Start abweist und die
+ * Oberflaeche nur einen Hinweis zeigt. Beides getrennt: eine
+ * liegengebliebene Marke ist ein anderer Befund als eine laufende
+ * Aktualisierung.
+ *
+ * Die Datei liegt NEBEN dem Datenordner (data/plugins/<ordner>.upgrade_laeuft),
+ * weil purge_installation den Ordner beim Upgrade abraeumt. Die Regel ist
+ * dieselbe wie in bin/dienst.sh, marke_sperrt(): gueltig von 0 bis 3600 s
+ * Alter; aelter, aus der Zukunft, leer oder unlesbar gilt sie nicht. Wer
+ * eine der beiden Stellen aendert, aendert beide.
+ *
+ * preg_match statt ctype_digit: ctype ist nicht zugesichert (Regeln/02).
+ * Bauart: LoxBerry-Plugin-Govee-0.9.19 (gv_upgrade_marke).
+ */
+function bw_upgrade_marke()
+{
+    $p = bw_paths();
+    if ($p['home'] === '') {
+        return array(0, 0, -1);
+    }
+    $f = $p['home'] . '/data/plugins/' . $p['plugin'] . '.upgrade_laeuft';
+    clearstatcache(true, $f);
+    if (!is_file($f)) {
+        return array(0, 0, -1);
+    }
+    $roh = trim((string) @file_get_contents($f));
+    if ($roh === '' || !preg_match('/^[0-9]{1,12}$/', $roh)) {
+        return array(1, 0, -1);
+    }
+    $alter = time() - (int) $roh;
+    if ($alter < 0 || $alter > 3600) {
+        return array(1, 0, $alter);
+    }
+    return array(1, 1, $alter);
+}
+
 /** $befehl ist 'start', 'stop' oder 'restart'. Rueckgabe: array(ok, Ausgabe) */
 function bw_dienst($befehl)
 {

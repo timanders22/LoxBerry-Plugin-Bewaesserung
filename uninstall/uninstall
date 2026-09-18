@@ -15,6 +15,7 @@
 #   config/plugins/<x>.backup.json          Zweitschrift aus der
 #                                           Oberflaeche (bw_config_speichern)
 #   data/plugins/<x>.upgrade_sicherung      Langzeitwerte waehrend des Updates
+#   data/plugins/<x>.upgrade_laeuft         Marke "Aktualisierung laeuft"
 #
 # Aufruf: <ZUFALLSKENNUNG> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <TEMPFOLDER>
 # ACHTUNG: $1 ist NICHT der Arbeitsordner, sondern eine zehnstellige
@@ -34,6 +35,10 @@ UN_DIENST="$UN_BASE/bin/plugins/$UN_FOLDER/dienst.sh"
 
 rm -f  "$UN_BASE/config/plugins/$UN_FOLDER".backup.* 2>/dev/null
 rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
+# Die Marke einer abgebrochenen Aktualisierung liegt ebenfalls neben dem
+# Datenordner (preupgrade.sh). Bliebe sie liegen, sperrte sie bei einer
+# Neuinstallation innerhalb der Stunde den Dienststart (Fall C9).
+rm -f "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" 2>/dev/null
 # Der Protokollordner steht nicht in der Aufzaehlung oben - LoxBerry
 # raeumt ihn also nicht mit. Angelegt wird er in postinstall.sh, und er
 # nimmt bis 512 000 Byte auf.

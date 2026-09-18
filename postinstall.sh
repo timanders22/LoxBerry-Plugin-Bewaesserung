@@ -25,6 +25,38 @@ if [ -z "$BASE" ] || [ ! -f "$BASE/config/system/general.json" ]; then
     exit 2
 fi
 
+# ---------- Die Marke "Aktualisierung laeuft" faellt hier ----------
+# Dieses Skript ist das LETZTE, das LoxBerry in dieser Linie aufruft:
+# preroot, preinstall, preupgrade, postinstall, postupgrade, postroot
+# (Regeln/06) - postupgrade.sh und postroot.sh gibt es hier nicht.
+#
+# Entfernt wird sie ueber einen trap auf EXIT, nicht am Dateiende: dieses
+# Skript steigt an mehreren Stellen mit 'exit 1' aus (Ordner, python3,
+# Python zu alt). Ohne trap bliebe der Dienst danach eine Stunde gesperrt,
+# ohne dass irgendwo stuende, warum (Fall C12). Eine Kommandoersetzung oder
+# Unterschale loest den EXIT-Trap nicht aus (Regeln/06, bash 5.2) - die
+# Marke faellt also nicht zu frueh.
+#
+# Der trap laeuft NACH dem Dienststart am Ende; der eigene Start bekommt
+# dafuer die Ausnahme BW_START_TROTZ_MARKE=1 (bin/dienst.sh, marke_sperrt()).
+# Zwischen dem "touch soll_laufen" in bin/dienst.sh und dem Augenblick, in
+# dem der neue Prozess als Dienst erkennbar ist, koennte der Minutentakt
+# denselben Dienst ein zweites Mal starten; solange die Marke liegt, ist
+# dieses Fenster zu. Gemessen (Pruefung-Bewaesserung-0.9.30,
+# messe_reihenfolge.sh, vier Waechterschleifen ohne Pause waehrend
+# postinstall.sh): in dieser Linie trat der Doppelstart in KEINER Reihenfolge
+# auf - je 0 von 15 Runden mit der Marke danach, mit der Marke davor und ganz
+# ohne Marke; starten() fragt vor dem Start ein zweites Mal nach einem
+# laufenden Dienst. Die Reihenfolge ist hier also Vorsicht, kein gemessener
+# Schaden; bei Chromecast4lox 1.3.10 war sie einer (Regeln/06).
+BW_MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+bw_marke_weg() {
+    if [ -f "$BW_MARKE" ]; then
+        rm -f "$BW_MARKE" && echo "<INFO> Die Aktualisierung ist durch - Dienststart wieder frei."
+    fi
+}
+trap bw_marke_weg EXIT
+
 PBIN="$BASE/bin/plugins/$PFOLDER"
 PDATA="$BASE/data/plugins/$PFOLDER"
 PLOG="$BASE/log/plugins/$PFOLDER"
@@ -241,7 +273,8 @@ MERKER="$BASE/config/plugins/$PFOLDER.backup.lief_vorher"
 if [ -f "$MERKER" ]; then
     rm -f "$MERKER"
     if [ -x "$PBIN/dienst.sh" ]; then
-        if "$PBIN/dienst.sh" start >/dev/null 2>&1; then
+        # Die Ausnahme von der Marke - siehe bw_marke_weg() oben.
+        if BW_START_TROTZ_MARKE=1 "$PBIN/dienst.sh" start >/dev/null 2>&1; then
             echo "<OK> Der Dienst lief vor dem Update und wurde wieder gestartet."
         else
             echo "<INFO> Der Dienst liess sich nicht starten - Reiter Einstellungen,"

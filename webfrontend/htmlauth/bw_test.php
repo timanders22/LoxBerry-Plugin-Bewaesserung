@@ -265,6 +265,20 @@ function bw_pruefungen()
         $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_DIENST'), bw_t('TEST.A_DIENST_GESTOPPT'));
     }
 
+    /* Die Marke "Aktualisierung laeuft". Zu jeder Regel gehoert das
+     * Werkzeug, das sie findet (CLAUDE.md 6). Erreichbar ist dieser Reiter
+     * nur, solange sie NICHT gilt - die Seite haelt sonst schon am Eingang
+     * an (index.php). Uebrig bleibt der Fall "liegt noch da, gilt aber
+     * nicht mehr": eine abgebrochene Installation. */
+    list($bw_mk_liegt, $bw_mk_gilt) = bw_upgrade_marke();
+    if (!$bw_mk_liegt) {
+        $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_UPGRADE_MARKE'), bw_t('TEST.A_UPGRADE_KEINE'));
+    } else {
+        $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_UPGRADE_MARKE'),
+            sprintf(bw_t('TEST.A_UPGRADE_ALT'),
+                bw_e(bw_paths()['plugin'] . '.upgrade_laeuft')));
+    }
+
     $hat_ort = abs((float) $cfg['breite']) > 0.001 || abs((float) $cfg['laenge']) > 0.001;
     $zeilen[] = bw_pruefzeile($hat_ort ? 1 : 0, bw_t('TEST.F_STANDORT'),
         $hat_ort ? sprintf('%.4f, %.4f &mdash; %d m', (float) $cfg['breite'],

@@ -51,6 +51,13 @@ PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/dienst.pid"
 SOLL="$PDATA/soll_laufen"
+# Die Marke "Aktualisierung laeuft". Sie liegt NEBEN dem Datenordner, weil
+# purge_installation data/plugins/<ordner>/ zwischen preupgrade.sh und
+# postinstall.sh restlos abraeumt (Regeln/06) - im Ordner waere sie genau
+# dann fort, wenn sie gebraucht wird. preupgrade.sh legt sie als Erstes an,
+# postinstall.sh - das letzte Hakenskript dieser Linie; postupgrade.sh und
+# postroot.sh gibt es hier nicht - entfernt sie wieder.
+MARKE="$LBHOMEDIR/data/plugins/$PNAME.upgrade_laeuft"
 LOGDATEI="$PLOG/bewaesserung.log"
 # Eigene Datei fuer alles, was NEBEN dem Protokoll anfaellt: Meldungen des
 # Starts und alles, was das Programm nach stderr schreibt, bevor sein
@@ -194,6 +201,39 @@ laeuft() {
     return 1
 }
 
+# Laeuft gerade eine Aktualisierung dieses Plugins?
+#
+# Gemessen (Pruefung-Bewaesserung-0.9.30, 18.09.2026, WSL, rot vorher): ohne
+# diese Frage startete der Knopf "Dienst starten" mitten in der
+# Upgrade-Luecke einen Dienst (Fall A2a). Die Oberflaeche hatte die
+# Konfiguration kurz vorher aus der Zweitschrift geheilt, der Verlauf des
+# Wasserhaushalts lag aber noch in der Sicherung. Der Dienst rechnete ohne
+# ihn und sandte "giessen 0", Ventilzeit 0, retained (A2c/A2g: mit dem
+# Verlauf waeren es "giessen 1" und 649 s gewesen) - und postinstall.sh
+# holte den Verlauf danach nicht mehr zurueck, weil schon einer dalag
+# (A2e). Ebenso "Jetzt rechnen" (A4) und "neu starten" (A3).
+#
+# Vier Ausgaenge:
+#   Marke hoechstens 3600 s alt  -> gesperrt (Fall C1)
+#   Marke aelter, aus der Zukunft, leer oder unlesbar -> sie gilt nicht
+#                                (C2 bis C5; eine abgebrochene Installation
+#                                darf den Dienst nicht fuer immer stilllegen)
+#   keine lesbare Uhr            -> die Pruefung faellt GESCHLOSSEN aus
+#                                (CLAUDE.md 4; Fall C6)
+#   BW_START_TROTZ_MARKE=1       -> Ausnahme fuer postinstall.sh (Fall C10)
+# Bauart: LoxBerry-Plugin-Govee-0.9.19 (marke_sperrt).
+marke_sperrt() {
+    [ -f "$MARKE" ] || return 1
+    [ "${BW_START_TROTZ_MARKE:-0}" = "1" ] && return 1
+    JETZT=$(date +%s 2>/dev/null)
+    case "$JETZT" in ''|*[!0-9]*) return 0 ;; esac
+    SEIT=$(cat "$MARKE" 2>/dev/null)
+    case "$SEIT" in ''|*[!0-9]*) return 1 ;; esac
+    ALTER=$((JETZT - SEIT))
+    [ "$ALTER" -lt 0 ] && return 1
+    [ "$ALTER" -le 3600 ]
+}
+
 starten() {
     if laeuft; then
         # Trug die PID-Datei ihn nicht, wird die Nummer nachgetragen - und
@@ -209,6 +249,16 @@ starten() {
             return 0
         fi
         echo "laeuft bereits (PID $BW_PID)"
+        return 0
+    fi
+    # Diese Frage steht VOR dem touch auf soll_laufen weiter unten. Stuende
+    # sie dahinter, legte der abgewiesene Start den Merker trotzdem an, und
+    # der Waechter startete den Dienst eine Minute nach der Aktualisierung
+    # doch - auch einen, der vorher bewusst angehalten war (Faelle C1c, B2a;
+    # an Govee 0.9.19 gemessen). Rueckgabewert 0: eine laufende
+    # Aktualisierung ist kein Fehlschlag.
+    if marke_sperrt; then
+        echo "Eine Aktualisierung dieses Plugins laeuft - jetzt wird nichts gestartet. Lief der Dienst vorher, startet ihn die Installation am Ende selbst; sonst danach den Knopf erneut druecken."
         return 0
     fi
     if [ -z "$PY" ] || [ ! -x "$PY" ]; then
@@ -321,6 +371,15 @@ case "$1" in
         "$PY" "$SKRIPT" --selbsttest
         ;;
     einmal)
+        # "Jetzt rechnen" ist ein Startweg wie jeder andere: es rechnet,
+        # schreibt verlauf.json und sendet an Loxone. In der Luecke hiess
+        # das "giessen 0" und ein verlorener Wasserhaushalt (Faelle A4a bis
+        # A4d, rot vorher). Rueckgabewert 1: es wurde NICHT gerechnet, und
+        # die Oberflaeche soll das als Fehler zeigen, nicht als Ergebnis.
+        if marke_sperrt; then
+            echo "Eine Aktualisierung dieses Plugins laeuft - jetzt wird nicht gerechnet. Bitte nach ihrem Ende erneut versuchen."
+            exit 1
+        fi
         if [ -z "$PY" ] || [ ! -x "$PY" ]; then
             echo "FEHLER: kein python3 gefunden (weder $PYVENV noch im Suchpfad)."
             exit 1
@@ -329,8 +388,10 @@ case "$1" in
         ;;
     waechter)
         # Nur neu starten, wenn der Dienst laufen SOLL. Ein bewusst
-        # angehaltener Dienst bleibt angehalten.
-        if [ -f "$SOLL" ] && ! laeuft; then
+        # angehaltener Dienst bleibt angehalten. Bei liegender Marke nicht
+        # einmal die Protokollzeile: starten() wiese ohnehin ab, und die
+        # Zeile "wird neu gestartet" stimmte dann nicht (Fall C7).
+        if [ -f "$SOLL" ] && ! marke_sperrt && ! laeuft; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
             starten >> "$STARTLOG" 2>&1
         fi

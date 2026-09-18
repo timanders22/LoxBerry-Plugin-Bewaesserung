@@ -35,6 +35,32 @@ if [ -z "$BASE" ] || [ ! -f "$BASE/config/system/general.json" ]; then
     exit 2
 fi
 
+# ---------- Zuerst die Marke "Aktualisierung laeuft" ----------
+# Sie steht VOR allem anderen, gleich hinter der Bestimmung des
+# LoxBerry-Ordners (vorher ist ihr Ort nicht bekannt). Zwischen diesem
+# Skript und postinstall.sh raeumt der Installer data/, config/, bin/,
+# templates/ und webfrontend/ ab und legt die neuen Dateien samt Cron-Datei
+# hin; am Geraet vergehen dabei rund 50 s (Regeln/06, Einspeisebremse).
+#
+# Gemessen in dieser Luecke (Pruefung-Bewaesserung-0.9.30, rot vorher): der
+# Minutentakt startet nichts (Fall A1) - wohl aber die Knoepfe "Dienst
+# starten", "neu starten" und "Jetzt rechnen" der Oberflaeche (A2 bis A4).
+# Der Dienst rechnete dann ohne den Wasserhaushalt, sandte "giessen 0" an
+# Loxone, und der Verlauf ging endgueltig verloren. bin/dienst.sh weist
+# jeden Start ab, solange diese Marke hoechstens eine Stunde alt ist; die
+# Oberflaeche zeigt in dieser Zeit nur einen Hinweis.
+#
+# NEBEN dem Datenordner - darin loeschte purge_installation sie mit.
+mkdir -p "$BASE/data/plugins" 2>/dev/null
+BW_MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+date +%s > "$BW_MARKE" 2>/dev/null
+if [ -s "$BW_MARKE" ]; then
+    echo "<OK> Dienststart bis zum Ende der Aktualisierung gesperrt."
+else
+    echo "<WARNING> Die Marke $BW_MARKE liess sich nicht anlegen - der Dienst"
+    echo "<WARNING> koennte waehrend der Aktualisierung anlaufen."
+fi
+
 # Anhalten ueber dienst.sh, nicht mit einem eigenen kill.
 #
 # Bis 0.9.0 stand hier: SIGTERM, zwei Sekunden warten, kill -9. Zwei Sekunden
@@ -200,6 +226,12 @@ for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
 done
 if [ -n "$BW_FEHLT" ]; then
     echo "<FAIL> Nicht gesichert:$BW_FEHLT - das Update wird abgebrochen, damit der Purge die Originale nicht loescht."
+    # Mit 'exit 2' endet die Installation hier (&fail), postinstall.sh
+    # laeuft nie und raeumte die Marke nie weg. Die alte Fassung bleibt
+    # stehen, ihr Dienst ist aber angehalten - und liesse sich eine Stunde
+    # lang nicht wieder starten, ohne dass irgendwo stuende, warum (Fall
+    # C13). Also hier weg damit.
+    rm -f "$BW_MARKE"
     exit 2
 fi
 echo "<OK> preupgrade abgeschlossen."

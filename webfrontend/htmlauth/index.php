@@ -41,6 +41,46 @@ if ($bw_p['home'] !== '' && is_file($bw_p['home'] . '/libs/phplib/loxberry_syste
     require_once $bw_p['home'] . '/libs/phplib/loxberry_web.php';
 }
 
+/* ---------------- Laeuft gerade eine Aktualisierung? ----------------
+ *
+ * Solange die Marke "Aktualisierung laeuft" gilt (bw_upgrade_marke()),
+ * zeigt die Seite nur einen Hinweis - VOR jedem Lesen der Konfiguration,
+ * vor dem Wachposten und vor allen Handlern. Zwischen preupgrade.sh und
+ * postinstall.sh ist config/plugins/<ordner>/ abgeraeumt.
+ *
+ * Gemessen (Pruefung-Bewaesserung-0.9.30, 18.09.2026, WSL, rot vorher):
+ *   Fall E4  Fehlt die Zweitschrift bewaesserung.backup.json, legt schon
+ *            der blosse Seitenaufruf ein NEUES Aktionstoken an (bw_token())
+ *            und speichert es. postinstall.sh spielt die Sicherung danach
+ *            nicht ein - die Datei ist lesbar und nicht "{}". Jede in
+ *            Loxone eingetragene Adresse bekaeme 403.
+ *   Faelle A2 bis A4  Die Knoepfe "Dienst starten", "neu starten" und
+ *            "Jetzt rechnen" liefen an; das faengt bin/dienst.sh jetzt
+ *            selbst ab, die Sperre hier ist die zweite Stelle.
+ *   Faelle E1 bis E3  Mit Zweitschrift ging durch Seitenaufruf und
+ *            Speichern nichts verloren.
+ * Der unangemeldete Endpunkt (webfrontend/html/index.php) sperrt NICHT: er
+ * liest nur (bw_config(false)) und schaltet nichts.
+ * Bauart: LoxBerry-Plugin-AnkerSolix-0.9.18, Intercom-2.2.11. */
+list($bw_mk_liegt, $bw_mk_gilt) = bw_upgrade_marke();
+if ($bw_mk_gilt) {
+    $bw_mk_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
+    if ($bw_mk_rahmen) {
+        LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
+    }
+    echo '<div style="max-width:980px;margin:0 auto;'
+       . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
+       . '<div style="border-radius:8px;padding:10px 14px;margin:12px 0;'
+       . 'background:#fdf3e3;border:1px solid #e0620d"><b>'
+       . bw_e(bw_t('HINWEIS.UPGRADE_LAEUFT')) . '</b> '
+       . bw_e(bw_t('HINWEIS.UPGRADE_NICHT_GESPEICHERT'))
+       . '</div>' . "\n" . '</div>' . "\n";
+    if ($bw_mk_rahmen && method_exists('LBWeb', 'lbfooter')) {
+        LBWeb::lbfooter();
+    }
+    exit;
+}
+
 /* Positivliste: jeder Reiter MUSS hier stehen, sonst springt die Seite nach
  * jedem Absenden zurueck auf Einstellungen. */
 $bw_muster = '/^tab-(settings|sources|zones|history|mqtt|loxone|test|log)$/';
