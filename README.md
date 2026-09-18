@@ -5,12 +5,62 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.28 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.29 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.29 — zwei gemessene Befunde aus dem Bestandslauf vom 18.09.2026
+
+**Das Plugin konnte einen fremden Prozess beenden.** `bin/dienst.sh` suchte
+einen laufenden Dienst über eine Zeichenkettensuche in der Befehlszeile
+*aller* Prozesse des Systems, nahm davon den ersten Treffer, schrieb dessen
+Nummer in die eigene PID-Datei und schickte ihm anschließend das Signal zum
+Beenden. Gemessen wurde das in einem Wegwerfbaum unter Linux: ein
+`python3 -c "…" <dienstpfad>`, der mit dem Plugin nichts zu tun hat, wurde von
+`dienst.sh status` als „laeuft“ gemeldet, seine Nummer landete in `dienst.pid`,
+und `dienst.sh stop` hat ihn beendet. Dasselbe traf ein `tail -f` auf die
+Dienstdatei und den Dienst einer zweiten Installation im Nachbarordner.
+
+Erkannt wird jetzt **argumentweise**: das erste Argument muss ein
+python-Interpreter sein, das zweite genau der eigene Dienstpfad, ein drittes
+darf es nicht geben, und der Prozess muss dem Dienstbenutzer gehören. Vor
+**jedem** Signal — auch vor dem harten Abschuss zehn Sekunden später — wird die
+Befehlszeile erneut gelesen, denn eine freigewordene Prozessnummer kann
+inzwischen einem anderen gehören. Eine Abfrage (`status`) schreibt nichts mehr
+in den Datenordner; nachgetragen wird eine Nummer nur beim `start`, und nur
+eine, die diese Prüfung bestanden hat. Umgekehrt beendet `stop` jetzt **alle**
+eigenen Dienste, auch einen ohne Eintrag in der PID-Datei — die Datei liegt in
+`data/plugins/<ordner>/` und ist nach jedem Update weg.
+
+Dieselbe Prüfung steckt in der Rückfallebene von `preupgrade.sh` (sie greift,
+wenn `dienst.sh` fehlt oder sein `stop` scheitert) und in `bw_dienst_pid()` der
+Oberfläche, die bisher ebenfalls nach einer Teilzeichenkette entschied und
+immer nur *einen* Prozess sah. Vorbilder der Bauart: APC-UPS 1.2.11,
+Midea2Lox 4.5.7, Chromecast4lox 1.3.11.
+
+**Eine Konfiguration, die nur `{}` enthält, wird wieder aus der Zweitschrift
+geheilt.** Das ist der Zustand jeder bestehenden Anlage nach einem Update, und
+genau er fiel durch: die abgeschnittene und die unlesbare Datei waren sauber
+behandelt, `{}` galt als „neu“ und blieb unangetastet — obwohl die Zweitschrift
+mit dem alten Aktionstoken danebenlag. Danach standen Konfiguration **und**
+Zweitschrift auf Werkseinstellung, und jede Loxone-Adresse mit dem alten Token
+bekam HTTP 403. Entschieden wird jetzt nach **Inhalt**: was kein Aktionstoken
+trägt, ist kein gespeicherter Stand und wird aus einer Zweitschrift geheilt,
+die selbst eines trägt. Der verdrängte Stand bleibt als `.kaputt.<Zeit>`
+(0600) daneben liegen, sofern er mehr enthielt als `{}`. Liegt keine taugliche
+Zweitschrift daneben, ändert sich nichts — dann legt die Oberfläche wie bisher
+ein neues Token an. Bauart: Sprachsteuerung 0.11.8, Intercom 2.2.11.
+
+**Am Verhalten im Normalbetrieb ändert sich nichts.** Gemessen in beide
+Richtungen: der echte Dienst wird weiterhin erkannt und beendet, zwei eigene
+Dienste gehen beide mit, `stop` ohne laufenden Dienst meldet das und endet mit
+0, und eine heile Konfiguration wird nicht angefasst. Jede der sechs
+Korrekturen wurde einzeln zurückgebaut; der Prüfstand wurde jedes Mal an genau
+ihrer Stelle rot. Nicht am Gerät gemessen — nur unter WSL/Ubuntu (Python 3.12,
+PHP 8.3.6) und mit Windows-PHP 7.4.33.
 
 ## Neu in 0.9.27
 

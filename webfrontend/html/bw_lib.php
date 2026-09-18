@@ -261,6 +261,54 @@ function bw_zweitschrift_taugt($pfad)
 }
 
 /**
+ * Traegt dieser Stand das, was nur er tragen kann?
+ *
+ * Dasselbe Merkmal wie bei der Zweitschrift: das Aktionstoken. Es steht in
+ * jeder Loxone-Adresse dieses Plugins; geht es verloren, antwortet der
+ * Endpunkt jedem virtuellen Eingang mit 403, und zurueckrechnen laesst es
+ * sich nicht. Eine Konfiguration OHNE Token ist auf keinem Weg der
+ * Oberflaeche entstanden - bw_token() fuellt es beim ersten Seitenaufbau.
+ *
+ * Damit entscheidet ueber die Heilung der INHALT, nicht die Form. Bis
+ * 0.9.29 fiel genau ein Fall durch: eine Datei, die nur "{}" enthaelt.
+ * bw_json_lage() nennt sie 'neu', und 'neu' lief in den else-Zweig - es
+ * wurde nicht geheilt, obwohl die Zweitschrift mit dem alten Token
+ * danebenlag. Am Ende standen Konfiguration UND Zweitschrift auf
+ * Werkseinstellung. Gemessen am 18.09.2026 unter PHP 8.3.6 und 7.4.33
+ * (Bestand-2026-09-18/klasse-A, Fall "leer"). "{}" ist kein Randfall,
+ * sondern der Aktualisierungsfall, den jede bestehende Anlage nach einem
+ * Upgrade durchlaeuft.
+ * Bauart: LoxBerry-Plugin-Sprachsteuerung-0.11.8 (sp_config_hat_inhalt),
+ * LoxBerry-Plugin-Intercom-2.2.11 (ic_config_hat_inhalt).
+ */
+function bw_config_hat_inhalt($d)
+{
+    return is_array($d) && $d !== array() && isset($d['aktionstoken'])
+        && trim((string) $d['aktionstoken']) !== '';
+}
+
+/**
+ * Den verdraengten Stand beiseitelegen, statt ihn zu ueberbuegeln.
+ *
+ * Sonst ist die Ursache nach der Heilung nicht mehr zu sehen. Eine Datei,
+ * die nur Leerraum, "{}" oder "[]" enthaelt, traegt nichts, was sich
+ * aufheben liesse - fuer sie entsteht keine Nebendatei. Die Rechte bleiben
+ * 0600: in der Konfiguration steht das Aktionstoken.
+ */
+function bw_config_beiseite($pfad, $grund)
+{
+    if (!is_file($pfad)) { return; }
+    $rest = preg_replace('/\s+/', '', (string) @file_get_contents($pfad));
+    if ($rest === '' || $rest === '{}' || $rest === '[]') { return; }
+    $beiseite = $pfad . '.kaputt.' . date('Ymd_His');
+    if (!is_file($beiseite) && @rename($pfad, $beiseite)) {
+        @chmod($beiseite, 0600);
+        bw_log('Die Konfiguration ' . $grund . ' und liegt jetzt als '
+             . basename($beiseite) . ' daneben.');
+    }
+}
+
+/**
  * Die Konfiguration lesen - und nur aus der angemeldeten Oberflaeche heilen.
  *
  * $erzeugen = false ist der unangemeldete Weg: der Loxone-Endpunkt liest die
@@ -279,23 +327,28 @@ function bw_config($erzeugen = true)
             /* Die kaputte Datei bleibt liegen, statt beim naechsten Speichern
              * ueberbuegelt zu werden - sonst ist die Ursache nicht mehr zu
              * sehen. */
-            $beiseite = $p['config'] . '.kaputt.' . date('Ymd_His');
-            if (!is_file($beiseite) && @rename($p['config'], $beiseite)) {
-                bw_log('Die Konfiguration war unlesbar und liegt jetzt als '
-                     . basename($beiseite) . ' daneben.');
-            }
+            bw_config_beiseite($p['config'], 'war unlesbar');
             $daten = bw_config_heilen($p);
             if ($daten !== null) { list($lage, $daten) = bw_json_lage($p['config']); }
             else { $daten = array(); }
         }
-    } elseif ($lage === 'fehlt' || $lage === 'leer') {
+    } elseif (!bw_config_hat_inhalt($daten)) {
+        /* 'fehlt', 'leer', 'neu' ("{}") - und auch ein lesbares 'ok' ohne
+         * Aktionstoken. Entschieden wird nach INHALT: was das Token nicht
+         * traegt, ist kein gespeicherter Stand. Geheilt wird nur aus einer
+         * Zweitschrift, die selbst Inhalt traegt (bw_zweitschrift_taugt);
+         * liegt keine solche daneben, bleibt alles, wie es ist, und
+         * bw_token() legt wie bisher ein neues Token an. */
         bw_config_zustand($lage);
         if ($erzeugen) {
+            if (bw_zweitschrift_taugt($p['sicherung'])) {
+                bw_config_beiseite($p['config'], 'trug kein Aktionstoken');
+            }
             $g = bw_config_heilen($p);
             if ($g !== null) { list($lage, $daten) = bw_json_lage($p['config']); }
         }
     } else {
-        bw_config_zustand($lage);       // 'ok' oder 'neu' (Aktualisierungsfall)
+        bw_config_zustand($lage);       // 'ok'
     }
     return array_merge(bw_vorgaben(), is_array($daten) ? $daten : array());
 }
@@ -314,8 +367,9 @@ function bw_config_heilen($p)
         return null;
     }
     bw_config_zustand('zweitschrift');
-    bw_log('Die Konfiguration war nicht lesbar und wurde aus der Zweitschrift '
-         . 'zurueckgeholt. Die Ursache besteht moeglicherweise fort.');
+    bw_log('Die Konfiguration trug kein Aktionstoken und wurde aus der '
+         . 'Zweitschrift zurueckgeholt. Die Ursache besteht moeglicherweise '
+         . 'fort.');
     return $d;
 }
 
@@ -1120,20 +1174,129 @@ function bw_antwort_erkennen($daten)
 
 /* ---------------- Dienst ---------------- *//* ---------------- Dienst ---------------- */
 
+/**
+ * Die Benutzer, denen ein eigener Dienst gehoeren kann.
+ *
+ * loxberry, weil bin/plugins/<x>/dienst.sh sich vor allem anderen dorthin
+ * herunterstuft; dazu der Benutzer, unter dem diese Seite laeuft - was sie
+ * selbst gestartet hat, gehoert ihr. Gelesen wird /etc/passwd statt
+ * posix_getpwnam(): die POSIX-Erweiterung ist auf einem LoxBerry nicht
+ * zugesichert. is_readable() VOR dem Lesen, damit der Pruefstand unter
+ * Windows - ohne /etc/passwd und ohne /proc - keine Warnung erzeugt; ein
+ * Fehlalarm bei jedem Lauf ist eine abgeschaltete Pruefung.
+ * Bauart: LoxBerry-Plugin-Chromecast4lox-1.3.11 (cc_dienst_uids).
+ */
+function bw_dienst_uids()
+{
+    static $u = null;
+    if ($u !== null) {
+        return $u;
+    }
+    $u = array();
+    $eigen = @getmyuid();
+    if ($eigen !== false) {
+        $u[] = (int) $eigen;
+    }
+    $zeilen = is_readable('/etc/passwd')
+        ? @file('/etc/passwd', FILE_IGNORE_NEW_LINES) : false;
+    if (is_array($zeilen)) {
+        foreach ($zeilen as $z) {
+            $f = explode(':', $z);
+            if (isset($f[2]) && $f[0] === 'loxberry') {
+                $u[] = (int) $f[2];
+                break;
+            }
+        }
+    }
+    $u = array_values(array_unique($u));
+    return $u;
+}
 
+/**
+ * ALLE Prozesse dieses Dienstes - argumentweise erkannt.
+ *
+ * Ein Treffer hat GENAU zwei Argumente: einen python-Interpreter und den
+ * vollen Dienstpfad DIESES Plugin-Ordners; dazu gehoert er einem der
+ * Benutzer aus bw_dienst_uids(). Dieselbe Regel wie in bin/dienst.sh und
+ * preupgrade.sh.
+ *
+ * Bis 0.9.29 entschied hier eine Teilzeichenkette ueber die ganze
+ * Befehlszeile ("bewaesserung_dienst.py" irgendwo darin). Das haelt auch
+ * einen Editor mit der Datei offen, ein 'tail -f' darauf und den Dienst
+ * eines zweiten Plugin-Ordners (LoxBerry haengt bei einer zweiten
+ * Installation _01 an) fuer den eigenen Dienst. Und es sah immer nur EINEN
+ * Prozess: liefen nach einem Update zwei, blieb einer unsichtbar.
+ *
+ * Rein lesend - diese Datei wird auch aus dem unangemeldeten Endpunkt
+ * eingebunden, und der legt nichts an und raeumt nichts weg.
+ *
+ * Rueckgabe: aufsteigend sortierte Liste von Prozessnummern.
+ */
+function bw_dienst_pids()
+{
+    $skript = bw_paths()['bindir'] . '/bewaesserung_dienst.py';
+    $uids = bw_dienst_uids();
+    $aus = array();
+    // Die Frage nach /proc wird gestellt, bevor opendir() sie mit einer
+    // Warnung beantwortet (Pruefstand unter Windows, siehe oben).
+    if (!is_dir('/proc')) {
+        return $aus;
+    }
+    $d = @opendir('/proc');
+    if ($d === false) {
+        return $aus;
+    }
+    while (($e = readdir($d)) !== false) {
+        if (!preg_match('/^[0-9]+$/', $e)) {
+            continue;
+        }
+        $roh = @file_get_contents('/proc/' . $e . '/cmdline');
+        if ($roh === false || $roh === '') {
+            continue;
+        }
+        $args = explode("\0", rtrim($roh, "\0"));
+        // Genau zwei Argumente: ein drittes waere '--einmal' oder
+        // '--selbsttest' und damit ein kurzer Lauf, kein Dauerlaeufer.
+        if (count($args) !== 2 || $args[1] !== $skript) {
+            continue;
+        }
+        $i = basename($args[0]);
+        if ($i !== 'python' && $i !== 'python3' && strpos($i, 'python3.') !== 0) {
+            continue;
+        }
+        $besitzer = @fileowner('/proc/' . $e);
+        if ($besitzer === false || !in_array((int) $besitzer, $uids, true)) {
+            continue;
+        }
+        $aus[] = (int) $e;
+    }
+    closedir($d);
+    sort($aus);
+    return $aus;
+}
 
+/**
+ * Laeuft der Dienst? Rueckgabe: PID oder 0.
+ *
+ * Die PID-Datei bleibt die erste Frage - steht ihre Nummer unter den
+ * argumentweise bestaetigten Treffern, ist sie die Antwort. Sonst gilt der
+ * erste Treffer. Eine PID-Datei, die ins Leere zeigt, bleibt liegen: das
+ * Aufraeumen ist Sache von dienst.sh, nicht der Oberflaeche.
+ */
 function bw_dienst_pid()
 {
+    $pids = bw_dienst_pids();
+    if (!$pids) {
+        return 0;
+    }
     $f = bw_paths()['datadir'] . '/dienst.pid';
-    if (!is_file($f)) {
-        return 0;
+    if (is_file($f)) {
+        $eingetragen = (int) trim((string) @file_get_contents($f));
+        if (in_array($eingetragen, $pids, true)) {
+            return $eingetragen;
+        }
     }
-    $pid = (int) trim((string) @file_get_contents($f));
-    if ($pid <= 0 || !is_dir('/proc/' . $pid)) {
-        return 0;
-    }
-    $cmd = (string) @file_get_contents('/proc/' . $pid . '/cmdline');
-    return strpos($cmd, 'bewaesserung_dienst.py') !== false ? $pid : 0;
+    return $pids[0];
 }
 
 function bw_dienst_soll()

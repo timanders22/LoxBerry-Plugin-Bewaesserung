@@ -92,6 +92,71 @@ fi
 
 mkdir -p "$PDATA" "$PLOG" 2>/dev/null
 
+# Wem gehoert der Dienst? Genau die Bedingung, nach der dieses Skript sich
+# ganz oben selbst herunterstuft: gibt es den Benutzer loxberry und laeuft
+# das Skript als root, dann gehoert der Dienst loxberry - sonst dem
+# aufrufenden Benutzer.
+dienst_uid() {
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        id -u loxberry 2>/dev/null
+    else
+        id -u
+    fi
+}
+DIENST_UID=$(dienst_uid)
+
+# Ist die Nummer $1 GENAU dieser Dienst? Argumentweise, nicht als Suche ueber
+# die ganze Befehlszeile.
+#
+# Bis 0.9.29 entschied hier zweierlei, und beides ist zu weit:
+#   - im PID-Datei-Zweig ein grep nach "bewaesserung_dienst.py" ueber die
+#     ganze Befehlszeile. Das trifft auch "tail -f <dienstpfad>" oder einen
+#     Editor mit der Datei offen;
+#   - ohne PID-Datei eine Suche nach der Zeichenkette "$SKRIPT" in jeder
+#     Befehlszeile des Systems, deren ERSTER Treffer genommen und in die
+#     eigene PID-Datei geschrieben wurde. Gemessen am 18.09.2026 in WSL
+#     (Bestand-2026-09-18/klasse-F): ein
+#     "python3 -c 'import time; time.sleep(300)' <dienstpfad>" wurde von
+#     'status' als laufender Dienst gemeldet, seine Nummer landete in
+#     dienst.pid, und 'stop' hat ihn beendet.
+#
+# Geprueft wird deshalb jedes Argument fuer sich:
+#   argv[0] ist ein python-Interpreter,
+#   argv[1] ist genau der eigene Dienstpfad,
+#   ein drittes Argument gibt es nicht ("--einmal", "--selbsttest" sind
+#   kurze Laeufe im Vordergrund, kein Dauerlaeufer),
+#   und der Prozess gehoert dem Dienstbenutzer.
+# Bauart: LoxBerry-Plugin-APC-UPS-1.2.11 (apc_ist_dienst),
+# LoxBerry-Plugin-Midea2Lox-4.5.7 (eigener_dienst).
+#
+# Der Rumpf laeuft hinter einer Pipe, also in einer Unterschale: das 'exit'
+# darin beendet nur sie.
+bw_ist_dienst() {   # $1 Nummer, $2 UID des Dienstbenutzers ("" = nicht pruefen)
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline" | {
+        IFS= read -r a0 || exit 1
+        IFS= read -r a1 || exit 1
+        IFS= read -r a2 && exit 1
+        case "${a0##*/}" in
+            python|python3|python3.[0-9]|python3.[0-9][0-9]) ;;
+            *) exit 1 ;;
+        esac
+        [ "$a1" = "$SKRIPT" ]
+    } || return 1
+    [ -z "$2" ] && return 0
+    [ "$(stat -c %u "/proc/$1" 2>/dev/null)" = "$2" ]
+}
+
+# Alle eigenen Dienste, eine Nummer je Zeile. Rein lesend.
+bw_dienste_suchen() {
+    local d p
+    for d in /proc/[0-9]*; do
+        p=${d#/proc/}
+        bw_ist_dienst "$p" "$DIENST_UID" && echo "$p"
+    done
+    return 0
+}
+
 # Laeuft der Dienst? Die PID-Datei ist die schnelle Antwort, nicht die
 # einzige. Sie liegt in data/plugins/<x>/ und ist damit nach jedem
 # Upgrade weg; auch ein misslungenes Anhalten kann sie entfernen,
@@ -99,20 +164,31 @@ mkdir -p "$PDATA" "$PLOG" 2>/dev/null
 # schlicht "laeuft nicht" - der Waechter startete dann minuetlich einen
 # ZWEITEN Dienst daneben, und beide schrieben abbild.json und
 # verlauf.json.
+#
+# Diese Funktion SCHREIBT NICHTS. Bis 0.9.29 trug sie die im zweiten
+# Schritt gefundene Nummer in die eigene PID-Datei ein - eine Abfrage
+# ('status') veraenderte damit den Datenordner, und im Messfall stand
+# dort hinterher die Nummer eines fremden Vorgangs. Die gefundene Nummer
+# steht jetzt in BW_PID; wer sie festhalten will, tut das dort, wo es
+# hingehoert (starten()).
+BW_PID=""
 laeuft() {
+    local p
+    BW_PID=""
     if [ -f "$PID" ]; then
-        P=$(cat "$PID" 2>/dev/null)
-        if [ -n "$P" ] && kill -0 "$P" 2>/dev/null \
-           && grep -qa "bewaesserung_dienst.py" "/proc/$P/cmdline" 2>/dev/null; then
+        p=$(cat "$PID" 2>/dev/null)
+        case "$p" in ''|*[!0-9]*) p="" ;; esac
+        if [ -n "$p" ] && bw_ist_dienst "$p" "$DIENST_UID"; then
+            BW_PID="$p"
             return 0
         fi
     fi
     # Zweite Frage: laeuft GENAU DIESES Skript, auch ohne PID-Datei?
     # Eingeschraenkt auf den eigenen Pfad, damit eine zweite Installation
     # (LoxBerry haengt bei ihr _01 an) nicht mitgezaehlt wird.
-    P=$(pgrep -f "$SKRIPT" 2>/dev/null | head -n 1)
-    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
-        echo "$P" > "$PID" 2>/dev/null
+    p=$(bw_dienste_suchen | head -n 1)
+    if [ -n "$p" ]; then
+        BW_PID="$p"
         return 0
     fi
     return 1
@@ -120,7 +196,19 @@ laeuft() {
 
 starten() {
     if laeuft; then
-        echo "laeuft bereits (PID $(cat "$PID"))"
+        # Trug die PID-Datei ihn nicht, wird die Nummer nachgetragen - und
+        # zwar hier, nicht in laeuft(). In die eigene PID-Datei kommt nur
+        # eine Nummer, die bw_ist_dienst() argumentweise als eigenen Dienst
+        # bestaetigt hat. "start" auf einen laufenden Dienst heisst "laeuft
+        # bereits"; ein Dienst ohne Buchfuehrung ist derselbe Fall und wird
+        # weder beendet noch ein zweites Mal gestartet.
+        # Bauart: LoxBerry-Plugin-Midea2Lox-4.5.7 (start_dienst).
+        if [ "$(cat "$PID" 2>/dev/null)" != "$BW_PID" ]; then
+            echo "$BW_PID" > "$PID" 2>/dev/null
+            echo "laeuft bereits, lief aber ohne PID-Datei - Nummer nachgetragen (PID $BW_PID)"
+            return 0
+        fi
+        echo "laeuft bereits (PID $BW_PID)"
         return 0
     fi
     if [ -z "$PY" ] || [ ! -x "$PY" ]; then
@@ -148,7 +236,7 @@ starten() {
     echo $! > "$PID"
     sleep 1
     if laeuft; then
-        echo "gestartet (PID $(cat "$PID"))"
+        echo "gestartet (PID $BW_PID)"
         return 0
     fi
     echo "FEHLER: Start fehlgeschlagen - siehe $STARTLOG und $LOGDATEI"
@@ -156,21 +244,42 @@ starten() {
     return 1
 }
 
+# Beendet ALLE eigenen Dienste, nicht nur den aus der PID-Datei.
+#
+# Die PID-Datei liegt in data/plugins/<x>/ und ist nach jedem Upgrade weg;
+# ein Dienst ohne Eintrag war damit fuer 'stop' unsichtbar. Bis 0.9.29 kam
+# er nur durch einen Nebeneffekt mit: laeuft() schrieb die Variable P der
+# aufrufenden Funktion um, und 'kill -9' traf deshalb eine andere Nummer
+# als das vorangegangene SIGTERM - auch dann, wenn die neue Nummer
+# inzwischen einem fremden Vorgang gehoerte.
+#
+# Vor JEDEM Signal wird die Befehlszeile erneut gelesen: zwischen der Suche
+# und dem harten Abschuss liegen zehn Sekunden, in denen eine freigewordene
+# Nummer laengst neu vergeben sein kann.
 anhalten() {
+    local ziel rest p i
     rm -f "$SOLL"
-    if ! laeuft; then
+    ziel=$(bw_dienste_suchen)
+    if [ -z "$ziel" ]; then
         rm -f "$PID"
         echo "laeuft nicht"
         return 0
     fi
-    P=$(cat "$PID")
-    kill "$P" 2>/dev/null
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        laeuft || break
-        sleep 1
+    for p in $ziel; do
+        bw_ist_dienst "$p" "$DIENST_UID" && kill "$p" 2>/dev/null
     done
-    if laeuft; then
-        kill -9 "$P" 2>/dev/null
+    i=0
+    while [ $i -lt 10 ]; do
+        rest=$(bw_dienste_suchen)
+        [ -n "$rest" ] || break
+        sleep 1
+        i=$((i + 1))
+    done
+    rest=$(bw_dienste_suchen)
+    if [ -n "$rest" ]; then
+        for p in $rest; do
+            bw_ist_dienst "$p" "$DIENST_UID" && kill -9 "$p" 2>/dev/null
+        done
         sleep 1
     fi
     # Die Wirkung pruefen, nicht den Rueckgabewert. Bis 0.9.18 wurde nach
@@ -178,8 +287,9 @@ anhalten() {
     # und ruft loxberry das Skript, laeuft er weiter - die PID-Datei war
     # trotzdem weg, "angehalten" stand da, und der Waechter startete
     # einen zweiten daneben.
-    if laeuft; then
-        echo "FEHLER: Prozess $P laeuft weiter - Rechteproblem? Als root anhalten."
+    rest=$(bw_dienste_suchen)
+    if [ -n "$rest" ]; then
+        echo "FEHLER: Prozess $(echo $rest) laeuft weiter - Rechteproblem? Als root anhalten."
         return 1
     fi
     rm -f "$PID"
@@ -193,7 +303,7 @@ case "$1" in
     restart) anhalten; sleep 1; starten ;;
     status)
         if laeuft; then
-            echo "laeuft $(cat "$PID")"
+            echo "laeuft $BW_PID"
             exit 0
         fi
         echo "gestoppt"

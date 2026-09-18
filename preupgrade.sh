@@ -54,6 +54,40 @@ fi
 # dem Cron den Dienst nicht mitten im Update wieder hochzieht.
 DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
 PID="$BASE/data/plugins/$PFOLDER/dienst.pid"
+BW_SKRIPT="$BASE/bin/plugins/$PFOLDER/bewaesserung_dienst.py"
+# Dieses Skript ruft der Installer als root. Der Dienst gehoert loxberry -
+# wo es den Benutzer nicht gibt, dem eigenen.
+BW_UID=$(id -u loxberry 2>/dev/null || id -u)
+
+# Ist die Nummer $1 GENAU dieser Dienst? Argumentweise, nicht als Suche
+# ueber die ganze Befehlszeile: argv[0] ist ein python-Interpreter, argv[1]
+# ist der eigene Dienstpfad, ein drittes Argument gibt es nicht.
+# Wortgleich mit bw_ist_dienst() in bin/dienst.sh; Bauart:
+# LoxBerry-Plugin-APC-UPS-1.2.11 (apc_ist_dienst).
+bw_ist_dienst() {   # $1 Nummer, $2 UID des Dienstbenutzers ("" = nicht pruefen)
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline" | {
+        IFS= read -r a0 || exit 1
+        IFS= read -r a1 || exit 1
+        IFS= read -r a2 && exit 1
+        case "${a0##*/}" in
+            python|python3|python3.[0-9]|python3.[0-9][0-9]) ;;
+            *) exit 1 ;;
+        esac
+        [ "$a1" = "$BW_SKRIPT" ]
+    } || return 1
+    [ -z "$2" ] && return 0
+    [ "$(stat -c %u "/proc/$1" 2>/dev/null)" = "$2" ]
+}
+
+# Alle eigenen Dienste, eine Nummer je Zeile. Rein lesend.
+bw_dienste_suchen() {
+    for BW_D in /proc/[0-9]*; do
+        BW_P=${BW_D#/proc/}
+        bw_ist_dienst "$BW_P" "$BW_UID" && echo "$BW_P"
+    done
+    return 0
+}
 # NEBEN das Datenverzeichnis, nicht hinein: der Installer raeumt
 # data/plugins/<ordner>/ vollstaendig ab, bevor postinstall.sh laeuft.
 # Gemessen am Installationsprotokoll vom 18.08.2026 (Zeilen 1148/1152).
@@ -90,22 +124,43 @@ if [ -x "$DIENST" ] && "$DIENST" stop >/dev/null 2>&1; then
     else
         echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
     fi
-elif [ -f "$PID" ]; then
-    P=$(cat "$PID" 2>/dev/null)
-    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
-        kill "$P" 2>/dev/null || true
+else
+    # Rueckfallebene: dienst.sh fehlt oder sein 'stop' ist gescheitert.
+    #
+    # Beendet wird nur, was argumentweise als eigener Dienst erkannt ist -
+    # nicht, was in der PID-Datei steht. Bis 0.9.29 genuegten die Nummer
+    # aus der Datei und ein 'kill -0'; ein fremder Vorgang, der die Nummer
+    # geerbt hatte, bekam SIGTERM. Gemessen am 18.09.2026 in WSL
+    # (Bestand-2026-09-18/klasse-F, Fall 8 des Pruefstands): ein
+    # 'sleep 600' mit seiner Nummer in dienst.pid war nach diesem Skript
+    # tot. Die Probe auf die Befehlszeile gab es nur vor dem 'kill -9',
+    # nicht vor dem SIGTERM davor.
+    #
+    # Gesucht wird ueber /proc, nicht ueber die PID-Datei: der Installer
+    # loescht data/plugins/<x>/ beim Upgrade, ein Dienst ohne Eintrag war
+    # hier sonst unsichtbar und haette waehrend des Updates weiter in den
+    # Datenordner geschrieben.
+    BW_ZIEL=$(bw_dienste_suchen)
+    if [ -n "$BW_ZIEL" ]; then
+        for P in $BW_ZIEL; do
+            bw_ist_dienst "$P" "$BW_UID" && kill "$P" 2>/dev/null
+        done
         i=0
-        while [ $i -lt 15 ] && kill -0 "$P" 2>/dev/null; do
+        while [ $i -lt 15 ] && [ -n "$(bw_dienste_suchen)" ]; do
             sleep 1
             i=$((i + 1))
         done
-        # Nummernrecycling ausschliessen, bevor mit -9 nachgesetzt wird.
-        if kill -0 "$P" 2>/dev/null && grep -qa "bewaesserung_dienst.py" "/proc/$P/cmdline" 2>/dev/null; then
-            kill -9 "$P" 2>/dev/null || true
-        fi
+        # Nummernrecycling ausschliessen, bevor mit -9 nachgesetzt wird:
+        # die Befehlszeile wird VOR diesem Signal erneut gelesen.
+        for P in $(bw_dienste_suchen); do
+            bw_ist_dienst "$P" "$BW_UID" && kill -9 "$P" 2>/dev/null
+        done
         # Nur hier gemeldet: eine liegengebliebene PID-Datei allein ist
         # kein laufender Dienst.
         echo "<INFO> Laufender Dienst angehalten (Rueckfallebene ohne dienst.sh)."
+    elif [ -f "$PID" ]; then
+        echo "<INFO> Die Nummer aus $(basename "$PID") gehoert keinem eigenen Dienst -"
+        echo "<INFO> es wurde nichts beendet, die Datei wird entfernt."
     fi
     rm -f "$PID"
 fi
