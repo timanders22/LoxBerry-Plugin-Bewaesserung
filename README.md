@@ -5,12 +5,54 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.30 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.31 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.31 — `dienst.sh` liest die Wurzel, statt sie zu raten
+
+**Ein bloßes `dienst.sh status` konnte in der laufenden Installation Ordner
+anlegen.** `bin/dienst.sh` rechnete die LoxBerry-Wurzel als „drei Ebenen über
+dem eigenen Ablageort" aus, nahm den Ordnernamen aus dem Verzeichnisnamen und
+überschrieb dabei ein gesetztes `$LBHOMEDIR`. Gleich danach legte es Daten-
+und Protokollordner an — bei **jedem** Aufruf, auch bei `status`. Nachgestellt
+unter WSL/Ubuntu mit den echten Skripten und einem Platzhalter als Dienst:
+
+* aus einem Prüfarchiv unter `<LoxBerry-Wurzel>/pruefung/bewaesserung/bin`
+  heraus legte `status` in der laufenden Installation `data/plugins/bin` und
+  `log/plugins/bin` an;
+* aus einem ausgepackten Archiv heraus, mit `LBHOMEDIR` und `LBPPLUGINDIR`
+  auf die Installation gesetzt, meldete `status` „gestoppt", obwohl der Dienst
+  der Installation lief, und legte neben dem Archiv Ordner an;
+* in der Lücke eines Updates, in der LoxBerry den Datenordner abgeräumt hat,
+  legte schon `status` ihn wieder an — ebenso ein Start, den die
+  Upgrade-Marke abweist.
+
+Jetzt kommt die Wurzel zuerst aus `$LBHOMEDIR`; fehlt sie, wird aufwärts nach
+einem Verzeichnis gesucht, das `config/plugins`, `data/plugins` **und**
+`config/system/general.json` trägt. Der Ordnername kommt aus `$LBPPLUGINDIR`,
+sonst aus dem Ablageort. Liegt `dienst.sh` weder unter
+`<LoxBerry-Wurzel>/bin/plugins/<ordner>` noch benennt der Aufruf ein
+eingerichtetes Plugin, endet es mit einer Fehlermeldung und legt nichts an.
+Dienstskript und virtuelle Umgebung werden aus der gelesenen Wurzel genommen,
+nicht aus dem Ablageort. Daten- und Protokollordner entstehen nur noch beim
+Start und im Minutentakt, und dort erst nach allen Abweisungen.
+
+**Die Upgrade-Marke gilt jetzt auch bis 300 s „aus der Zukunft".** Bis 0.9.30
+galt jede Sekunde Zukunft als „gilt nicht". Springt die Uhr ein Stück zurück,
+nachdem `preupgrade.sh` die Marke gesetzt hat — unter WSL gemessen bis 0,64 s —,
+war der Start in diesem Augenblick wieder frei und die Seite offen.
+`bin/dienst.sh` und die Oberfläche rechnen dieselbe Grenze. Weiter voraus
+liegende Marken gelten weiterhin nicht.
+
+Gegenproben, vorher wie nachher grün: aus der Installation heraus, aus `/`
+aufgerufen, mit und ohne `LBHOMEDIR` (so, wie der Minutentakt mit und ohne
+`/etc/environment` läuft), über einen Verweis auf die Wurzel, bei einer
+Neuinstallation und im Minutentakt ohne Protokollordner. Nicht am Gerät
+gemessen — nur unter WSL/Ubuntu (bash 5.2, PHP 8.3.6, Python 3.12).
 
 ## Neu in 0.9.30 — während eines Updates startet nichts mehr
 

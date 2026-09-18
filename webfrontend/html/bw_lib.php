@@ -1315,9 +1315,15 @@ function bw_dienst_soll()
  *
  * Die Datei liegt NEBEN dem Datenordner (data/plugins/<ordner>.upgrade_laeuft),
  * weil purge_installation den Ordner beim Upgrade abraeumt. Die Regel ist
- * dieselbe wie in bin/dienst.sh, marke_sperrt(): gueltig von 0 bis 3600 s
- * Alter; aelter, aus der Zukunft, leer oder unlesbar gilt sie nicht. Wer
- * eine der beiden Stellen aendert, aendert beide.
+ * dieselbe wie in bin/dienst.sh, marke_sperrt(): gueltig von -300 bis 3600 s
+ * Alter; aelter, mehr als 300 s aus der Zukunft, leer oder unlesbar gilt sie
+ * nicht. Wer eine der beiden Stellen aendert, aendert beide.
+ *
+ * Die 300 s Vorlauf: die Uhr kann ein Stueck zurueckspringen, nachdem
+ * preupgrade.sh die Marke gesetzt hat (in WSL gemessen bis 0,64 s;
+ * VolkswagenID 0.9.23 fuehrt dieselben 300 s). Bis 0.9.30 galt hier jede
+ * Sekunde Zukunft als "gilt nicht" - die Seite war dann fuer einen
+ * Augenblick offen (Pruefung-Bewaesserung-0.9.31, F15a).
  *
  * preg_match statt ctype_digit: ctype ist nicht zugesichert (Regeln/02).
  * Bauart: LoxBerry-Plugin-Govee-0.9.19 (gv_upgrade_marke).
@@ -1338,7 +1344,7 @@ function bw_upgrade_marke()
         return array(1, 0, -1);
     }
     $alter = time() - (int) $roh;
-    if ($alter < 0 || $alter > 3600) {
+    if ($alter < -300 || $alter > 3600) {
         return array(1, 0, $alter);
     }
     return array(1, 1, $alter);

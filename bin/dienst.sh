@@ -44,8 +44,94 @@ if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
 fi
 
 SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # <home>/bin/plugins/<ordner>
-PNAME=$(basename "$SELF")
-LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+
+# ---------- Wurzel und Ordnername: GELESEN, nicht geraten ----------
+#
+# Bis 0.9.30 stand hier
+#     PNAME=$(basename "$SELF")
+#     LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+# und weiter unten ein 'mkdir -p "$PDATA" "$PLOG"' auf oberster Ebene. Der
+# eigene Ablageort war damit die EINZIGE Quelle: ein gesetztes $LBHOMEDIR
+# wurde ueberschrieben, der Ordnername kam aus dem Verzeichnisnamen, und der
+# geratene Pfad wurde bei JEDEM Aufruf angelegt - auch bei 'status'.
+# Gemessen am 18.09.2026 in WSL (Pruefung-Bewaesserung-0.9.31, rot vorher;
+# Bauart H1 aus Bestand-2026-09-18/klasse-H):
+#   - 'dienst.sh status' aus einem Pruefarchiv unter
+#     <Wurzel>/pruefung/bewaesserung/bin legte in der LAUFENDEN Installation
+#     data/plugins/bin und log/plugins/bin an (Fall F6a);
+#   - dieselbe Datei aus einem ausgepackten Archiv uebersah das gesetzte
+#     $LBHOMEDIR und meldete "gestoppt", waehrend der Dienst der
+#     Installation lief (F5a), und legte neben dem Archiv Ordner an (F5b);
+#   - in der Upgrade-Luecke legte schon ein 'status' den abgeraeumten
+#     Datenordner wieder an (F8a).
+#
+# Hausform (Regeln/03 und Regeln/06, lb_wurzel_suchen): Stufe 1 ist die
+# gelesene Umgebung, Stufe 2 die Aufwaertssuche nach einem Verzeichnis, das
+# nachweislich eine Wurzel IST - config/plugins, data/plugins UND
+# config/system/general.json (der dritte Nachweis seit dem Raumklima-Vorfall;
+# ohne ihn gilt ein fremder Baum mit den beiden Ordnern als Wurzel, Fall F16).
+# Eine feste Zahl '..' waere nur die naechste Wette.
+bw_wurzel_taugt() {          # $1 Kandidat
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
+}
+bw_wurzel_suchen() {
+    bw_v="$SELF"
+    bw_i=0
+    while [ -n "$bw_v" ] && [ "$bw_v" != "/" ] && [ "$bw_i" -lt 8 ]; do
+        if bw_wurzel_taugt "$bw_v" && [ -f "$bw_v/config/system/general.json" ]; then
+            echo "$bw_v"
+            return 0
+        fi
+        bw_v=$(dirname "$bw_v")
+        bw_i=$((bw_i + 1))
+    done
+    return 1
+}
+if ! bw_wurzel_taugt "${LBHOMEDIR:-}"; then
+    LBHOMEDIR=$(bw_wurzel_suchen)
+fi
+# Der Ordnername ebenso. $LBPPLUGINDIR steht am Geraet in einer Cron-Schale
+# nie (Regeln/03, am 17.09.2026 gemessen) - dann traegt der Ablageort, und
+# das ist bei einer regulaeren Installation genau richtig. Wer sie setzt,
+# meint sie ernst: sie ist die einzige Quelle, die ein Aufruf von aussen
+# mitgeben kann.
+if [ -n "${LBPPLUGINDIR:-}" ]; then
+    PNAME=$(basename "$LBPPLUGINDIR")
+else
+    PNAME=$(basename "$SELF")
+fi
+
+# Die Gegenprobe steht VOR dem ersten Anlegen, nicht danach. Ein Aufruf, der
+# weder aus <Wurzel>/bin/plugins/<ordner> kommt noch ein eingerichtetes
+# Plugin benennt, kommt aus einem ausgepackten Archiv oder einem
+# Pruefordner: er faellt geschlossen aus und legt nichts an (F6).
+if [ -z "$LBHOMEDIR" ] || [ ! -d "$LBHOMEDIR" ]; then
+    echo "FEHLER: Es wurde kein LoxBerry-Wurzelverzeichnis gefunden."
+    echo "        \$LBHOMEDIR ist nicht gesetzt, und oberhalb von $SELF traegt"
+    echo "        kein Verzeichnis config/plugins, data/plugins und"
+    echo "        config/system/general.json. Es wurde nichts angelegt."
+    exit 1
+fi
+LBH_R=$(cd "$LBHOMEDIR" 2>/dev/null && pwd -P)
+if [ "$SELF" != "$LBH_R/bin/plugins/$PNAME" ] \
+   && [ ! -d "$LBHOMEDIR/config/plugins/$PNAME" ]; then
+    echo "FEHLER: '$PNAME' ist unter $LBHOMEDIR kein eingerichtetes Plugin,"
+    echo "        und $SELF ist nicht dessen bin-Ordner."
+    echo "        Der Aufruf kommt offenbar aus einem ausgepackten Archiv oder"
+    echo "        einem Pruefordner. Es wurde nichts angelegt."
+    echo "        Abhilfe: LBHOMEDIR und LBPPLUGINDIR setzen oder dienst.sh aus"
+    echo "        <LoxBerry-Wurzel>/bin/plugins/<ordner> aufrufen."
+    exit 1
+fi
+# Gearbeitet wird ab hier ausschliesslich mit der gelesenen Wurzel - auch
+# fuer das Dienstskript und die venv. Sonst verwaltete eine Datei aus dem
+# Archiv den Dienst des ARCHIVS, waehrend der Aufrufer die Installation
+# meinte (F5a). 'pwd -P' wie bei SELF: aus der Installation heraus ergibt
+# das zeichengenau denselben Pfad wie bisher "$SELF", und ein Dienst, den
+# eine fruehere Fassung gestartet hat, wird weiter als eigener erkannt -
+# auch ueber einen Verweis auf die Wurzel (F13).
+PBIN=$(cd "$LBHOMEDIR/bin/plugins/$PNAME" 2>/dev/null && pwd -P)
+[ -n "$PBIN" ] || PBIN="$LBHOMEDIR/bin/plugins/$PNAME"
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
 PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
@@ -72,7 +158,7 @@ LOGDATEI="$PLOG/bewaesserung.log"
 # (06.09.2026): sieben Dienste hielten so eine geloeschte Protokolldatei offen.
 # Regel: genau einer schreibt in eine Protokolldatei.
 STARTLOG="$PLOG/bewaesserung_start.log"
-SKRIPT="$SELF/bewaesserung_dienst.py"
+SKRIPT="$PBIN/bewaesserung_dienst.py"
 # Welcher Python?
 #
 # Die virtuelle Umgebung gibt es nur, damit das FREIWILLIGE Paket paho-mqtt
@@ -88,7 +174,7 @@ SKRIPT="$SELF/bewaesserung_dienst.py"
 #
 # Deshalb: die Umgebung wird bevorzugt, der System-Python ist die
 # Rueckfallebene. Erst wenn es beide nicht gibt, ist es ein Fehler.
-PYVENV="$SELF/venv/bin/python3"
+PYVENV="$PBIN/venv/bin/python3"
 if [ -x "$PYVENV" ]; then
     PY="$PYVENV"
     PYHERKUNFT="virtuelle Umgebung"
@@ -97,7 +183,13 @@ else
     PYHERKUNFT="System-Python (ohne virtuelle Umgebung - MQTT-Quellen brauchen paho-mqtt)"
 fi
 
-mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+# Angelegt wird erst dort, wo wirklich geschrieben wird - beim Start und im
+# Waechter -, nicht bei jedem Aufruf. Bis 0.9.30 stand hier ein
+# unbedingtes 'mkdir -p "$PDATA" "$PLOG"'; schon ein 'status' legte damit
+# Ordner an, im geratenen Pfad (F6a) und in der Upgrade-Luecke (F8a, F9a).
+ordner_anlegen() {
+    mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+}
 
 # Wem gehoert der Dienst? Genau die Bedingung, nach der dieses Skript sich
 # ganz oben selbst herunterstuft: gibt es den Benutzer loxberry und laeuft
@@ -215,9 +307,16 @@ laeuft() {
 #
 # Vier Ausgaenge:
 #   Marke hoechstens 3600 s alt  -> gesperrt (Fall C1)
-#   Marke aelter, aus der Zukunft, leer oder unlesbar -> sie gilt nicht
-#                                (C2 bis C5; eine abgebrochene Installation
-#                                darf den Dienst nicht fuer immer stilllegen)
+#   bis 300 s aus der Zukunft    -> gesperrt (Pruefung-Bewaesserung-0.9.31,
+#                                F14a: die Uhr kann ein Stueck
+#                                zurueckspringen, nachdem preupgrade.sh die
+#                                Marke gesetzt hat; in WSL gemessen bis
+#                                0,64 s, VolkswagenID 0.9.23 fuehrt deshalb
+#                                dieselben 300 s)
+#   Marke aelter, weiter aus der Zukunft, leer oder unlesbar -> sie gilt
+#                                nicht (C2 bis C5; eine abgebrochene
+#                                Installation darf den Dienst nicht fuer
+#                                immer stilllegen)
 #   keine lesbare Uhr            -> die Pruefung faellt GESCHLOSSEN aus
 #                                (CLAUDE.md 4; Fall C6)
 #   BW_START_TROTZ_MARKE=1       -> Ausnahme fuer postinstall.sh (Fall C10)
@@ -230,7 +329,7 @@ marke_sperrt() {
     SEIT=$(cat "$MARKE" 2>/dev/null)
     case "$SEIT" in ''|*[!0-9]*) return 1 ;; esac
     ALTER=$((JETZT - SEIT))
-    [ "$ALTER" -lt 0 ] && return 1
+    [ "$ALTER" -lt -300 ] && return 1
     [ "$ALTER" -le 3600 ]
 }
 
@@ -266,9 +365,6 @@ starten() {
         echo "        $PYVENV noch im Suchpfad. Ohne Python laeuft der Dienst nicht."
         return 1
     fi
-    if [ "$PY" != "$PYVENV" ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hinweis: die virtuelle Umgebung fehlt, es wird $PY benutzt. Alles laeuft - nur MQTT-Quellen brauchen paho-mqtt." >> "$LOGDATEI"
-    fi
     if [ ! -f "$SKRIPT" ]; then
         echo "FEHLER: $SKRIPT fehlt. Plugin neu installieren."
         return 1
@@ -276,6 +372,13 @@ starten() {
     if [ ! -f "$PCONFIG/bewaesserung.json" ]; then
         echo "FEHLER: Konfiguration fehlt ($PCONFIG/bewaesserung.json). Erst die Oberflaeche oeffnen."
         return 1
+    fi
+    # Erst hier anlegen: alle Abweisungen stehen davor und schreiben nichts
+    # (F9a: ein wegen der Marke abgewiesener Start legte bis 0.9.30 den
+    # Datenordner in der Upgrade-Luecke wieder an).
+    ordner_anlegen
+    if [ "$PY" != "$PYVENV" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hinweis: die virtuelle Umgebung fehlt, es wird $PY benutzt. Alles laeuft - nur MQTT-Quellen brauchen paho-mqtt." >> "$LOGDATEI"
     fi
     touch "$SOLL"
     # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
@@ -392,6 +495,11 @@ case "$1" in
         # einmal die Protokollzeile: starten() wiese ohnehin ab, und die
         # Zeile "wird neu gestartet" stimmte dann nicht (Fall C7).
         if [ -f "$SOLL" ] && ! marke_sperrt && ! laeuft; then
+            # Der Protokollordner kann fehlen (log/ liegt auf einer
+            # RAM-Platte, Regeln/06); ohne ihn ginge die Zeile verloren
+            # (F11a). Der Datenordner ist hier ohnehin da: soll_laufen
+            # liegt darin.
+            ordner_anlegen
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
             starten >> "$STARTLOG" 2>&1
         fi
