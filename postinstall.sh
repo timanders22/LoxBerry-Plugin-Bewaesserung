@@ -106,6 +106,27 @@ echo "<INFO> Gefundenes Python: $PYVER"
 # 'LESBAR' blieb damit IMMER 0, die Bedingung darunter war immer wahr, und
 # die Zweitschrift wurde bedingungslos ueber die Konfiguration kopiert -
 # auch ueber eine heile. Der Kommentar sagte das Gegenteil zu.
+#
+# Zurueckgespielt wird nur eine Zweitschrift MIT Inhalt. Bis 0.9.31 wurde
+# auch eine Zweitschrift "{}" kopiert und mit "<OK> ... aus Sicherung
+# wiederhergestellt" gemeldet - eine Erfolgsmeldung ueber nichts
+# (gemessen 24.09.2026, Pruefung-Bewaesserung-0.9.32, Fall c). Inhalt heisst
+# fuer bewaesserung.json dasselbe wie bw_zweitschrift_taugt() in
+# webfrontend/html/bw_lib.php: ein nicht leeres Aktionstoken; fuer zonen.json
+# und quellen_zuordnung.json: lesbares JSON, das nicht leer ist.
+bw_hat_token() {
+    "$PY3" -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+t=d.get("aktionstoken") if isinstance(d,dict) else None
+sys.exit(0 if t is not None and str(t).strip() else 1)' "$1" >/dev/null 2>&1
+}
+bw_sicherung_taugt() {   # $1 Dateiname, $2 Pfad der Zweitschrift
+    case "$1" in
+        bewaesserung.json) bw_hat_token "$2" ;;
+        *) "$PY3" -c 'import json,sys
+sys.exit(0 if json.load(open(sys.argv[1])) else 1)' "$2" >/dev/null 2>&1 ;;
+    esac
+}
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
@@ -119,7 +140,9 @@ for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
         [ -s "$CF" ] && "$PY3" -c 'import json,sys;json.load(open(sys.argv[1]))' \
             "$CF" >/dev/null 2>&1 && LESBAR=1
         if [ "$LESBAR" = "0" ] || [ "$INHALT" = "{}" ]; then
-            if cp -p "$BK" "$CF"; then
+            if ! bw_sicherung_taugt "$f" "$BK"; then
+                echo "<INFO> $f: Sicherung ohne Einstellungen - nichts zurueckgespielt."
+            elif cp -p "$BK" "$CF"; then
                 echo "<OK> $f aus Sicherung wiederhergestellt."
             else
                 echo "<FAIL> $f liess sich NICHT wiederherstellen."
@@ -283,12 +306,32 @@ if [ -f "$MERKER" ]; then
     fi
 fi
 
-echo "<INFO> Naechste Schritte:"
-echo "<INFO>   1. Reiter Einstellungen: Standort eintragen (ohne ihn keine Strahlung)"
-echo "<INFO>   2. Reiter Quellen: Wetterstation zuordnen - oder bei Open-Meteo bleiben"
-echo "<INFO>   3. Reiter Zonen: je Kreis Flaeche, Bepflanzung und Boden eintragen"
-echo "<INFO>   4. Becherprobe machen - ohne sie sind Liter und Minuten geschaetzt"
-echo "<INFO>   5. Reiter MQTT: das Abo im Gateway eintragen"
-echo "<OK> Installation abgeschlossen."
+# ---------- Abschluss: Erstanleitung nur ohne eingerichtete Konfiguration ----------
+#
+# Dieses Skript laeuft bei der Erstinstallation UND bei jedem Upgrade;
+# plugininstall.pl uebergibt kein Kennzeichen. Bis 0.9.31 stand die Anleitung
+# darunter deshalb auch nach jedem gelungenen Upgrade da - mit der
+# Aufforderung, Standort, Quellen und Zonen einzutragen, die laengst
+# zurueckgespielt waren (gemessen 24.09.2026, Pruefung-Bewaesserung-0.9.32,
+# Fall b). Wer das liest, haelt seine Einstellungen fuer verloren - und
+# uebersieht den Fall, in dem sie es wirklich sind.
+#
+# Entschieden wird nach dem INHALT der Konfiguration, nicht nach einer
+# Upgrade-Marke: dasselbe Merkmal wie bw_config_hat_inhalt() und
+# bw_zweitschrift_taugt() in webfrontend/html/bw_lib.php - ein nicht leeres
+# Aktionstoken in bewaesserung.json (bw_hat_token, oben beim Zurueckholen).
+# Fehlt es nach einem Upgrade, ist die Rueckholung gescheitert, und dann ist
+# die Anleitung genau richtig.
+if bw_hat_token "$PCONFIG/bewaesserung.json"; then
+    echo "<OK> Aktualisierung abgeschlossen, Einstellungen uebernommen."
+else
+    echo "<INFO> Naechste Schritte:"
+    echo "<INFO>   1. Reiter Einstellungen: Standort eintragen (ohne ihn keine Strahlung)"
+    echo "<INFO>   2. Reiter Quellen: Wetterstation zuordnen - oder bei Open-Meteo bleiben"
+    echo "<INFO>   3. Reiter Zonen: je Kreis Flaeche, Bepflanzung und Boden eintragen"
+    echo "<INFO>   4. Becherprobe machen - ohne sie sind Liter und Minuten geschaetzt"
+    echo "<INFO>   5. Reiter MQTT: das Abo im Gateway eintragen"
+    echo "<OK> Installation abgeschlossen."
+fi
 
 exit 0
