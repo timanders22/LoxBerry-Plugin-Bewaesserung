@@ -20,13 +20,20 @@
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 
-/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen - wortgleich
- * mit bw_lib.php, damit beide dasselbe finden. */
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen - dieselbe
+ * Regel wie lb_wurzel_ermitteln() und bw_lbhome() in bw_lib.php: aufwaerts
+ * gilt nur ein Verzeichnis mit config/plugins, data/plugins UND
+ * config/system/general.json; ein gesetztes LBHOMEDIR mit config/plugins und
+ * data/plugins. Bis 0.9.32 genuegten config/plugins und webfrontend, und in
+ * einem fremden Baum ohne general.json lud dieses Skript dessen
+ * libs/phplib/loxberry_log.php (in WSL gemessen,
+ * Pruefung-Bewaesserung-0.9.33, Fall P9a). */
 function bw_notify_wurzel()
 {
     $d = __DIR__;
     for ($i = 0; $i < 8; $i++) {
-        if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+        if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+            && is_file($d . '/config/system/general.json')) {
             return $d;
         }
         $eltern = dirname($d);
@@ -36,12 +43,16 @@ function bw_notify_wurzel()
     return '';
 }
 
-$home = getenv('LBHOMEDIR');
-if (!$home || !is_dir($home)) {
+$home = (string) getenv('LBHOMEDIR');
+if ($home === '' || !is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')) {
     $home = bw_notify_wurzel();
 }
+if ($home === '') {
+    fwrite(STDERR, "Keine LoxBerry-Wurzel gefunden - es wurde nichts geladen.\n");
+    exit(1);
+}
 $sdk = $home . '/libs/phplib/loxberry_log.php';
-if (!$home || !file_exists($sdk)) {
+if (!file_exists($sdk)) {
     fwrite(STDERR, "LoxBerry-Bibliothek nicht gefunden: " . $sdk . "\n");
     exit(1);
 }

@@ -125,13 +125,17 @@ function bw_vorgaben_python()
  * aber nach der Tabelle im Dienst; die Zeile "Retain" in bw_pruefungen()
  * haelt beide gegeneinander. Bis 0.9.26 stand sie hier nur als Kopie, die
  * niemand verglich.
+ *
+ * 'ok' und '<zone>/ok' seit 0.9.33 nicht mehr: eine Aussage des Dienstes
+ * ueber sich selbst ist nie retained (Regeln/07, 18./19.09.2026) - siehe
+ * RETAINED_GLOBAL in bin/bewaesserung_dienst.py.
  */
 function bw_retain_tabelle()
 {
     return array(
-        'global' => array('ok', 'giessen', 'reicht', 'gesperrt',
+        'global' => array('giessen', 'reicht', 'gesperrt',
                           'plan_fest', 'deckt', 'durchlaeufe', 'noetige_durchlaeufe'),
-        'zone'   => array('ok', 'sekunden', 'durchlaeufe'),
+        'zone'   => array('sekunden', 'durchlaeufe'),
     );
 }
 

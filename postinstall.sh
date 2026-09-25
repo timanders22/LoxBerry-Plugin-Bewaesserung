@@ -127,22 +127,42 @@ bw_sicherung_taugt() {   # $1 Dateiname, $2 Pfad der Zweitschrift
 sys.exit(0 if json.load(open(sys.argv[1])) else 1)' "$2" >/dev/null 2>&1 ;;
     esac
 }
+# Traegt der Verlauf Tage? Dasselbe Merkmal, das verlauf_lesen() im Dienst
+# benutzt: ein nicht leeres Verzeichnis "tage".
+bw_verlauf_inhalt() {
+    "$PY3" -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+t=d.get("tage") if isinstance(d,dict) else None
+sys.exit(0 if isinstance(t,dict) and t else 1)' "$1" >/dev/null 2>&1
+}
+# Einen verdraengten Stand beiseitelegen statt ihn zu ueberbuegeln - wie
+# bw_config_beiseite() in bw_lib.php: <datei>.kaputt.<zeit>, 0600; eine Datei,
+# die nur Leerraum, "{}" oder "[]" traegt, bleibt ohne Nebendatei.
+bw_beiseite() {   # $1 Datei
+    [ -f "$1" ] || return 0
+    case "$(tr -d ' \t\r\n' < "$1" 2>/dev/null)" in ''|'{}'|'[]') return 0 ;; esac
+    bw_weg="$1.kaputt.$(date +%Y%m%d_%H%M%S)"
+    if cp -p "$1" "$bw_weg" 2>/dev/null; then
+        chmod 600 "$bw_weg" 2>/dev/null
+        echo "<INFO> Der bisherige Stand von $(basename "$1") trug keine Einstellungen; er liegt als $(basename "$bw_weg") daneben."
+    fi
+}
+# Zurueckgespielt wird, wenn die Datei KEINEN Inhalt traegt und die
+# Zweitschrift EINEN - entschieden nach Inhalt, nicht nach Lesbarkeit oder
+# Groesse. Bis 0.9.32 galt jede lesbare Datei ausser "{}" als eingerichtet:
+# eine bewaesserung.json ohne Aktionstoken (etwa {"breite": 48.1}) blieb
+# stehen, die Zweitschrift mit dem Token daneben wurde nicht eingespielt (in
+# WSL gemessen, Pruefung-Bewaesserung-0.9.33, Faelle S3a/S3b). Und nur eine
+# fehlende verlauf.json wurde zurueckgeholt, eine "{}" nicht (Fall S4a).
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
-    if [ -f "$BK" ]; then
-        INHALT=$(cat "$CF" 2>/dev/null)
-        # -s heisst nur "vorhanden und nicht leer". Eine halb
-        # geschriebene Datei ist beides - die heile Sicherung daneben
-        # wurde bis 0.9.18 dann NICHT eingespielt. Gefragt ist, ob sich
-        # die Datei lesen laesst; den Interpreter dafuer haben wir schon.
-        LESBAR=0
-        [ -s "$CF" ] && "$PY3" -c 'import json,sys;json.load(open(sys.argv[1]))' \
-            "$CF" >/dev/null 2>&1 && LESBAR=1
-        if [ "$LESBAR" = "0" ] || [ "$INHALT" = "{}" ]; then
-            if ! bw_sicherung_taugt "$f" "$BK"; then
-                echo "<INFO> $f: Sicherung ohne Einstellungen - nichts zurueckgespielt."
-            elif cp -p "$BK" "$CF"; then
+    if [ -f "$BK" ] && ! bw_sicherung_taugt "$f" "$CF"; then
+        if ! bw_sicherung_taugt "$f" "$BK"; then
+            echo "<INFO> $f: Sicherung ohne Einstellungen - nichts zurueckgespielt."
+        else
+            bw_beiseite "$CF"
+            if cp -p "$BK" "$CF" && cmp -s "$BK" "$CF"; then
                 echo "<OK> $f aus Sicherung wiederhergestellt."
             else
                 echo "<FAIL> $f liess sich NICHT wiederherstellen."
@@ -151,11 +171,16 @@ for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     fi
 done
 BKV="$BASE/config/plugins/$PFOLDER.backup.verlauf.json"
-if [ -f "$BKV" ] && [ ! -f "$PDATA/verlauf.json" ]; then
-    if cp -p "$BKV" "$PDATA/verlauf.json"; then
-        echo "<OK> Verlauf des Wasserhaushalts wiederhergestellt - die Bilanz laeuft weiter."
+if [ -f "$BKV" ] && ! bw_verlauf_inhalt "$PDATA/verlauf.json"; then
+    if ! bw_verlauf_inhalt "$BKV"; then
+        echo "<INFO> Die Sicherung des Verlaufs traegt keine Tage - nichts zurueckgespielt."
     else
-        echo "<FAIL> Der Verlauf liess sich NICHT wiederherstellen - die Bilanz faengt bei null an und giesst erst einmal zu wenig."
+        bw_beiseite "$PDATA/verlauf.json"
+        if cp -p "$BKV" "$PDATA/verlauf.json" && cmp -s "$BKV" "$PDATA/verlauf.json"; then
+            echo "<OK> Verlauf des Wasserhaushalts wiederhergestellt - die Bilanz laeuft weiter."
+        else
+            echo "<FAIL> Der Verlauf liess sich NICHT wiederherstellen - die Bilanz faengt bei null an und giesst erst einmal zu wenig."
+        fi
     fi
 fi
 
@@ -257,33 +282,55 @@ echo "<INFO> Selbsttest:"
 # endgueltig. Nach einem Update um die Mittagszeit war Tmin dann die
 # Mittagstemperatur - und ET0 nach der Messung im README 1,95 statt 5,40 mm.
 LANG_SICHER="$BASE/data/plugins/$PFOLDER.upgrade_sicherung"
+# Traegt eine Datei Inhalt? Lesbares JSON, das nicht leer ist - "{}" ist
+# keiner, auch wenn die Datei drei Byte gross ist.
+bw_json_inhalt() {
+    "$PY3" -c 'import json,sys
+sys.exit(0 if json.load(open(sys.argv[1])) else 1)' "$1" >/dev/null 2>&1
+}
 if [ -d "$LANG_SICHER" ]; then
-    LANG_FEHL=0
+    LANG_OFFEN=""
     for LANG_F in tagesextreme.json nachtplan.json zustand.json; do
-        if [ -f "$LANG_SICHER/$LANG_F" ] \
-           && [ ! -s "$BASE/data/plugins/$PFOLDER/$LANG_F" ]; then
+        LANG_Q="$LANG_SICHER/$LANG_F"
+        LANG_Z="$BASE/data/plugins/$PFOLDER/$LANG_F"
+        [ -f "$LANG_Q" ] || continue
+        # Liegt dort schon genau dieser Stand, ist nichts zu tun.
+        cmp -s "$LANG_Q" "$LANG_Z" && continue
+        # Zurueckgeholt wird nach INHALT, nicht nach Groesse. Bis 0.9.32
+        # stand hier [ ! -s ziel ]: ein Ziel "{}" (drei Byte) galt als
+        # vorhanden, die Sicherung wurde nicht eingespielt - und danach
+        # trotzdem geloescht (in WSL gemessen, Pruefung-Bewaesserung-0.9.33,
+        # Fall S1a).
+        if ! bw_json_inhalt "$LANG_Z"; then
             mkdir -p "$BASE/data/plugins/$PFOLDER" 2>/dev/null
-            if cp -p "$LANG_SICHER/$LANG_F" "$BASE/data/plugins/$PFOLDER/$LANG_F" \
-                2>/dev/null; then
+            bw_beiseite "$LANG_Z"
+            if cp -p "$LANG_Q" "$LANG_Z" 2>/dev/null && cmp -s "$LANG_Q" "$LANG_Z"; then
                 echo "<OK> $LANG_F ueber das Update gerettet."
             else
                 echo "<FAIL> $LANG_F liess sich NICHT zurueckholen."
-                LANG_FEHL=1
+                LANG_OFFEN="$LANG_OFFEN $LANG_F"
             fi
+        else
+            # Ein ANDERER Stand mit Inhalt liegt schon da. Er wird nicht
+            # ueberschrieben, und die Sicherung bleibt - wer recht hat,
+            # entscheidet hier niemand (Fall S2).
+            echo "<WARNING> $LANG_F traegt schon einen anderen Stand - die Sicherung wird nicht darueber gespielt."
+            LANG_OFFEN="$LANG_OFFEN $LANG_F"
         fi
     done
-    # Weggeraeumt wird nur, wenn NICHTS gescheitert ist.
+    # Weggeraeumt wird nur, wenn JEDE gesicherte Datei nachweislich (cmp)
+    # an ihrem Platz liegt.
     #
-    # Bis 0.9.21 stand das rm ausserhalb jeder Erfolgspruefung: genau die
-    # Datei, deren Verlust dieses Skript oben ausfuehrlich begruendet
-    # (tagesextreme.json - nach einem Mittags-Update ist Tmin die
-    # Mittagstemperatur, ET0 1,95 statt 5,40 mm), wurde nach einem
-    # gescheiterten Zurueckholen endgueltig weggeworfen, obwohl sie noch
-    # dalag und beim naechsten Lauf zu retten gewesen waere.
-    if [ "$LANG_FEHL" = "0" ]; then
+    # Bis 0.9.21 stand das rm ausserhalb jeder Erfolgspruefung; bis 0.9.32
+    # hing es nur daran, dass kein cp scheiterte - eine Datei, die gar nicht
+    # zurueckgeholt wurde, weil schon etwas dalag, loeschte die Sicherung mit
+    # (Faelle S1a, S2a). Genau die Datei, deren Verlust dieses Skript oben
+    # begruendet (tagesextreme.json - nach einem Mittags-Update ist Tmin die
+    # Mittagstemperatur, ET0 1,95 statt 5,40 mm), war dann endgueltig fort.
+    if [ -z "$LANG_OFFEN" ]; then
         rm -rf "$LANG_SICHER" 2>/dev/null
     else
-        echo "<INFO> Die Update-Sicherung bleibt liegen ($LANG_SICHER) - beim naechsten Lauf wird es erneut versucht."
+        echo "<WARNING> Die Update-Sicherung bleibt liegen: $LANG_SICHER (nicht zurueckgeholt:$LANG_OFFEN)."
     fi
 fi
 

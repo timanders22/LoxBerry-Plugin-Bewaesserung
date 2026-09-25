@@ -26,6 +26,8 @@ Aufrufe:
     bewaesserung_dienst.py             Dauerbetrieb
     bewaesserung_dienst.py --einmal    einmal rechnen und beenden
     bewaesserung_dienst.py --selbsttest
+    bewaesserung_dienst.py --mqtt-leeren  (aus uninstall/uninstall: die
+                                           behaltenen eigenen Themen loeschen)
 """
 
 from __future__ import annotations
@@ -55,13 +57,20 @@ def lb_wurzel_ermitteln():
     """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
 
     Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
-    config/plugins UND webfrontend enthaelt. Trifft die uebliche
-    Installation genauso wie eine an einem anderen Ort.
+    config/plugins, data/plugins UND config/system/general.json traegt.
+
+    Bis 0.9.32 genuegten config/plugins und webfrontend - genau diese Ordner
+    hinterlaesst ein Pruefstand auf einem Arbeitsrechner (Regeln/06: eine
+    solche Suche hat dort das Laufwerk selbst fuer die Wurzel gehalten). In
+    WSL gemessen (Pruefung-Bewaesserung-0.9.33, Fall Y3a): in einem fremden
+    Baum ohne general.json legte "--einmal" dort acht Eintraege an. Ein
+    LoxBerry hat immer config/system/general.json; ein solcher Rest nie.
     """
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(8):
         if os.path.isdir(os.path.join(d, "config", "plugins")) \
-                and os.path.isdir(os.path.join(d, "webfrontend")):
+                and os.path.isdir(os.path.join(d, "data", "plugins")) \
+                and os.path.isfile(os.path.join(d, "config", "system", "general.json")):
             return d
         eltern = os.path.dirname(d)
         if eltern == d:
@@ -88,28 +97,76 @@ def mqtt_wert_saeubern(wert):
 
 
 def _home() -> str:
+    """Die Wurzel: erst die Umgebung, dann die Suche - und DANACH NICHTS MEHR.
+
+    Bis 0.9.32 stand hinter der Suche der Rueckfall HIER.parent.parent, und
+    LBHOMEDIR galt schon, wenn es irgendein Verzeichnis war. Der Rueckfall
+    macht jede Suche wirkungslos (Stand-Protokolle/2026-09-18_Welle1, "Neue
+    Lehre fuer alle H1-Linien"); in WSL gemessen (Pruefung-Bewaesserung-0.9.33,
+    Fall Y4a): ganz ohne Wurzel legte "--selbsttest" zehn Eintraege neben dem
+    Plugin an. Ein gesetztes LBHOMEDIR gilt mit config/plugins UND
+    data/plugins darunter - general.json wird dort nicht verlangt, damit die
+    Attrappen der Pruefwerkzeuge (Werkzeuge/lb) weiter tragen; dieselbe Regel
+    wie bin/dienst.sh. Rueckgabe '' heisst "keine Wurzel".
+    """
     h = os.environ.get("LBHOMEDIR", "")
-    if h and os.path.isdir(h):
-        return h
-    # Kein fester Systempfad als Rueckfall mehr.
-    #
-    # Der frueher hier stehende feste Rueckfallpfad gibt es auf dem
-    # gemessenen Geraet nicht - dessen Wurzel liegt woanders -, und ein
-    # Systempfad im Quelltext ist gegen den Hausstandard. Der Rueckfall war
-    # damit toter Code, der nur die Regel riss. Findet die Aufwaertssuche
-    # nichts, bleibt der eigene Ablageort - so wie bisher auch.
-    k = lb_wurzel_ermitteln()
-    if k and os.path.isdir(k):
-        return k
-    return str(HIER.parent.parent)
+    if h and os.path.isdir(os.path.join(h, "config", "plugins")) \
+            and os.path.isdir(os.path.join(h, "data", "plugins")):
+        return os.path.realpath(h)
+    return lb_wurzel_ermitteln()
+
+
+def _ordner_aus_umgebung() -> str:
+    """LBPPLUGINDIR, wenn es einen Pluginordner nennen KANN - sonst ''.
+    Nur der letzte Pfadteil zaehlt; 'bin' und 'plugins' sind nie einer."""
+    p = os.path.basename((os.environ.get("LBPPLUGINDIR") or "").rstrip("/"))
+    return "" if p in ("", ".", "..", "bin", "plugins") else p
+
+
+def _anlage() -> tuple:
+    """Darf dieser Aufruf die Anlage anfassen? Rueckgabe (ja/nein, Grund).
+
+    Ja nur, wenn diese Datei in <Wurzel>/bin/plugins/<ordner> liegt (physisch
+    verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich nennt
+    (LBHOMEDIR und LBPPLUGINDIR, und der Ordner ist dort eingerichtet) - so
+    ruft bin/dienst.sh den Dienst der Anlage auch aus einem Archiv heraus auf.
+    Bauart: LoxBerry-Plugin-Spotpreis-Tibber-0.9.19 (tb_paths()).
+
+    Bis 0.9.32 gab es diese Frage nicht. In WSL gemessen
+    (Pruefung-Bewaesserung-0.9.33, Faelle Y1 und Y2): aus einem Archiv unter
+    der Wurzel, mit LBHOMEDIR wie am Geraet aus /etc/environment, legte
+    "--selbsttest" config/, data/ und log/plugins/<archivname> in der
+    Anlage an, und "--einmal" rechnete mit Vorgaben und sandte 12 Themen an
+    das Gateway der Anlage.
+    """
+    if not HOME:
+        return (False, "keine Wurzel")
+    if os.path.realpath(os.path.join(HOME, "bin", "plugins", ORDNER)) == str(HIER):
+        return (True, "installiert")
+    h = os.environ.get("LBHOMEDIR") or ""
+    if h and _ordner_aus_umgebung() and os.path.realpath(h) == HOME \
+            and os.path.isdir(os.path.join(HOME, "config", "plugins", ORDNER)):
+        return (True, "ausdruecklich")
+    return (False, "Archiv")
 
 
 HOME = _home()
-ORDNER = HIER.name if HIER.parent.name == "plugins" else HIER.parent.name
-CONFIGDIR = os.path.join(HOME, "config", "plugins", ORDNER)
-DATADIR = os.path.join(HOME, "data", "plugins", ORDNER)
-LOGDIR = os.path.join(HOME, "log", "plugins", ORDNER)
-TEMPLATES = os.path.join(HOME, "templates", "plugins", ORDNER)
+ORDNER = _ordner_aus_umgebung() or (HIER.name if HIER.parent.name == "plugins"
+                                    else HIER.parent.name)
+ANLAGE, ANLAGE_GRUND = _anlage()
+if ANLAGE:
+    CONFIGDIR = os.path.join(HOME, "config", "plugins", ORDNER)
+    DATADIR = os.path.join(HOME, "data", "plugins", ORDNER)
+    LOGDIR = os.path.join(HOME, "log", "plugins", ORDNER)
+    TEMPLATES = os.path.join(HOME, "templates", "plugins", ORDNER)
+else:
+    # Archivmodus: jeder Pfad zeigt in den eigenen Ordner, nie in die Anlage.
+    # main() steigt vor allem aus, was schreibt; nur --selbsttest laeuft,
+    # und zwar ohne etwas anzulegen.
+    CONFIGDIR = str(HIER.parent / "config")
+    DATADIR = str(HIER.parent / "data")
+    LOGDIR = str(HIER.parent / "log")
+    TEMPLATES = str(HIER.parent / "templates")
 
 DATEI_CONFIG = os.path.join(CONFIGDIR, "bewaesserung.json")
 DATEI_ZONEN = os.path.join(CONFIGDIR, "zonen.json")
@@ -238,7 +295,7 @@ class WachsameRotation(logging.handlers.RotatingFileHandler):
         self._kennung = self._kennung_lesen()
 
 
-def log_einrichten(nach_stdout: bool = False) -> None:
+def log_einrichten(nach_stdout: bool = False, datei: bool = True) -> None:
     """Das Protokoll einrichten - mit genau EINEM Kanal in die Datei.
 
     Bis 0.9.6 hingen hier zwei Aufnehmer: einer auf die Logdatei und einer
@@ -254,16 +311,20 @@ def log_einrichten(nach_stdout: bool = False) -> None:
 
     Der zweite Kanal wird deshalb nur noch dort angehaengt, wo die Ausgabe
     wirklich auf den Bildschirm gehoert: bei --einmal und --selbsttest.
+
+    datei=False (Archivmodus, siehe _anlage()): gar keine Protokolldatei -
+    der Ordner dafuer wuerde sonst angelegt.
     """
-    os.makedirs(LOGDIR, exist_ok=True)
     _LOG.setLevel(logging.INFO)
     if _LOG.handlers:
         return
-    h = WachsameRotation(DATEI_LOG, maxBytes=512000,
-                                             backupCount=2, encoding="utf-8")
-    h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s",
-                                     "%Y-%m-%d %H:%M:%S"))
-    _LOG.addHandler(h)
+    if datei:
+        os.makedirs(LOGDIR, exist_ok=True)
+        h = WachsameRotation(DATEI_LOG, maxBytes=512000,
+                                                 backupCount=2, encoding="utf-8")
+        h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s",
+                                         "%Y-%m-%d %H:%M:%S"))
+        _LOG.addHandler(h)
     if nach_stdout:
         k = logging.StreamHandler(sys.stdout)
         k.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
@@ -634,7 +695,13 @@ def mqtt_gateway() -> dict:
     Massgeblich ist 'Gatewayautostart', nicht 'Brokerhost': letzterer steht ab
     Werk auf 'localhost' und sagt deshalb nichts darueber aus, ob das Gateway
     ueberhaupt laeuft.
+
+    Im Archivmodus (_anlage()) gibt es keinen Gateway: die general.json der
+    Anlage wird aus einem Archiv heraus nicht einmal gelesen - ohne Wurzel
+    waere der Pfad sonst relativ zum Arbeitsverzeichnis.
     """
+    if not ANLAGE:
+        return {"gefunden": 0}
     d = json_lesen(os.path.join(HOME, "config", "system", "general.json"))
     m = d.get("Mqtt") or d.get("MQTT") or {}
     if not isinstance(m, dict):
@@ -678,14 +745,323 @@ def mqtt_gateway() -> dict:
 # deshalb 17 statt der 18 zurueckbehaltenen Themen, die die Tabelle
 # versprach - 'sperrgrund' fehlte. Ob gesperrt ist, sagt 'gesperrt', und
 # das bleibt retained.
+#
+# 'ok' und '<zone>/ok' stehen seit 0.9.33 NICHT mehr hier (Regeln/07,
+# Abschnitt 3, Entscheidungen vom 18. und 19.09.2026: 'ok' ist nie retained,
+# und eine Aussage des Dienstes ueber sich selbst ebensowenig). 'ok' sagt,
+# ob die eigene Rechnung durchlief; stirbt der Dienst, bliebe ein
+# zurueckbehaltenes 'ok=1' stehen, und nach einem Neustart von Broker oder
+# Gateway laese Loxone "in Ordnung" von einem Dienst, der nicht mehr
+# rechnet. Bis 0.9.32 ging im Stoerungsweg sogar 'ok=0' ausdruecklich
+# retained hinaus. In WSL am empfangenen Paket gemessen
+# (Pruefung-Bewaesserung-0.9.33, Faelle R1h, R1i, R3a): 'retain'. Die
+# Altwerte raeumt mqtt_altlast_abraeumen() einmal ab.
 RETAINED_GLOBAL = {
-    "ok", "giessen", "reicht", "gesperrt", "plan_fest",
+    "giessen", "reicht", "gesperrt", "plan_fest",
     "deckt", "durchlaeufe", "noetige_durchlaeufe",
 }
-RETAINED_ZONE = ("ok", "sekunden", "durchlaeufe")
+RETAINED_ZONE = ("sekunden", "durchlaeufe")
+
+# Alle Themen, die dieser Dienst sendet - fuer das Abraeumen und die
+# Deinstallation. Was hier nicht steht, ist kein eigenes Thema und wird nie
+# geloescht (etwa ein fremdes Thema unter demselben Praefix).
+MQTT_GLOBAL = ("ok", "et0", "durchlaeufe", "noetige_durchlaeufe", "reicht",
+               "giessen", "alter", "ts", "zaehler", "gesperrt", "sperrgrund",
+               "plan_fest", "deckt")
+MQTT_ZONE = ("ok", "defizit_mm", "bedarf_mm", "dr_mm", "fuellstand", "liter",
+             "minuten", "sekunden", "durchlaeufe", "gegossen_mm")
+# Was frueher zurueckbehalten hinausging und es heute nicht mehr tut: 'ok'
+# und '<zone>/ok' bis 0.9.32, 'sperrgrund' bis 0.9.26. Nur diese gehen im
+# UDP-Rueckfall als leere retain-Nutzlast hinaus; am Broker wird jedes
+# eigene, heute fluechtige Thema geloescht, das wirklich behalten dasteht.
+ALTLAST_UDP_GLOBAL = ("ok", "sperrgrund")
+ALTLAST_UDP_ZONE = ("ok",)
+DATEI_RETAIN_ALTLAST = os.path.join(DATADIR, "retain_altlast")
 
 
-def mqtt_senden(paare: dict, praefix: str, retained: set | None = None) -> int:
+def mqtt_eigenes_thema(praefix: str, thema: str) -> tuple:
+    """(art, feld) fuer ein EIGENES Thema unter <praefix>/, sonst ('', '').
+    art ist 'global' oder 'zone'."""
+    if not thema.startswith(praefix + "/"):
+        return ("", "")
+    rest = thema[len(praefix) + 1:]
+    if rest in MQTT_GLOBAL:
+        return ("global", rest)
+    teile = rest.split("/")
+    if len(teile) == 2 and teile[0] and teile[1] in MQTT_ZONE:
+        return ("zone", teile[1])
+    return ("", "")
+
+
+def mqtt_fluechtig(art: str, feld: str) -> bool:
+    """Geht dieses eigene Thema OHNE retain hinaus?"""
+    if art == "global":
+        return feld not in RETAINED_GLOBAL
+    if art == "zone":
+        return feld not in RETAINED_ZONE
+    return False
+
+
+def _altlast_kennung(weg: str, praefix: str) -> str:
+    """Weg, Praefix und die Liste der fluechtigen Namen. Ein anderer Praefix
+    oder eine geaenderte Liste raeumt erneut ab; ein Merker, der ueber UDP
+    entstand, gilt nicht fuer den Brokerweg - und kein Merker einer
+    Vorfassung taeuscht ein "schon erledigt" vor."""
+    namen = sorted([n for n in MQTT_GLOBAL if mqtt_fluechtig("global", n)]
+                   + ["<zone>/" + n for n in MQTT_ZONE if mqtt_fluechtig("zone", n)])
+    return "|".join((weg, praefix, ",".join(namen)))
+
+
+def _merker_lesen() -> str:
+    try:
+        with open(DATEI_RETAIN_ALTLAST, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _merker_schreiben(kennung: str) -> None:
+    tmp = "%s.tmp.%d" % (DATEI_RETAIN_ALTLAST, os.getpid())
+    try:
+        os.makedirs(DATADIR, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(kennung + "\n")
+        os.replace(tmp, DATEI_RETAIN_ALTLAST)
+    except OSError as f:
+        _LOG.warning("MQTT: Merker %s nicht geschrieben: %s",
+                     os.path.basename(DATEI_RETAIN_ALTLAST), f)
+
+
+def _broker_leeren(praefix: str, auswahl, warten: float = 3.0) -> dict:
+    """Behaltene Themen unter <praefix>/ am Broker loeschen und NACHLESEN.
+
+    paho mit Brokerhost, Brokerport, Brokeruser und Brokerpass aus
+    general.json (mqtt_gateway(), derselbe Weg wie der Horcher):
+      1. geloescht wird nur, was WIRKLICH behalten im Broker liegt - gefunden
+         ueber ein Abonnement - und was auswahl(thema) freigibt;
+      2. danach ein zweites Abonnement: was dann noch behalten ankommt, ist
+         stehengeblieben.
+    Rueckgabe {"rc", "geleert", "rest", "grund"}: rc 0 = nichts (mehr)
+    behalten, 1 = nach dem Loeschen stand noch etwas, 2 = nicht moeglich
+    (kein paho, Broker fort, Anmeldung abgewiesen).
+    Bauart: LoxBerry-Plugin-BYD-Autos-0.9.17 (_broker_leeren()),
+    VolkswagenID 0.9.24 (mqtt_altlast_abraeumen()).
+    """
+    erg = {"rc": 2, "geleert": [], "rest": [], "grund": ""}
+    if not praefix or "#" in praefix or "+" in praefix:
+        erg["grund"] = "das Themenpraefix '%s' taugt nicht fuer ein Abonnement" % praefix
+        return erg
+    try:
+        import paho.mqtt.client as mqtt  # noqa: PLC0415
+    except ImportError:
+        erg["grund"] = "das Paket paho-mqtt fehlt"
+        return erg
+    import threading  # noqa: PLC0415
+    g = mqtt_gateway()
+    if not g.get("gefunden"):
+        erg["grund"] = "kein MQTT-Abschnitt in der general.json"
+        return erg
+    host = g.get("broker") or "127.0.0.1"
+    if host == "localhost":
+        host = "127.0.0.1"
+    port = int(g.get("brokerport") or 1883)
+    wo = "%s:%s" % (host, port)
+    gesehen: set = set()
+    angemeldet = threading.Event()
+    code = {"wert": None}
+
+    def bei_verbindung(_k, _d, _f, *rest):
+        # paho 1.x und VERSION1: rc als Zahl; VERSION2: ReasonCode mit .value
+        try:
+            code["wert"] = int(getattr(rest[0], "value", rest[0]) or 0) if rest else 0
+        except (TypeError, ValueError):
+            code["wert"] = 0
+        angemeldet.set()
+
+    def bei_nachricht(_k, _d, n):
+        # Nur BEHALTENES mit Inhalt: ein live gesendeter Wert ist keine
+        # Altlast, und ein leeres Thema ist schon geloescht.
+        if n.retain and n.payload and auswahl(n.topic):
+            gesehen.add(n.topic)
+
+    name = "bewaesserung-leeren-%d" % os.getpid()
+    try:
+        k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=name)
+    except (AttributeError, TypeError):
+        k = mqtt.Client(client_id=name)
+    k.on_connect = bei_verbindung
+    k.on_message = bei_nachricht
+    if g.get("user"):
+        k.username_pw_set(str(g["user"]), str(g.get("pw") or "") or None)
+    try:
+        k.connect(host, port, 30)
+    except Exception as f:  # noqa: BLE001
+        erg["grund"] = "der Broker %s ist nicht erreichbar (%s: %s)" % (wo, type(f).__name__, f)
+        return erg
+    k.loop_start()
+    try:
+        if not angemeldet.wait(10):
+            erg["grund"] = "der Broker %s hat auf die Verbindung nicht geantwortet" % wo
+            return erg
+        if code["wert"]:
+            erg["grund"] = ("der Broker %s hat die Anmeldung abgewiesen (CONNACK %d: %s)"
+                            % (wo, code["wert"], CONNACK_TEXT.get(code["wert"], "unbekannter Grund")))
+            return erg
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        k.unsubscribe(praefix + "/#")
+        zu_leeren = sorted(gesehen)
+        for thema in zu_leeren:
+            info = k.publish(thema, b"", qos=1, retain=True)
+            try:
+                info.wait_for_publish(5)
+            except TypeError:           # paho 1.x vor 1.6 kennt kein timeout
+                info.wait_for_publish()
+        # NACHLESEN: ein neues Abonnement bekommt alles, was noch behalten ist.
+        gesehen.clear()
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        erg["geleert"] = zu_leeren
+        erg["rest"] = sorted(gesehen)
+        erg["rc"] = 1 if erg["rest"] else 0
+    except Exception as f:  # noqa: BLE001
+        erg["rc"] = 2
+        erg["grund"] = "das Loeschen am Broker %s scheiterte (%s: %s)" % (wo, type(f).__name__, f)
+    finally:
+        # ERST abmelden, DANN den Netzstrang anhalten.
+        try:
+            k.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        k.loop_stop()
+    return erg
+
+
+_ALTLAST_GEMELDET = {"zeit": 0.0}
+
+
+def _altlast_melden(text: str) -> None:
+    """Hoechstens eine Zeile je Stunde - der Versuch laeuft in jedem Takt."""
+    if time.time() - _ALTLAST_GEMELDET["zeit"] >= 3600:
+        _ALTLAST_GEMELDET["zeit"] = time.time()
+        _LOG.warning(text)
+
+
+def mqtt_altlast_abraeumen(praefix: str, zonen_schluessel) -> set:
+    """Die zurueckbehaltenen Altwerte frueherer Fassungen einmal abraeumen.
+
+    Erst am Broker (paho): loeschen, NACHLESEN, und nur dann der Merker
+    'am-broker-nachgelesen|<praefix>|<liste>'. Blieb etwas stehen, gibt es
+    keinen Merker, und es wird im naechsten Takt erneut versucht.
+
+    Geht es am Broker nicht (paho fehlt, Broker fort, Anmeldung abgewiesen),
+    liefert die Funktion die Namen, die mqtt_senden() im selben Zug als
+    leere retain-Nutzlast UNMITTELBAR vor dem gueltigen Wert schickt. Der
+    UDP-Eingang bestaetigt nichts und verwirft unter Last Datagramme
+    (Regeln/07); deshalb gibt es auf diesem Weg KEINEN Merker - ein Merker
+    auf den Sendeerfolg luegt (Regeln/07, Nachtrag 19.09.2026: am Geraet
+    Merker gesetzt, Altwert stand weiter im Broker). Solange der Brokerweg
+    nicht geht, wird in JEDEM Lauf abgeraeumt; die Grenze steht in der
+    README. Ist paho spaeter da, wird am Broker nachgelesen und erst dann
+    der Merker gesetzt.
+    """
+    praefix = _mqtt_thema(praefix.strip("/"))
+    merker = _merker_lesen()
+    if merker == _altlast_kennung("am-broker-nachgelesen", praefix):
+        return set()
+
+    def altlast(thema: str) -> bool:
+        art, feld = mqtt_eigenes_thema(praefix, thema)
+        return bool(art) and mqtt_fluechtig(art, feld)
+
+    erg = _broker_leeren(praefix, altlast)
+    if erg["rc"] == 0:
+        _merker_schreiben(_altlast_kennung("am-broker-nachgelesen", praefix))
+        if erg["geleert"]:
+            _LOG.info("MQTT: %d zurueckbehaltene Altwerte frueherer Fassungen am Broker "
+                      "geloescht und nachgelesen (%s).", len(erg["geleert"]),
+                      ", ".join(erg["geleert"]))
+        return set()
+    if erg["rc"] == 1:
+        _altlast_melden("MQTT: %d von %d zurueckbehaltenen Altwerten stehen noch im Broker "
+                        "(zum Beispiel %s) - es wird im naechsten Takt erneut versucht."
+                        % (len(erg["rest"]), len(erg["geleert"]), erg["rest"][0]))
+        return set()
+    _altlast_melden("MQTT: Altwerte am Broker nicht abraeumbar - %s. Sie gehen in jedem "
+                    "Lauf als leere retain-Nutzlast ueber den UDP-Eingang hinaus, unmittelbar "
+                    "vor dem gueltigen Wert; der UDP-Eingang bestaetigt nichts." % erg["grund"])
+    namen = set(ALTLAST_UDP_GLOBAL)
+    for s in zonen_schluessel or ():
+        for f in ALTLAST_UDP_ZONE:
+            namen.add("%s/%s" % (s, f))
+    return namen
+
+
+def mqtt_leeren(warten: float = 3.0) -> int:
+    """Fuer die Deinstallation (uninstall/uninstall): alle behaltenen EIGENEN
+    Themen am Broker loeschen und nachmessen; ohne Broker ueber UDP.
+
+    Unabhaengig vom Schalter "MQTT ein": die Werte koennen aus der Zeit
+    stammen, als er an war, und am Broker geloescht wird ohnehin nur, was
+    wirklich behalten liegt. Ausgabe im Format des Installers. Rueckgabe 0
+    geleert/nichts zu leeren, 1 es blieb etwas stehen, 2 nicht am Broker
+    moeglich (dann der UDP-Rueckfall).
+    Bauart: LoxBerry-Plugin-BYD-Autos-0.9.17 (mqtt_leeren()).
+    """
+    cfg = config()
+    praefix = _mqtt_thema(str(cfg.get("mqtt_topic") or "bewaesserung").strip("/"))
+    erg = _broker_leeren(praefix, lambda t: bool(mqtt_eigenes_thema(praefix, t)[0]), warten)
+    if erg["rc"] == 0:
+        if erg["geleert"]:
+            print("<OK> MQTT: %d behaltene Themen unter '%s/' am Broker geloescht und "
+                  "nachgemessen." % (len(erg["geleert"]), praefix))
+        else:
+            print("<INFO> MQTT: unter '%s/' war am Broker nichts von diesem Plugin behalten "
+                  "- nachgemessen, nichts zu loeschen." % praefix)
+        return 0
+    if erg["rc"] == 1:
+        print("<WARNING> MQTT: %d von %d behaltenen Themen unter '%s/' stehen nach dem "
+              "Loeschen noch im Broker, zum Beispiel %s - bitte von Hand loeschen."
+              % (len(erg["rest"]), len(erg["geleert"]), praefix, erg["rest"][0]))
+        return 1
+    print("<INFO> MQTT: am Broker nicht moeglich - %s." % erg["grund"])
+    g = mqtt_gateway()
+    if not g.get("gefunden") or not g.get("udpport"):
+        print("<INFO> MQTT: auch kein UDP-Eingang des Gateways in general.json - die "
+              "behaltenen Themen bleiben stehen und sind im Broker von Hand zu loeschen.")
+        return 2
+    themen = list(MQTT_GLOBAL)
+    for z in zonen():
+        s = str(z.get("schluessel") or "").strip()
+        if s:
+            themen += ["%s/%s" % (_mqtt_thema(s), f) for f in MQTT_ZONE]
+    geschickt = 0
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for th in themen:
+            try:
+                s.sendto(("retain %s/%s " % (praefix, th)).encode("utf-8"),
+                         ("127.0.0.1", int(g["udpport"])))
+                geschickt += 1
+            except OSError:
+                pass
+    except OSError as f:
+        print("<INFO> MQTT: kein Socket (%s) - die behaltenen Themen bleiben stehen." % f)
+        return 2
+    finally:
+        if s is not None:
+            s.close()
+    print("<INFO> MQTT: Rueckfall ueber den UDP-Eingang %d des Gateways: %d Loeschbefehle "
+          "unter '%s/' fuer die eingerichteten Zonen geschickt (leere Nutzlast, 'retain')."
+          % (int(g["udpport"]), geschickt, praefix))
+    print("<INFO> MQTT: UDP bestaetigt nichts, und Themen geloeschter Zonen kennt dieser Weg "
+          "nicht. Stehen danach noch Themen, sind sie im Broker von Hand zu loeschen.")
+    return 2
+
+
+def mqtt_senden(paare: dict, praefix: str, retained: set | None = None,
+                abraeumen: set | None = None, bericht: dict | None = None) -> int:
     """Ueber den UDP-Eingang des Gateways veroeffentlichen.
 
     Der Weg ueber UDP braucht keine Zugangsdaten - das Gateway setzt sie
@@ -693,12 +1069,17 @@ def mqtt_senden(paare: dict, praefix: str, retained: set | None = None) -> int:
     ein Kennwort liegt.
 
     'retained' nennt die Themen (ohne Praefix), die mit dem Verb 'retain'
-    statt 'publish' hinausgehen sollen.
+    statt 'publish' hinausgehen sollen. 'abraeumen' nennt die Themen, deren
+    zurueckbehaltener Altwert UNMITTELBAR vor dem gueltigen Wert mit einer
+    leeren retain-Nutzlast geloescht wird (UDP-Rueckfall von
+    mqtt_altlast_abraeumen()); was davon gesendet wurde, steht danach in
+    bericht["geraeumt"].
     """
     g = mqtt_gateway()
     if not g.get("gefunden") or not g.get("udpport"):
         return 0
     gesendet = 0
+    geraeumt = set()
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -708,13 +1089,16 @@ def mqtt_senden(paare: dict, praefix: str, retained: set | None = None) -> int:
             # uebrigen Plugins dieser Reihe benutzen. Bis 0.9.0 fehlte das
             # Verb hier als einzigem Plugin.
             wert_text = mqtt_wert_saeubern(_mqtt_sauber(wert))
+            thema = "%s/%s" % (_mqtt_thema(praefix.strip("/")), _mqtt_thema(name))
+            if abraeumen and name in abraeumen:
+                s.sendto(("retain %s " % thema).encode("utf-8"),
+                         ("127.0.0.1", int(g["udpport"])))
+                geraeumt.add(name)
             # Ein leerer Wert geht nie retained hinaus: er wuerde das
             # zurueckbehaltene Thema im Broker loeschen (Hausstandard).
             verb = ("retain" if (retained and name in retained and wert_text)
                     else "publish")
-            zeile = "%s %s/%s %s" % (
-                verb, _mqtt_thema(praefix.strip("/")), _mqtt_thema(name),
-                wert_text)
+            zeile = "%s %s %s" % (verb, thema, wert_text)
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", int(g["udpport"])))
             gesendet += 1
     except OSError as f:
@@ -732,6 +1116,8 @@ def mqtt_senden(paare: dict, praefix: str, retained: set | None = None) -> int:
                 s.close()
             except OSError:
                 pass
+        if bericht is not None:
+            bericht["geraeumt"] = geraeumt
     return gesendet
 
 
@@ -757,13 +1143,23 @@ def stoerung_veroeffentlichen(cfg: dict) -> int:
     der Rechengang, wurde gar nichts gesendet, und der Broker behielt das
     letzte 'ok=1'. Die eine Zahl, an der Loxone eine Stoerung erkennen soll,
     fehlte ausgerechnet im Stoerungsfall.
+
+    Bis 0.9.32 ging 'ok=0' hier AUSDRUECKLICH retained hinaus (drittes
+    Argument {"ok"}); seit 0.9.33 fluechtig wie im Normalweg - eine Aussage
+    des Dienstes ueber sich selbst ist nie retained (Regeln/07, 19.09.2026).
+    Die Altlast wird auch in diesem Weg abgeraeumt: scheitert jeder
+    Rechengang, gaebe es sonst keinen anderen.
     """
     if not int(cfg.get("mqtt_ein") or 0):
         return 0
-    return mqtt_senden({"ok": 0, "ts": int(time.time()),
-                        "zaehler": _lauf_zaehler()},
-                       str(cfg.get("mqtt_topic") or "bewaesserung"),
-                       {"ok"})
+    praefix = str(cfg.get("mqtt_topic") or "bewaesserung")
+    abr = mqtt_altlast_abraeumen(praefix, [z.get("schluessel") for z in zonen()
+                                           if z.get("schluessel")])
+    bericht: dict = {}
+    n = mqtt_senden({"ok": 0, "ts": int(time.time()),
+                     "zaehler": _lauf_zaehler()},
+                    praefix, None, abr, bericht)
+    return n
 
 
 def _mqtt_sauber(wert: Any) -> str:
@@ -1429,8 +1825,14 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     for s in (abbild.get("zonen") or {}):
         for f in RETAINED_ZONE:
             behalten.add("%s/%s" % (s, f))
-    return mqtt_senden(p, str(cfg.get("mqtt_topic") or "bewaesserung"),
-                       behalten)
+    praefix = str(cfg.get("mqtt_topic") or "bewaesserung")
+    # Die Altwerte frueherer Fassungen ('ok', '<zone>/ok', 'sperrgrund')
+    # einmal abraeumen - am Broker mit Nachlesen; geht das nicht, in jedem
+    # Lauf im selben Zug ueber den UDP-Eingang (siehe mqtt_altlast_abraeumen()).
+    abr = mqtt_altlast_abraeumen(praefix, list((abbild.get("zonen") or {}).keys()))
+    bericht: dict = {}
+    n = mqtt_senden(p, praefix, behalten, abr, bericht)
+    return n
 
 
 # --------------------------------------------------------------- Betrieb
@@ -1840,27 +2242,25 @@ def einmal() -> int:
     return 0 if a["ok"] else 1
 
 
-def selbsttest() -> int:
+def anlage_text() -> str:
+    """Warum dieser Aufruf die Anlage nicht anfasst - fuer main() und den
+    Selbsttest (siehe _anlage())."""
+    if not HOME:
+        return ("Es wurde kein LoxBerry-Wurzelverzeichnis gefunden: LBHOMEDIR traegt "
+                "kein config/plugins und data/plugins, und oberhalb von %s traegt kein "
+                "Verzeichnis config/plugins, data/plugins und config/system/general.json. "
+                "Es wurde nichts angelegt, nichts gerechnet und nichts gesendet." % HIER)
+    return ("Diese Datei liegt nicht in der Installation unter %s (ausgepacktes Archiv "
+            "oder Pruefordner). Damit nichts in die Anlage kommt, wurde nichts angelegt, "
+            "nichts gerechnet und nichts gesendet. Abhilfe: aus "
+            "<LoxBerry-Wurzel>/bin/plugins/<ordner> aufrufen oder LBHOMEDIR und "
+            "LBPPLUGINDIR ausdruecklich setzen." % HOME)
+
+
+def _selbsttest_anlage() -> list:
+    """Die Zeilen des Selbsttests, die Ordner anlegen und die Anlage lesen -
+    nur, wenn dieser Aufruf die Anlage anfassen darf (_anlage())."""
     z: list[tuple[int, str]] = []
-    z.append((1, "Python %s" % sys.version.split()[0]))
-    # Welcher Interpreter laeuft hier eigentlich? Das ist die Frage, die man
-    # sich stellt, wenn paho-mqtt 'fehlt', obwohl es installiert wurde: es
-    # liegt dann in der virtuellen Umgebung, waehrend der Dienst mit dem
-    # System-Python laeuft.
-    in_venv = "/venv/" in sys.executable
-    z.append((1, "Interpreter: %s (%s)" % (
-        sys.executable,
-        "virtuelle Umgebung" if in_venv
-        else "System-Python - paho-mqtt muesste dann systemweit installiert sein")))
-    try:
-        import paho.mqtt.client  # noqa: F401
-        z.append((1, "Paket paho-mqtt geladen (MQTT-Quellen moeglich)"))
-    except ImportError:
-        z.append((-1, "Paket paho-mqtt fehlt - nur Online- und HTTP-Quellen. "
-                      "Alles Uebrige laeuft weiter." + ("" if in_venv else
-                      " Achtung: dieser Lauf benutzt den System-Python. Wurde das "
-                      "Paket in die virtuelle Umgebung installiert, sieht er es "
-                      "nicht.")))
     for name, p in (("Konfiguration", CONFIGDIR), ("Daten", DATADIR), ("Log", LOGDIR)):
         os.makedirs(p, exist_ok=True)
         z.append((1 if os.access(p, os.W_OK) else 0,
@@ -1895,6 +2295,39 @@ def selbsttest() -> int:
               "Letzte Rechnung: %s" % datetime.datetime.fromtimestamp(
                   a["ts"]).strftime("%d.%m.%Y %H:%M") if a.get("ts")
               else "Noch nie gerechnet - 'Jetzt rechnen' im Reiter Test."))
+    return z
+
+
+def selbsttest() -> int:
+    z: list[tuple[int, str]] = []
+    z.append((1, "Python %s" % sys.version.split()[0]))
+    # Welcher Interpreter laeuft hier eigentlich? Das ist die Frage, die man
+    # sich stellt, wenn paho-mqtt 'fehlt', obwohl es installiert wurde: es
+    # liegt dann in der virtuellen Umgebung, waehrend der Dienst mit dem
+    # System-Python laeuft.
+    in_venv = "/venv/" in sys.executable
+    z.append((1, "Interpreter: %s (%s)" % (
+        sys.executable,
+        "virtuelle Umgebung" if in_venv
+        else "System-Python - paho-mqtt muesste dann systemweit installiert sein")))
+    try:
+        import paho.mqtt.client  # noqa: F401
+        z.append((1, "Paket paho-mqtt geladen (MQTT-Quellen moeglich)"))
+    except ImportError:
+        z.append((-1, "Paket paho-mqtt fehlt - nur Online- und HTTP-Quellen. "
+                      "Alles Uebrige laeuft weiter." + ("" if in_venv else
+                      " Achtung: dieser Lauf benutzt den System-Python. Wurde das "
+                      "Paket in die virtuelle Umgebung installiert, sieht er es "
+                      "nicht.")))
+    if ANLAGE:
+        z.extend(_selbsttest_anlage())
+    else:
+        # Archivmodus: die Zeilen, die Ordner anlegen und die Anlage lesen,
+        # entfallen - bis 0.9.32 legte schon dieser Selbsttest config/,
+        # data/ und log/plugins/<archivname> in der Anlage an (in WSL
+        # gemessen, Pruefung-Bewaesserung-0.9.33, Fall Y2a). Die
+        # Rechenkerne unten laufen trotzdem.
+        z.append((0, anlage_text()))
 
     print("Selbsttest der Bewaesserung")
     fehlt = 0
@@ -1922,6 +2355,20 @@ def main() -> int:
     # Bildschirm gehoert. Im Dauerbetrieb leitet dienst.sh die
     # Standardausgabe in dieselbe Datei um - siehe log_einrichten().
     auf_bildschirm = "--selbsttest" in sys.argv or "--einmal" in sys.argv
+    # Die Frage "darf dieser Aufruf die Anlage anfassen?" steht VOR allem,
+    # was schreibt - auch vor log_einrichten(), das den Protokollordner
+    # anlegt (Faelle Y1 bis Y4 in Pruefung-Bewaesserung-0.9.33). Nur der
+    # Selbsttest laeuft im Archivmodus weiter, ohne Protokolldatei.
+    if not ANLAGE:
+        if "--selbsttest" in sys.argv:
+            log_einrichten(auf_bildschirm, datei=False)
+            return selbsttest()
+        sys.stderr.write("FEHLER: " + anlage_text() + "\n")
+        return 1
+    # --mqtt-leeren kommt aus uninstall/uninstall: VOR log_einrichten(),
+    # damit bei der Deinstallation kein Protokoll mehr entsteht.
+    if "--mqtt-leeren" in sys.argv:
+        return mqtt_leeren()
     log_einrichten(auf_bildschirm)
     if "--selbsttest" in sys.argv:
         return selbsttest()

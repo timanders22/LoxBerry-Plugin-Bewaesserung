@@ -41,11 +41,18 @@ if (!function_exists('bw_e')) {
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
  * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation genauso wie eine an einem anderen Ort - und es trifft auch
- * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
- * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
- * abfangen muss).
+ * config/plugins, data/plugins UND config/system/general.json traegt. Das
+ * trifft die uebliche Installation genauso wie eine an einem anderen Ort -
+ * und es trifft auch den Fall, dass das Plugin noch als entpacktes Archiv
+ * daliegt (dann findet es nichts und gibt einen Leerstring zurueck, was der
+ * Aufrufer ohnehin abfangen muss).
+ *
+ * general.json ist die entscheidende Bedingung. Bis 0.9.32 genuegten
+ * config/plugins und webfrontend - genau diese Ordner hinterlaesst ein
+ * Pruefstand auf einem Arbeitsrechner (Regeln/06: am 05.09.2026 hielt eine
+ * solche Suche dort C:\ fuer die Wurzel). In WSL gemessen
+ * (Pruefung-Bewaesserung-0.9.33, Fall P4a): in einem fremden Baum ohne
+ * general.json nahm bw_paths() den Baum als Wurzel.
  *
  * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
  * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
@@ -55,7 +62,8 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -66,26 +74,63 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     }
 }
 
+/* Die Wurzel in der Reihenfolge der Hausregel: erst die Umgebung, dann die
+ * Suche - und DANACH NICHTS MEHR. Ein gesetztes LBHOMEDIR gilt mit
+ * config/plugins UND data/plugins darunter; general.json wird dort nicht
+ * verlangt, damit die Attrappen der Pruefwerkzeuge (Werkzeuge/lb) weiter
+ * tragen. Bis 0.9.32 genuegte ein beliebiges Verzeichnis. Rueckgabe ''
+ * heisst "keine Wurzel". Bauart: LoxBerry-Plugin-Spotpreis-Tibber-0.9.19
+ * (tb_lbhome()). */
+function bw_lbhome()
+{
+    $h = (string) getenv('LBHOMEDIR');
+    if ($h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+        return rtrim($h, '/');
+    }
+    return lb_wurzel_ermitteln();
+}
+
 function bw_paths()
 {
     static $p = null;
     if ($p !== null) { return $p; }
-    $home = getenv('LBHOMEDIR');
-    if (!$home || !is_dir($home)) {
-        /* Kein fester Systempfad als Rueckfall mehr: den frueher hier
-         * stehenden gibt es auf dem gemessenen Geraet nicht - dessen Wurzel
-         * liegt woanders -, und ein Systempfad im Quelltext ist gegen den
-         * Hausstandard. Der Rueckfall war toter Code, der nur die Regel riss. */
-        $k = lb_wurzel_ermitteln();
-        if ($k && is_dir($k)) { $home = $k; }
-    }
+    $home = bw_lbhome();
     // Pluginordner aus dem Ablageort DIESER Datei - nicht ueber den
     // MD5-Schluessel der plugindatabase.json, der sich bei jedem Fork aendert.
     $dir = basename(dirname(__FILE__));
-    if ($home && !is_dir($home . '/config/plugins/' . $dir)) {
-        foreach (array(getenv('LBPPLUGINDIR'), 'bewaesserung') as $kand) {
-            if ($kand && is_dir($home . '/config/plugins/' . $kand)) { $dir = $kand; break; }
-        }
+    /* LBPPLUGINDIR ist die Auskunft von LoxBerry selbst und geht vor; nur
+     * der letzte Pfadteil zaehlt, und Namen, die nachweislich kein
+     * Pluginordner sind, gelten nicht. Der feste Name 'bewaesserung' greift
+     * nur dort, wo der abgeleitete keiner sein KANN (aus dem Archiv heisst er
+     * 'html'). Bis 0.9.32 entschied hier, ob config/plugins/<name> schon
+     * existiert - aus einem Archiv unter der Wurzel war das der Konfigordner
+     * DER ANLAGE. */
+    $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+    $lbp_gilt = ($lbp !== '' && !in_array($lbp, array('.', '..', '/', 'html', 'htmlauth', 'bin', 'plugins'), true));
+    if ($lbp_gilt) {
+        $dir = $lbp;
+    } elseif (in_array($dir, array('', '.', '/', 'html', 'htmlauth', 'bin', 'plugins'), true)) {
+        $dir = 'bewaesserung';
+    }
+    /* Archivmodus. Die Pfade DER ANLAGE gelten nur, wenn diese Bibliothek
+     * dort installiert liegt (<Wurzel>/webfrontend/html/plugins/<ordner>,
+     * physisch verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich
+     * nennt ($LBHOMEDIR und $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge
+     * mit ihrer Attrappe). Sonst ist das ein ausgepacktes Archiv oder ein
+     * Pruefordner: alles bleibt in dessen eigenem Ordner, auch dienst.sh.
+     *
+     * Bis 0.9.32 nahm ein Archiv unterhalb einer echten Wurzel - oder mit
+     * $LBHOMEDIR allein, wie es am Geraet in /etc/environment steht - die
+     * Wurzel und den festen Namen 'bewaesserung': Konfiguration, Token und
+     * bin/dienst.sh der Anlage. In WSL gemessen (Pruefung-Bewaesserung-0.9.33,
+     * Faelle P1a und P5a): der Knopf "Dienst anhalten" aus einem Archiv hielt
+     * den Dienst der Anlage an. Bauart: Spotpreis-Tibber 0.9.19 (tb_paths()). */
+    if ($home !== '') {
+        $soll = @realpath($home . '/webfrontend/html/plugins/' . basename(__DIR__));
+        $ist = @realpath(__DIR__);
+        $installiert = ($soll !== false && $ist !== false && $soll === $ist);
+        $ausdruecklich = $lbp_gilt && $home === rtrim((string) getenv('LBHOMEDIR'), '/');
+        if (!$installiert && !$ausdruecklich) { $home = ''; }
     }
     if ($home) {
         $p = array(
@@ -295,7 +340,7 @@ function bw_config_hat_inhalt($d)
  * aufheben liesse - fuer sie entsteht keine Nebendatei. Die Rechte bleiben
  * 0600: in der Konfiguration steht das Aktionstoken.
  */
-function bw_config_beiseite($pfad, $grund)
+function bw_config_beiseite($pfad, $grund, $wer = 'Die Konfiguration')
 {
     if (!is_file($pfad)) { return; }
     $rest = preg_replace('/\s+/', '', (string) @file_get_contents($pfad));
@@ -303,7 +348,7 @@ function bw_config_beiseite($pfad, $grund)
     $beiseite = $pfad . '.kaputt.' . date('Ymd_His');
     if (!is_file($beiseite) && @rename($pfad, $beiseite)) {
         @chmod($beiseite, 0600);
-        bw_log('Die Konfiguration ' . $grund . ' und liegt jetzt als '
+        bw_log($wer . ' ' . $grund . ' und liegt jetzt als '
              . basename($beiseite) . ' daneben.');
     }
 }
@@ -561,6 +606,13 @@ function bw_datei_heilen($was, $wohin, $merkwort)
     $z = bw_json_lesen($p[$wohin]);
     if (!is_array($z) || !array_key_exists($merkwort, $z)) { return false; }
     $getan[$was] = true;
+    /* Der verdraengte Stand bleibt als <datei>.kaputt.<zeit> (0600) liegen,
+     * wie bei der Konfiguration (bw_config_beiseite()). Bis 0.9.32 wurde eine
+     * unlesbare zonen.json oder quellen_zuordnung.json einfach
+     * ueberschrieben, und die Ursache war nicht mehr zu sehen (in WSL
+     * gemessen, Pruefung-Bewaesserung-0.9.33, Fall P11b). Eine Datei, die
+     * nur Leerraum, "{}" oder "[]" traegt, bleibt ohne Nebendatei. */
+    bw_config_beiseite($p[$was], 'war ' . $lage, basename($p[$was]));
     if (bw_json_schreiben($p[$was], $z, 0600)) {
         bw_log(basename($p[$was]) . ' war ' . $lage
              . ' und wurde aus der Zweitschrift zurueckgeholt.');
@@ -778,7 +830,12 @@ function bw_statuszeile()
     $sp = isset($a['sperre']) && is_array($a['sperre']) ? $a['sperre'] : array();
     $fest = isset($a['nachtplan']) && is_array($a['nachtplan']) ? $a['nachtplan'] : array();
     $durchlaeufe = bw_durchlaeufe();
-    return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2f;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d;GESPERRT=%d;DECKT=%d;PLANFEST=%d',
+    /* %F, nicht %f: %f richtet sich nach der Locale (LC_NUMERIC), und unter
+     * einer deutschen Locale stand dort "ET0=1,23" - der Miniserver liest
+     * die Zahl mit Punkt. Unter Windows mit PHP 7.4.33 und 8.4.24 gemessen
+     * (Pruefung-Bewaesserung-0.9.33, locale_probe.php, Faelle L1a/L2a).
+     * Bauart: LoxBerry-Plugin-ACTiKamera-1.9.21 (cam_lib.php). */
+    return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2F;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d;GESPERRT=%d;DECKT=%d;PLANFEST=%d',
         (int) (!empty($a['ok'])),
         isset($a['et0']) && $a['et0'] !== null ? (float) $a['et0'] : 0.0,
         (int) ($durchlaeufe > 0),
@@ -852,7 +909,8 @@ function bw_zonenzeile($schluessel)
         && is_array($a2['plan']['je_zone'][$schluessel])) {
         $jz = $a2['plan']['je_zone'][$schluessel];
     }
-    return sprintf('ZONE;OK=1;DEFIZIT=%.1f;FUELLSTAND=%.0f;BEDARF=%.1f;LITER=%.0f;MINUTEN=%.0f;GEMESSEN=%d;SEKUNDEN=%d;DURCHLAEUFE=%d;GEGOSSEN=%.1f',
+    /* %F statt %f aus demselben Grund wie in bw_statuszeile() (Fall L1b). */
+    return sprintf('ZONE;OK=1;DEFIZIT=%.1F;FUELLSTAND=%.0F;BEDARF=%.1F;LITER=%.0F;MINUTEN=%.0F;GEMESSEN=%d;SEKUNDEN=%d;DURCHLAEUFE=%d;GEGOSSEN=%.1F',
         (float) $z['dr'], (float) $z['fuellstand'], (float) $z['bedarf_mm'],
         (float) (isset($z['liter']) ? $z['liter'] : 0),
         (float) (isset($z['minuten']) ? $z['minuten'] : 0),
@@ -1370,16 +1428,13 @@ function bw_dienst($befehl)
     return array($code === 0 ? 1 : 0, implode("\n", $ausgabe));
 }
 
-/* ---------------- Befehlswarteschlange ----------------
- *
- * Sowohl der Miniserver-Endpunkt als auch der Reiter Test setzen Befehle ueber
- * diese eine Funktion ab. Zwei Kopien derselben Logik laufen zwangslaeufig
- * auseinander.
- *
- * Rueckgabe: array(ok, Meldung). ok = 1 erledigt, 0 abgelehnt,
- * 2 eingereiht, aber ohne Antwort in der Wartezeit - Ergebnis unbekannt.
- * Es wird nie ein Erfolg gemeldet, den niemand geprueft hat.
- */
+/* Eine Befehlswarteschlange gibt es in dieser Linie NICHT. Hier stand bis
+ * 0.9.32 ein Kopfkommentar "Befehlswarteschlange" ohne Funktion darunter
+ * (Rest einer Vorlage). Der Endpunkt webfrontend/html/index.php liest nur;
+ * die Knoepfe rufen bin/dienst.sh unmittelbar (start, stop, restart,
+ * einmal) und bekommen dessen Antwort - es wird nichts eingereiht, das
+ * ein spaeter startender Dienst abarbeiten koennte (Nachlese 24.09.2026,
+ * Muster 5: gelesen, kein Befund). */
 
 
 function bw_mqtt_zustand()
@@ -1532,17 +1587,20 @@ function bw_t($schluessel)
 {
     static $texte = null;
     if ($texte === null) {
-        $home = getenv('LBHOMEDIR');
-        if (!$home || !is_dir($home)) {
-            /* Siehe bw_paths(): kein fester Systempfad. */
-            $k = lb_wurzel_ermitteln();
-            if ($k && is_dir($k)) {
-                $home = $k;
-            }
+        /* Die Wurzel kommt aus bw_paths(), nicht aus einer eigenen Suche.
+         * Bis 0.9.32 stand hier eine zweite Suche ohne general.json, und
+         * ohne Wurzel wurde '' . '/templates/plugins/html/lang' gelesen -
+         * ein Pfad ab der Laufwerkswurzel. In WSL gemessen
+         * (Pruefung-Bewaesserung-0.9.33, Fall P6a, chroot): aus einem Archiv
+         * unter / kam der Titel aus einer fremden Sprachdatei
+         * /templates/plugins/html/lang. Ohne Wurzel gilt nur noch das Archiv
+         * selbst. */
+        $p = bw_paths();
+        $pfad = '';
+        if ($p['home'] !== '') {
+            $pfad = $p['home'] . '/templates/plugins/' . $p['plugin'] . '/lang';
         }
-        $ordner = basename(dirname(__FILE__));
-        $pfad = $home . '/templates/plugins/' . $ordner . '/lang';
-        if (!is_dir($pfad)) {
+        if ($pfad === '' || !is_dir($pfad)) {
             $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
         }
         $texte = @parse_ini_file($pfad . '/language_' . bw_sprache() . '.ini', true, INI_SCANNER_RAW);
@@ -1903,10 +1961,13 @@ function bw_plugin_fassung()
      *    ist der Auspackordner dirname(dirname(...)), nicht
      *    dirname(dirname(dirname(...))) - letzteres zeigt auf den Ordner
      *    UEBER dem Plugin. Am Pruefstand gemessen: die Lage "Auspackordner"
-     *    gab eine leere Zeichenkette, obwohl die plugin.cfg dalag. Die alte
-     *    Form bleibt als zweiter Eintrag stehen - sie kostet nichts. */
-    foreach (array(dirname(dirname(__DIR__)) . '/plugin.cfg',
-                   dirname(dirname(dirname(__DIR__))) . '/plugin.cfg') as $k) {
+     *    gab eine leere Zeichenkette, obwohl die plugin.cfg dalag.
+     * Die alte Form stand bis 0.9.32 als zweiter Eintrag daneben ("kostet
+     * nichts"). Sie kostete doch: aus einem Archiv unter / ist der Ordner
+     * ueber dem Plugin die Laufwerkswurzel, und gelesen wurde /plugin.cfg (in
+     * WSL gemessen, Pruefung-Bewaesserung-0.9.33, Fall P8a, chroot:
+     * Ergebnis 6.6.6 aus einer fremden Datei). */
+    foreach (array(dirname(dirname(__DIR__)) . '/plugin.cfg') as $k) {
         if (!is_file($k)) { continue; }
         $t = (string) @file_get_contents($k);
         if (preg_match('/^VERSION=([0-9][0-9.]*)/m', $t, $m)) { $f = $m[1]; break; }

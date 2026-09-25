@@ -5,12 +5,73 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.32 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.33 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.33 — `ok` nicht mehr zurückbehalten, Archive fassen die Anlage nicht an
+
+Geprüft auf die zehn Muster der Nachlese vom 24.09.2026; gemessen in WSL
+(`Pruefung-Bewaesserung-0.9.33/`, 92 Prüfzeilen, vorher 55 bzw. im Nachtrag
+4 rot, nachher 0, 31 Rückbauten einzeln geeicht) und unter Windows mit PHP 7.4.33 und 8.4.24
+(Locale). Nicht am Gerät.
+
+* **`ok` und `<zone>/ok` gehen ohne Retain hinaus.** Beide sagen, ob die
+  eigene Rechnung des Dienstes durchlief – eine Aussage des Dienstes über sich
+  selbst. Stirbt der Dienst, blieb ein zurückbehaltenes `ok=1` stehen, und
+  nach einem Neustart von Broker oder Gateway las Loxone „in Ordnung“ von
+  einem Dienst, der nicht mehr rechnet. Im Störungsweg ging `ok=0` bis 0.9.32
+  sogar ausdrücklich zurückbehalten hinaus. Zurückbehalten bleiben `giessen`,
+  `reicht`, `gesperrt`, `plan_fest`, `deckt`, `durchlaeufe`,
+  `noetige_durchlaeufe` und je Zone `sekunden` und `durchlaeufe`; die Spalte
+  „zurückbehalten?“ im Reiter MQTT sagt dasselbe.
+* **Die alten Werte werden einmal abgeräumt** – `ok`, `<zone>/ok` und ein
+  `sperrgrund` aus Fassungen bis 0.9.26. Der Dienst meldet sich dafür mit den
+  Zugangsdaten aus der `general.json` am Broker an, löscht nur eigene Themen,
+  die wirklich zurückbehalten dastehen, und liest nach; erst dann merkt er es
+  sich (`data/plugins/<ordner>/retain_altlast`). **Grenze:** fehlt `paho-mqtt`
+  oder ist der Broker nicht erreichbar, gehen die leeren Nachrichten in
+  **jedem** Lauf über den UDP-Eingang des Gateways, unmittelbar vor dem
+  gültigen Wert (drei bis vier Datagramme mehr je Takt), und es gibt keinen
+  Merker: der UDP-Eingang bestätigt nichts und verwirft unter Last
+  Datagramme, ein Merker auf den Sendeerfolg hätte am Gerät schon gelogen
+  (Regeln/07). Ob ein Altwert wirklich weg ist, zeigt
+  `mosquitto_sub -t 'bewaesserung/#' --retained-only -v`; sobald `paho-mqtt`
+  da ist, sieht der Dienst am Broker nach und hört danach auf.
+* **Die Deinstallation räumt die zurückbehaltenen Themen ab**
+  (`bewaesserung_dienst.py --mqtt-leeren`, am Broker mit Nachmessen, sonst
+  über UDP für die eingerichteten Zonen), überschreibt die Zweitschriften
+  (mit dem Aktionstoken) vor dem Löschen – das erschwert das Wiederfinden,
+  löscht auf Speicherkarte oder eMMC aber nicht sicher –, sieht nach, ob der
+  Dienst wirklich steht, und zählt nach, was liegen blieb. Sie prüft die Wurzel (ohne
+  LoxBerry-Wurzel wird nichts gelöscht, sondern gewarnt) und den Ordnernamen,
+  bevor sie `rm -rf` ruft – ein Ordnername `../../config` löschte bis 0.9.32
+  den Konfigurationsbaum der Wurzel.
+* **Ein ausgepacktes Archiv fasst die Anlage nicht mehr an.** `dienst.sh`,
+  der Dienst und die Oberfläche arbeiten nur dann mit der Anlage, wenn sie
+  dort installiert liegen oder `LBHOMEDIR` **und** `LBPPLUGINDIR` sie
+  ausdrücklich nennen. Bis 0.9.32 hielt `dienst.sh stop` aus einem Archiv
+  unter der Wurzel den Dienst der Anlage an, der Knopf „Dienst anhalten“ aus
+  einem Archiv ebenso, und `--einmal` aus einem Archiv sandte mit
+  Vorgabewerten zwölf Themen an das Gateway der Anlage.
+* **Die Wurzel wird nur dort gesucht, wo eine ist**: aufwärts gilt ein
+  Verzeichnis nur mit `config/plugins`, `data/plugins` und
+  `config/system/general.json` (Dienst, Bibliothek, `bw_notify.php`), und
+  ohne Wurzel gibt es keinen Rückfall mehr. Sprachdateien, Bibliothek und
+  `plugin.cfg` werden nie mehr ab der Laufwerkswurzel gelesen.
+* **`postinstall.sh` spielt nach Inhalt zurück, nicht nach Größe**: eine
+  `bewaesserung.json` ohne Aktionstoken, ein Verlauf `{}` oder eine
+  Langzeitdatei `{}` gelten als leer. Der verdrängte Stand bleibt als
+  `<datei>.kaputt.<zeit>` (0600) liegen, und die Update-Sicherung wird nur
+  weggeräumt, wenn jede gesicherte Datei nachweislich an ihrem Platz liegt –
+  sonst bleibt sie mit einer Warnung samt Ablageort liegen. Eine unlesbare
+  `zonen.json` oder `quellen_zuordnung.json` wird ebenfalls beiseitegelegt,
+  bevor die Oberfläche sie aus der Zweitschrift heilt.
+* **Die Antwortzeilen für Loxone tragen immer einen Punkt** (`ET0=1.23`,
+  `DEFIZIT=4.5`), auch unter einer deutschen Locale (`%F` statt `%f`).
 
 ## Neu in 0.9.32 — nach einem Update keine Erstanleitung mehr
 

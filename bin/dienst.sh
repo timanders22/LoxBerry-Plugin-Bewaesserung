@@ -87,7 +87,12 @@ bw_wurzel_suchen() {
     done
     return 1
 }
-if ! bw_wurzel_taugt "${LBHOMEDIR:-}"; then
+# Merken, ob die Wurzel aus der Umgebung kam - nur dann nennt der Aufrufer
+# sie ausdruecklich (siehe die Gegenprobe weiter unten).
+BW_WURZEL_GENANNT=0
+if bw_wurzel_taugt "${LBHOMEDIR:-}"; then
+    BW_WURZEL_GENANNT=1
+else
     LBHOMEDIR=$(bw_wurzel_suchen)
 fi
 # Der Ordnername ebenso. $LBPPLUGINDIR steht am Geraet in einer Cron-Schale
@@ -112,11 +117,23 @@ if [ -z "$LBHOMEDIR" ] || [ ! -d "$LBHOMEDIR" ]; then
     echo "        config/system/general.json. Es wurde nichts angelegt."
     exit 1
 fi
+# Die Anlage gilt nur, wenn dieses Skript in ihrem bin-Ordner liegt ODER der
+# Aufrufer Wurzel UND Ordner ausdruecklich nennt ($LBHOMEDIR und
+# $LBPPLUGINDIR, und <ordner> ist dort eingerichtet) - dieselbe Regel wie
+# _anlage() in bewaesserung_dienst.py und bw_paths() in bw_lib.php.
+# Bauart: LoxBerry-Plugin-Spotpreis-Tibber-0.9.19 (TB_AUSDRUECKLICH).
+# Bis 0.9.32 genuegte $LBPPLUGINDIR allein: ein Pruefarchiv unter der Wurzel
+# fand sie per Suche, und 'stop' hielt den Dienst der Anlage an und nahm ihr
+# soll_laufen (in WSL gemessen, Pruefung-Bewaesserung-0.9.33, Faelle W1a-c).
 LBH_R=$(cd "$LBHOMEDIR" 2>/dev/null && pwd -P)
-if [ "$SELF" != "$LBH_R/bin/plugins/$PNAME" ] \
-   && [ ! -d "$LBHOMEDIR/config/plugins/$PNAME" ]; then
-    echo "FEHLER: '$PNAME' ist unter $LBHOMEDIR kein eingerichtetes Plugin,"
-    echo "        und $SELF ist nicht dessen bin-Ordner."
+BW_AUSDRUECKLICH=0
+if [ "$BW_WURZEL_GENANNT" = "1" ] && [ -n "${LBPPLUGINDIR:-}" ] \
+   && [ -d "$LBHOMEDIR/config/plugins/$PNAME" ]; then
+    BW_AUSDRUECKLICH=1
+fi
+if [ "$SELF" != "$LBH_R/bin/plugins/$PNAME" ] && [ "$BW_AUSDRUECKLICH" != "1" ]; then
+    echo "FEHLER: $SELF ist nicht der bin-Ordner von '$PNAME' unter $LBHOMEDIR,"
+    echo "        und LBHOMEDIR und LBPPLUGINDIR nennen die Anlage nicht beide."
     echo "        Der Aufruf kommt offenbar aus einem ausgepackten Archiv oder"
     echo "        einem Pruefordner. Es wurde nichts angelegt."
     echo "        Abhilfe: LBHOMEDIR und LBPPLUGINDIR setzen oder dienst.sh aus"

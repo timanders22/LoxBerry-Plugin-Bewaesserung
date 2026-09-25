@@ -21,12 +21,23 @@
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 
+/* Welche Lage gilt, entscheidet der eigene Ablageort, nicht die Reihenfolge
+ * der Versuche: liegt diese Datei unter .../plugins/<ordner>, ist sie
+ * installiert (<Wurzel>/webfrontend/htmlauth/plugins/<ordner>), sonst liegt
+ * sie in einem ausgepackten Archiv (../html/). Bis 0.9.32 wurden drei
+ * Kandidaten der Reihe nach probiert, zwei davon VOR der eigenen Bibliothek
+ * - aus einem Archiv unter / war der zweite /html/plugins/htmlauth/bw_lib.php
+ * ab der Laufwerkswurzel, und was dort lag, lief als Bibliothek (in WSL
+ * gemessen, Pruefung-Bewaesserung-0.9.33, Fall P7a, chroot). Der erste traf
+ * nie etwas (<Wurzel>/webfrontend/htmlauth/html/...). Bauart:
+ * LoxBerry-Plugin-ZendureSolarFlow-0.9.26. */
 $bw_gefunden = false;
-foreach (array(
-    dirname(dirname(__DIR__)) . '/html/plugins/' . basename(__DIR__) . '/bw_lib.php',
-    dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . basename(__DIR__) . '/bw_lib.php',
-    dirname(__DIR__) . '/html/bw_lib.php',
-) as $bw_kandidat) {
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $bw_kandidaten = array(dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . basename(__DIR__) . '/bw_lib.php');
+} else {
+    $bw_kandidaten = array(dirname(__DIR__) . '/html/bw_lib.php');
+}
+foreach ($bw_kandidaten as $bw_kandidat) {
     if (is_file($bw_kandidat)) { require_once $bw_kandidat; $bw_gefunden = true; break; }
 }
 if (!$bw_gefunden) {

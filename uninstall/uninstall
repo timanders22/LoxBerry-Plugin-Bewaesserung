@@ -17,22 +17,165 @@
 #   data/plugins/<x>.upgrade_sicherung      Langzeitwerte waehrend des Updates
 #   data/plugins/<x>.upgrade_laeuft         Marke "Aktualisierung laeuft"
 #
+# Dazu die zurueckbehaltenen MQTT-Themen des Plugins im Broker (Abschnitt 2).
+# Bis 0.9.32 blieben sie nach der Deinstallation stehen, und Loxone las nach
+# jedem Neustart von Broker oder Gateway Werte eines Plugins, das es nicht
+# mehr gibt (in WSL gemessen, Pruefung-Bewaesserung-0.9.33, Fall U1a: 4
+# eigene Themen blieben stehen).
+#
 # Aufruf: <ZUFALLSKENNUNG> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <TEMPFOLDER>
 # ACHTUNG: $1 ist NICHT der Arbeitsordner, sondern eine zehnstellige
 # Zufallskennung. Gearbeitet wird deshalb mit $3 und $5.
 UN_FOLDER="${3:-bewaesserung}"
-UN_BASE="${5:-$LBHOMEDIR}"
 
-if [ -z "$UN_BASE" ] || [ ! -d "$UN_BASE" ]; then
-    echo "<INFO> Kein Wurzelverzeichnis uebergeben - nichts abgeraeumt."
-    exit 0
+# Der Ordnername geht in 'rm -rf' ein und wird deshalb GEPRUEFT, nicht
+# benutzt, wie er kommt (Regeln/06: vor jedem rm -rf auf einen
+# zusammengesetzten Pfad eine Pruefung). Bis 0.9.32 loeschte ein
+# $3 = "../../config" mit 'rm -rf <Wurzel>/log/plugins/../../config' den
+# ganzen Konfigurationsbaum der Wurzel (in WSL gemessen, Fall U5a).
+case "$UN_FOLDER" in
+    ''|.|..|*/*|*[!A-Za-z0-9_.-]*)
+        echo "<WARNING> '$UN_FOLDER' ist kein Pluginordner - es wurde NICHTS entfernt."
+        exit 1
+        ;;
+esac
+
+# Die Wurzel wird GEPRUEFT, nicht nur auf Vorhandensein. Bis 0.9.32 genuegte
+# ein beliebiges Verzeichnis in $5: ein fremder Ordner bekam rm -f und
+# rm -rf, und die Ausgabe meldete <OK> (Faelle U3, U4). Wurzel ist, was
+# config/plugins UND data/plugins traegt; aufwaerts gesucht wird zusaetzlich
+# nach config/system/general.json (Regeln/06, Raumklima-Vorfall). Ohne
+# brauchbare Wurzel wird gewarnt statt Vollzug gemeldet.
+un_wurzel_taugt() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
+}
+un_wurzel_suchen() {
+    un_v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    un_i=0
+    while [ -n "$un_v" ] && [ "$un_v" != "/" ] && [ "$un_i" -lt 8 ]; do
+        if un_wurzel_taugt "$un_v" && [ -f "$un_v/config/system/general.json" ]; then
+            echo "$un_v"
+            return 0
+        fi
+        un_v=$(dirname "$un_v")
+        un_i=$((un_i + 1))
+    done
+    return 1
+}
+UN_BASE="${5:-${LBHOMEDIR:-}}"
+if ! un_wurzel_taugt "$UN_BASE"; then
+    UN_BASE=$(un_wurzel_suchen) || UN_BASE=""
+fi
+if [ -z "$UN_BASE" ]; then
+    echo "<WARNING> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen (gesucht"
+    echo "<WARNING> wurde ein Verzeichnis mit config/plugins, data/plugins und"
+    echo "<WARNING> config/system/general.json). Es wurde NICHTS entfernt. Von Hand"
+    echo "<WARNING> nachzusehen: config/plugins/$UN_FOLDER.backup.*,"
+    echo "<WARNING> data/plugins/$UN_FOLDER.upgrade_*, log/plugins/$UN_FOLDER und die"
+    echo "<WARNING> behaltenen MQTT-Themen des Plugins."
+    exit 1
 fi
 
+UN_BIN="$UN_BASE/bin/plugins/$UN_FOLDER"
+UN_SKRIPT="$(cd "$UN_BIN" 2>/dev/null && pwd -P)/bewaesserung_dienst.py"
+
+# ---------------------------------------------------------------
+# 1. Dienst anhalten - und nachsehen
+# ---------------------------------------------------------------
+# bin/dienst.sh erkennt den Dienst argumentweise (argv[0] ein Python,
+# argv[1] genau der Dienstpfad, kein drittes Argument) und beendet alle
+# eigenen, auch einen ohne PID-Datei. Bis 0.9.32 stand danach unbedingt
+# "<OK> Dienst angehalten" da; jetzt wird nachgesehen (Regeln/06: ein
+# Hakenskript meldet nur, was es nachgelesen hat).
+un_ist_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline" | {
+        IFS= read -r a0 || exit 1
+        IFS= read -r a1 || exit 1
+        IFS= read -r a2 && exit 1
+        case "${a0##*/}" in
+            python|python3|python3.[0-9]|python3.[0-9][0-9]) ;;
+            *) exit 1 ;;
+        esac
+        [ "$a1" = "$UN_SKRIPT" ]
+    }
+}
+un_dienste() {
+    for un_d in /proc/[0-9]*; do
+        un_ist_dienst "${un_d#/proc/}" && echo "${un_d#/proc/}"
+    done
+    return 0
+}
+if [ -x "$UN_BIN/dienst.sh" ]; then
+    LBHOMEDIR="$UN_BASE" LBPPLUGINDIR="$UN_FOLDER" "$UN_BIN/dienst.sh" stop >/dev/null 2>&1
+fi
+UN_REST=$(un_dienste | wc -l | tr -d ' ')
+if [ "$UN_REST" != "0" ]; then
+    echo "<WARNING> Es laufen noch $UN_REST Dienst(e) dieses Plugins ($UN_SKRIPT) -"
+    echo "<WARNING> bitte als root anhalten."
+else
+    echo "<OK> Kein Dienst dieses Plugins laeuft mehr (nachgesehen)."
+fi
+
+# ---------------------------------------------------------------
+# 2. Zurueckbehaltene MQTT-Themen dieses Plugins am Broker loeschen
+# ---------------------------------------------------------------
+# bewaesserung_dienst.py --mqtt-leeren meldet sich mit den Zugangsdaten aus
+# general.json am Broker an, loescht nur, was dieses Plugin sendet und
+# WIRKLICH behalten liegt, und misst nach. Nur wenn das nicht geht (paho
+# fehlt, Broker nicht erreichbar), geht es ueber den UDP-Eingang des
+# Gateways - und die Ausgabe sagt, dass das nichts bestaetigt. Bauart
+# LoxBerry-Plugin-BYD-Autos-0.9.17.
+#
+# Die virtuelle Umgebung ist hier noch da: der Installer loescht
+# bin/plugins/<ordner> erst nach diesem Skript (plugininstall.pl,
+# purge_installation; festgehalten in LoxBerry-Plugin-VolkswagenID-0.9.24/
+# uninstall/uninstall). Als loxberry, nicht als root. Geht davon etwas
+# nicht, ist das KEIN Abbruch der Deinstallation, sondern eine Zeile.
+un_mqtt_leeren() {
+    if [ ! -f "$UN_BIN/bewaesserung_dienst.py" ]; then
+        echo "<INFO> $UN_BIN/bewaesserung_dienst.py fehlt - behaltene MQTT-Themen"
+        echo "<INFO> wurden nicht geloescht."
+        return 0
+    fi
+    if [ -x "$UN_BIN/venv/bin/python3" ]; then
+        UN_PY="$UN_BIN/venv/bin/python3"
+    elif command -v python3 >/dev/null 2>&1; then
+        UN_PY=$(command -v python3)
+    else
+        echo "<INFO> Kein python3 gefunden - behaltene MQTT-Themen wurden nicht geloescht."
+        return 0
+    fi
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "$(printf 'LBHOMEDIR=%q LBPPLUGINDIR=%q PYTHONDONTWRITEBYTECODE=1 timeout 60 %q %q --mqtt-leeren' \
+            "$UN_BASE" "$UN_FOLDER" "$UN_PY" "$UN_BIN/bewaesserung_dienst.py")" 2>&1 || true
+    else
+        LBHOMEDIR="$UN_BASE" LBPPLUGINDIR="$UN_FOLDER" PYTHONDONTWRITEBYTECODE=1 \
+            timeout 60 "$UN_PY" "$UN_BIN/bewaesserung_dienst.py" --mqtt-leeren 2>&1 || true
+    fi
+    return 0
+}
+un_mqtt_leeren
+
+# ---------------------------------------------------------------
+# 3. Dateien neben den Plugin-Ordnern - und nachzaehlen
+# ---------------------------------------------------------------
 # Der Punkt hinter dem Ordnernamen ist Absicht: er trennt den Nachbarn vom
 # Ordner. Das Sternchen trifft deshalb nur die eigenen Zweitschriften.
-UN_DIENST="$UN_BASE/bin/plugins/$UN_FOLDER/dienst.sh"
-[ -x "$UN_DIENST" ] && "$UN_DIENST" stop >/dev/null 2>&1
-
+# Ueberschreiben, dann entfernen (Regeln/06, fail-closed Punkt 2): in
+# <x>.backup.bewaesserung.json steht das Aktionstoken, in
+# <x>.backup.quellen_zuordnung.json kann eine Adresse mit Anmeldung stehen.
+# Bis 0.9.32 nur rm - in WSL gemessen (Pruefung-Bewaesserung-0.9.33, Fall
+# U1g): ueber einen harten Verweis war das Token danach weiter lesbar.
+# Die Zusage bleibt klein: auf Speicherkarte, eMMC und Dateisystemen mit
+# Journal entscheidet nicht dieses Skript, wohin geschrieben wird - das
+# Ueberschreiben ERSCHWERT das Wiederfinden, es loescht nicht sicher.
+for un_f in "$UN_BASE/config/plugins/$UN_FOLDER".backup.*; do
+    [ -f "$un_f" ] && [ ! -L "$un_f" ] || continue
+    un_n=$(stat -c %s "$un_f" 2>/dev/null)
+    case "$un_n" in ''|*[!0-9]*) un_n=0 ;; esac
+    [ "$un_n" -gt 0 ] && dd if=/dev/zero of="$un_f" bs=1 count="$un_n" conv=notrunc >/dev/null 2>&1
+done
 rm -f  "$UN_BASE/config/plugins/$UN_FOLDER".backup.* 2>/dev/null
 rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
 # Die Marke einer abgebrochenen Aktualisierung liegt ebenfalls neben dem
@@ -43,5 +186,16 @@ rm -f "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" 2>/dev/null
 # raeumt ihn also nicht mit. Angelegt wird er in postinstall.sh, und er
 # nimmt bis 512 000 Byte auf.
 rm -rf "$UN_BASE/log/plugins/$UN_FOLDER" 2>/dev/null
-echo "<OK> Dienst angehalten, Zweitschriften, Update-Sicherung und Protokoll entfernt."
-exit 0
+UN_UEBRIG=0
+for un_f in "$UN_BASE/config/plugins/$UN_FOLDER".backup.* \
+            "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" \
+            "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" \
+            "$UN_BASE/log/plugins/$UN_FOLDER"; do
+    [ -e "$un_f" ] && UN_UEBRIG=$((UN_UEBRIG + 1)) && echo "<WARNING> Liegt noch: $un_f"
+done
+if [ "$UN_UEBRIG" = "0" ]; then
+    echo "<OK> Zweitschriften, Update-Sicherung, Marke und Protokoll entfernt (nachgezaehlt)."
+    exit 0
+fi
+echo "<WARNING> $UN_UEBRIG Eintrag/Eintraege liessen sich nicht entfernen - bitte von Hand."
+exit 1
