@@ -5,12 +5,68 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.33 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.34 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.34 — der Gießplan wird nicht mehr zurückbehalten
+
+* **Kein Thema geht mehr mit Retain hinaus – auch der Plan nicht.**
+  `giessen`, `durchlaeufe`, `noetige_durchlaeufe`, `reicht`, `deckt`,
+  `plan_fest`, `gesperrt` und je Zone `sekunden` und `durchlaeufe` gelten „für
+  heute Nacht“. Zurückbehalten lieferte der Broker nach einem Neustart von
+  Miniserver oder Gateway einen Plan, der Tage alt sein konnte – etwa wenn der
+  Dienst seither stand oder das Plugin angehalten war. Jetzt kommt der Plan mit
+  dem nächsten Rechengang: der Dienst rechnet und sendet alle
+  `max(600, Takt)` Sekunden (Vorgabe: alle 10 Minuten, höchstens stündlich)
+  **alle** Themen, beim Dienststart sofort. Bis dahin behält Loxone, was der
+  virtuelle Eingang gerade hat. Namen und Bedeutung der Themen bleiben; die
+  Spalte „zurückbehalten?“ im Reiter MQTT sagt jetzt überall „nein“.
+  **Grenze:** eine Zone, die gerade nicht rechnen kann (`<zone>/ok = 0`),
+  sendet ihre `sekunden` und `durchlaeufe` nicht, bis sie wieder rechnet –
+  wie bisher; nur liegt jetzt auch im Broker kein alter Wert mehr bereit.
+* **Die alten, zurückbehaltenen Planwerte werden einmal abgeräumt** – auf
+  demselben Weg wie in 0.9.33 (`ok`, `sperrgrund`): am Broker löschen,
+  nachlesen, erst dann der Merker `retain_altlast`. Ein Merker aus 0.9.33
+  gilt dafür nicht, weil seine Themenliste die Planwerte nicht nennt. Ohne
+  `paho-mqtt` oder Broker gehen die leeren Nachrichten in jedem Lauf über den
+  UDP-Eingang unmittelbar vor dem gültigen Wert (bis zu drei je Zone und neun
+  allgemeine mehr je Takt), ohne Merker. Eine Zone, die in diesem Rückfall nicht
+  rechnet, bekommt keinen gültigen Wert und deshalb auch keine Löschung; ihr
+  alter Plan steht dann im Broker, bis sie wieder rechnet oder der Brokerweg
+  geht. `bewaesserung_dienst.py --mqtt-leeren` (Deinstallation) nahm die
+  Planwerte schon immer mit.
+* **Verweigert der Broker das Lesen, gilt das nicht mehr als „nichts
+  behalten“.** Beim Abräumen und bei der Deinstallation meldet sich der
+  Dienst am Broker an und abonniert `bewaesserung/#`. Lehnte der Broker das
+  Abonnement ab (SUBACK 0x80, etwa durch eine Zugriffsliste), kam nichts an –
+  bis 0.9.33 hieß das „alles abgeräumt“: der Merker wurde gesetzt, und die
+  Deinstallation meldete „nichts zu löschen“, obwohl alles noch dastand. Jetzt
+  wartet der Dienst die Bestätigung jedes Abonnements ab; ohne sie nimmt er
+  den UDP-Rückfall und setzt keinen Merker.
+* **Die Deinstallation hängt nicht mehr am Leeren der MQTT-Themen.** Bis
+  0.9.33 stand dort `timeout 60` ohne `-k` und dahinter `|| true`: ein
+  Abbruch nach 60 s erschien nirgends, und ein Prozess, der SIGTERM nicht
+  annimmt, hielt die Deinstallation an – die Zweitschriften mit dem
+  Aktionstoken blieben dann liegen. Jetzt folgt nach weiteren 5 s SIGKILL, und
+  ein Abbruch steht als Warnung mit dem Hinweis zum Löschen von Hand in der
+  Ausgabe des Installers.
+
+Gemessen in WSL (`Pruefung-Bewaesserung-0.9.34/`: 123 Prüfzeilen, vorher 28
+rot, nachher 0; `messe_timeout.sh` 8 Fälle, vorher 7 rot, nachher 0; 12
+Rückbauten einzeln geeicht) am empfangenen Paket eines Prüfbrokers; die
+SUBACK-Auswertung zusätzlich mit echtem `paho-mqtt` 1.6.1 unter Windows.
+Nicht am Gerät, nicht an mosquitto.
+
+Wer die Themen wie vorgesehen am Bewässerungsbaustein angeschlossen hat
+(`durchlaeufe` an `MaxP`, `<zone>/sekunden` an `Tv1` … `Tv8`): nach einem
+Neustart des Miniservers tragen diese Eingänge bis zum nächsten Rechengang des
+Dienstes, was Loxone nach dem Neustart für sie hält (am Gerät nicht gemessen).
+Ein Neustart in den zehn Minuten vor dem Gießbeginn kann diese Nacht also
+verändern; einen Tage alten Plan gibt es dafür nicht mehr.
 
 ## Neu in 0.9.33 — `ok` nicht mehr zurückbehalten, Archive fassen die Anlage nicht an
 
@@ -24,7 +80,7 @@ Geprüft auf die zehn Muster der Nachlese vom 24.09.2026; gemessen in WSL
   selbst. Stirbt der Dienst, blieb ein zurückbehaltenes `ok=1` stehen, und
   nach einem Neustart von Broker oder Gateway las Loxone „in Ordnung“ von
   einem Dienst, der nicht mehr rechnet. Im Störungsweg ging `ok=0` bis 0.9.32
-  sogar ausdrücklich zurückbehalten hinaus. Zurückbehalten bleiben `giessen`,
+  sogar ausdrücklich zurückbehalten hinaus. Zurückbehalten blieben (bis 0.9.33) `giessen`,
   `reicht`, `gesperrt`, `plan_fest`, `deckt`, `durchlaeufe`,
   `noetige_durchlaeufe` und je Zone `sekunden` und `durchlaeufe`; die Spalte
   „zurückbehalten?“ im Reiter MQTT sagt dasselbe.

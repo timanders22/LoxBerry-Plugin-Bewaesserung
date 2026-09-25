@@ -129,13 +129,18 @@ function bw_vorgaben_python()
  * 'ok' und '<zone>/ok' seit 0.9.33 nicht mehr: eine Aussage des Dienstes
  * ueber sich selbst ist nie retained (Regeln/07, 18./19.09.2026) - siehe
  * RETAINED_GLOBAL in bin/bewaesserung_dienst.py.
+ *
+ * Seit 0.9.34 sind beide Listen leer: auch die Planwerte (giessen, reicht,
+ * gesperrt, plan_fest, deckt, durchlaeufe, noetige_durchlaeufe, je Zone
+ * sekunden und durchlaeufe) gehen ohne Retain hinaus - sie gelten "fuer
+ * heute Nacht" (Entscheidung des Hausherrn, 25.09.2026). Die Spalte bleibt
+ * und sagt bei jedem Thema "nein".
  */
 function bw_retain_tabelle()
 {
     return array(
-        'global' => array('giessen', 'reicht', 'gesperrt',
-                          'plan_fest', 'deckt', 'durchlaeufe', 'noetige_durchlaeufe'),
-        'zone'   => array('sekunden', 'durchlaeufe'),
+        'global' => array(),
+        'zone'   => array(),
     );
 }
 
@@ -146,6 +151,11 @@ function bw_retain_tabelle()
  * der beiden nicht gefunden wurde oder leer ist. Leer heisst "nicht
  * gelesen", nicht "nichts retained" - sonst stuende bei einer umbenannten
  * Konstante ein Haken ueber zwei leeren Mengen.
+ *
+ * Ausnahme seit 0.9.34: die AUSDRUECKLICH leere Schreibweise
+ * 'RETAINED_GLOBAL = frozenset()' bzw. 'RETAINED_ZONE = ()' am Zeilenende
+ * gilt als gelesen und leer. Eine umbenannte Konstante findet weder diese
+ * noch die gefuellte Form und bleibt "nicht gelesen".
  */
 function bw_retain_python()
 {
@@ -155,7 +165,13 @@ function bw_retain_python()
     $aus = array();
     $anker = array('global' => array('RETAINED_GLOBAL' . ' = {', "\n}"),
                    'zone'   => array('RETAINED_ZONE' . ' = (', ')'));
+    $leer = array('global' => '/^RETAINED_GLOBAL = frozenset\(\)[ \t]*$/m',
+                  'zone'   => '/^RETAINED_ZONE = \(\)[ \t]*$/m');
     foreach ($anker as $k => $a) {
+        if (preg_match($leer[$k], $t)) {
+            $aus[$k] = array();
+            continue;
+        }
         $i = strpos($t, $a[0]);
         if ($i === false) { return null; }
         $i += strlen($a[0]);

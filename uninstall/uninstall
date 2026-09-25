@@ -132,6 +132,17 @@ fi
 # purge_installation; festgehalten in LoxBerry-Plugin-VolkswagenID-0.9.24/
 # uninstall/uninstall). Als loxberry, nicht als root. Geht davon etwas
 # nicht, ist das KEIN Abbruch der Deinstallation, sondern eine Zeile.
+#
+# 'timeout -k 5 60': ohne -k schickt timeout nach 60 s nur SIGTERM - ein
+# Prozess, der es nicht annimmt, hielt die Deinstallation an, und Schritt 3
+# (Zweitschriften mit dem Aktionstoken) kam nicht dran. Bis 0.9.33 stand
+# hier 'timeout 60' und dahinter '|| true': ein Abbruch nach 60 s erschien
+# in der Ausgabe des Installers gar nicht. In WSL gemessen mit einem
+# SIGTERM-festen Platzhalter an der Stelle des Dienstes
+# (Pruefung-Bewaesserung-0.9.34, messe_timeout.sh, T1-T7: 145 s bis zur
+# aeusseren Grenze, keine Meldung, Zweitschrift blieb liegen). Bauart
+# Weissware 0.9.34, Schritt 1b. Rueckgabe 0-2 meldet der Dienst selbst
+# (mqtt_leeren()); 124/137/sonst wird hier gesagt.
 un_mqtt_leeren() {
     if [ ! -f "$UN_BIN/bewaesserung_dienst.py" ]; then
         echo "<INFO> $UN_BIN/bewaesserung_dienst.py fehlt - behaltene MQTT-Themen"
@@ -146,13 +157,20 @@ un_mqtt_leeren() {
         echo "<INFO> Kein python3 gefunden - behaltene MQTT-Themen wurden nicht geloescht."
         return 0
     fi
+    UN_RC=0
     if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
-        su -s /bin/bash loxberry -c "$(printf 'LBHOMEDIR=%q LBPPLUGINDIR=%q PYTHONDONTWRITEBYTECODE=1 timeout 60 %q %q --mqtt-leeren' \
-            "$UN_BASE" "$UN_FOLDER" "$UN_PY" "$UN_BIN/bewaesserung_dienst.py")" 2>&1 || true
+        su -s /bin/bash loxberry -c "$(printf 'LBHOMEDIR=%q LBPPLUGINDIR=%q PYTHONDONTWRITEBYTECODE=1 timeout -k 5 60 %q %q --mqtt-leeren' \
+            "$UN_BASE" "$UN_FOLDER" "$UN_PY" "$UN_BIN/bewaesserung_dienst.py")" < /dev/null 2>&1 || UN_RC=$?
     else
         LBHOMEDIR="$UN_BASE" LBPPLUGINDIR="$UN_FOLDER" PYTHONDONTWRITEBYTECODE=1 \
-            timeout 60 "$UN_PY" "$UN_BIN/bewaesserung_dienst.py" --mqtt-leeren 2>&1 || true
+            timeout -k 5 60 "$UN_PY" "$UN_BIN/bewaesserung_dienst.py" --mqtt-leeren < /dev/null 2>&1 || UN_RC=$?
     fi
+    case "$UN_RC" in
+        0|1|2) ;;
+        124) echo "<WARNING> MQTT: das Leeren der behaltenen Themen wurde nach 60 s abgebrochen - unter dem Praefix des Plugins kann noch etwas im Broker stehen. Von Hand: mosquitto_sub -t 'bewaesserung/#' --retained-only -v, dann mosquitto_pub -r -n -t <thema>" ;;
+        137) echo "<WARNING> MQTT: das Leeren der behaltenen Themen reagierte nach 60 s nicht auf SIGTERM und wurde hart beendet (SIGKILL) - unter dem Praefix des Plugins kann noch etwas im Broker stehen. Von Hand: mosquitto_pub -r -n -t <thema>" ;;
+        *) echo "<WARNING> MQTT: das Leeren der behaltenen Themen endete unerwartet (Rueckgabe $UN_RC) - unter dem Praefix des Plugins kann noch etwas im Broker stehen." ;;
+    esac
     return 0
 }
 un_mqtt_leeren

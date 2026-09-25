@@ -1817,7 +1817,9 @@ if (!$bw_vt) { ?>
  *
  * Hausstandard seit 03.09.2026: Zustaende retained, Messwerte mit
  * Zeitbezug nicht, das Lebenszeichen nie. Bis 0.9.21 ging KEIN Thema
- * dieser Linie retained hinaus, und die Tabelle sagte dazu gar nichts. */
+ * dieser Linie retained hinaus, und die Tabelle sagte dazu gar nichts.
+ * Seit 0.9.34 wieder keines: auch der Plan gilt nur "fuer heute Nacht"
+ * (Entscheidung 25.09.2026) - die Spalte sagt jetzt ueberall "nein". */
 $bw_rt = bw_retain_tabelle();
 $bw_ret = $bw_rt['global'];
 $bw_ret_zone = $bw_rt['zone'];

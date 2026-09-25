@@ -756,11 +756,23 @@ def mqtt_gateway() -> dict:
 # retained hinaus. In WSL am empfangenen Paket gemessen
 # (Pruefung-Bewaesserung-0.9.33, Faelle R1h, R1i, R3a): 'retain'. Die
 # Altwerte raeumt mqtt_altlast_abraeumen() einmal ab.
-RETAINED_GLOBAL = {
-    "giessen", "reicht", "gesperrt", "plan_fest",
-    "deckt", "durchlaeufe", "noetige_durchlaeufe",
-}
-RETAINED_ZONE = ("sekunden", "durchlaeufe")
+#
+# Seit 0.9.34 geht GAR NICHTS mehr retained hinaus - auch die Planwerte
+# nicht ('giessen', 'reicht', 'gesperrt', 'plan_fest', 'deckt',
+# 'durchlaeufe', 'noetige_durchlaeufe', je Zone 'sekunden' und
+# 'durchlaeufe'). Entscheidung des Hausherrn vom 25.09.2026: der Plan gilt
+# "fuer heute Nacht" und wird allein durch die Uhr falsch (Zeitbezug,
+# Regeln/07 Abschnitt 3). Zurueckbehalten lieferte der Broker nach einem
+# Neustart von Miniserver oder Gateway einen Plan, der Tage alt sein
+# konnte - etwa wenn der Dienst seither stand. Jetzt kommt der Plan mit dem
+# naechsten Vollversand, spaetestens max(600, takt) Sekunden nach dem
+# Neustart (siehe Dienst.laufen()); bis dahin haelt Loxone, was es hat.
+# Die beiden Tabellen bleiben stehen - ausdruecklich leer -, damit die
+# Spalte "zurueckbehalten?" im Reiter MQTT und die Zeile "Retain" im Reiter
+# Test weiter gegen den Dienst pruefen (bw_retain_python() nimmt genau
+# diese Schreibweise als "gelesen, leer").
+RETAINED_GLOBAL = frozenset()
+RETAINED_ZONE = ()
 
 # Alle Themen, die dieser Dienst sendet - fuer das Abraeumen und die
 # Deinstallation. Was hier nicht steht, ist kein eigenes Thema und wird nie
@@ -771,11 +783,14 @@ MQTT_GLOBAL = ("ok", "et0", "durchlaeufe", "noetige_durchlaeufe", "reicht",
 MQTT_ZONE = ("ok", "defizit_mm", "bedarf_mm", "dr_mm", "fuellstand", "liter",
              "minuten", "sekunden", "durchlaeufe", "gegossen_mm")
 # Was frueher zurueckbehalten hinausging und es heute nicht mehr tut: 'ok'
-# und '<zone>/ok' bis 0.9.32, 'sperrgrund' bis 0.9.26. Nur diese gehen im
-# UDP-Rueckfall als leere retain-Nutzlast hinaus; am Broker wird jedes
-# eigene, heute fluechtige Thema geloescht, das wirklich behalten dasteht.
-ALTLAST_UDP_GLOBAL = ("ok", "sperrgrund")
-ALTLAST_UDP_ZONE = ("ok",)
+# und '<zone>/ok' bis 0.9.32, 'sperrgrund' bis 0.9.26, die Planwerte bis
+# 0.9.33. Nur diese gehen im UDP-Rueckfall als leere retain-Nutzlast hinaus
+# - und nur, wenn im selben Zug ein gueltiger Wert folgt (mqtt_senden());
+# am Broker wird jedes eigene, heute fluechtige Thema geloescht, das
+# wirklich behalten dasteht.
+ALTLAST_UDP_GLOBAL = ("ok", "sperrgrund", "giessen", "reicht", "gesperrt",
+                      "plan_fest", "deckt", "durchlaeufe", "noetige_durchlaeufe")
+ALTLAST_UDP_ZONE = ("ok", "sekunden", "durchlaeufe")
 DATEI_RETAIN_ALTLAST = os.path.join(DATADIR, "retain_altlast")
 
 
@@ -843,7 +858,15 @@ def _broker_leeren(praefix: str, auswahl, warten: float = 3.0) -> dict:
          stehengeblieben.
     Rueckgabe {"rc", "geleert", "rest", "grund"}: rc 0 = nichts (mehr)
     behalten, 1 = nach dem Loeschen stand noch etwas, 2 = nicht moeglich
-    (kein paho, Broker fort, Anmeldung abgewiesen).
+    (kein paho, Broker fort, Anmeldung abgewiesen, Abonnement abgelehnt).
+
+    Beide Abonnements gelten erst mit ihrem SUBACK. Ein Broker, dessen ACL
+    das Lesen verweigert, antwortet mit 0x80 und schickt danach nichts;
+    ungeprueft hiess das bis 0.9.33 "nichts behalten", der Merker lag auf
+    einer Antwort, die keine war, und --mqtt-leeren meldete "nichts zu
+    loeschen" (Muster 11 der Nachlese, 25.09.2026; in WSL gemessen,
+    Pruefung-Bewaesserung-0.9.34, Faelle Q4 bis Q6). Bauart:
+    bw_mqtt_behalten_liste() im Beschattungswaechter 0.9.21.
     Bauart: LoxBerry-Plugin-BYD-Autos-0.9.17 (_broker_leeren()),
     VolkswagenID 0.9.24 (mqtt_altlast_abraeumen()).
     """
@@ -884,6 +907,41 @@ def _broker_leeren(praefix: str, auswahl, warten: float = 3.0) -> dict:
         if n.retain and n.payload and auswahl(n.topic):
             gesehen.add(n.topic)
 
+    # Je Paketkennung die Rueckgabecodes des SUBACK. paho 1.x und VERSION1:
+    # granted_qos als Zahlen; VERSION2: ReasonCode-Objekte mit .value.
+    # 0x80 und darueber heisst abgelehnt.
+    subacks: dict = {}
+
+    def bei_abo(_k, _d, mid, codes, *_rest):
+        werte = []
+        try:
+            for c in (codes or ()):
+                werte.append(int(getattr(c, "value", c)))
+        except (TypeError, ValueError):
+            werte = [0x80]
+        subacks[mid] = werte or [0x80]
+
+    def abonnieren() -> str:
+        """praefix/# abonnieren und den SUBACK abwarten. '' = bestaetigt,
+        sonst der Grund, warum der Broker nicht zu fragen ist."""
+        erg_sub = k.subscribe(praefix + "/#")
+        try:
+            rc_sub, mid = int(erg_sub[0]), erg_sub[1]
+        except (TypeError, ValueError, IndexError):
+            return "das Abonnement liess sich nicht absenden (%r)" % (erg_sub,)
+        if rc_sub != 0:
+            return "das Abonnement liess sich nicht absenden (rc %d)" % rc_sub
+        ende = time.time() + 10
+        while mid not in subacks and time.time() < ende:
+            time.sleep(0.05)
+        if mid not in subacks:
+            return "der Broker %s hat das Abonnement nicht bestaetigt (kein SUBACK)" % wo
+        schlecht = [w for w in subacks[mid] if w >= 0x80]
+        if schlecht:
+            return ("der Broker %s verweigert das Lesen von '%s/#' (SUBACK 0x%02X)"
+                    % (wo, praefix, schlecht[0]))
+        return ""
+
     name = "bewaesserung-leeren-%d" % os.getpid()
     try:
         k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=name)
@@ -891,6 +949,7 @@ def _broker_leeren(praefix: str, auswahl, warten: float = 3.0) -> dict:
         k = mqtt.Client(client_id=name)
     k.on_connect = bei_verbindung
     k.on_message = bei_nachricht
+    k.on_subscribe = bei_abo
     if g.get("user"):
         k.username_pw_set(str(g["user"]), str(g.get("pw") or "") or None)
     try:
@@ -907,7 +966,10 @@ def _broker_leeren(praefix: str, auswahl, warten: float = 3.0) -> dict:
             erg["grund"] = ("der Broker %s hat die Anmeldung abgewiesen (CONNACK %d: %s)"
                             % (wo, code["wert"], CONNACK_TEXT.get(code["wert"], "unbekannter Grund")))
             return erg
-        k.subscribe(praefix + "/#")
+        grund = abonnieren()
+        if grund:
+            erg["grund"] = grund
+            return erg
         time.sleep(warten)
         k.unsubscribe(praefix + "/#")
         zu_leeren = sorted(gesehen)
@@ -919,9 +981,13 @@ def _broker_leeren(praefix: str, auswahl, warten: float = 3.0) -> dict:
                 info.wait_for_publish()
         # NACHLESEN: ein neues Abonnement bekommt alles, was noch behalten ist.
         gesehen.clear()
-        k.subscribe(praefix + "/#")
-        time.sleep(warten)
         erg["geleert"] = zu_leeren
+        grund = abonnieren()
+        if grund:
+            # Geloescht ist dann schon; bestaetigt ist es nicht.
+            erg["grund"] = "Nachlesen nicht moeglich - " + grund
+            return erg
+        time.sleep(warten)
         erg["rest"] = sorted(gesehen)
         erg["rc"] = 1 if erg["rest"] else 0
     except Exception as f:  # noqa: BLE001
@@ -1826,8 +1892,9 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
         for f in RETAINED_ZONE:
             behalten.add("%s/%s" % (s, f))
     praefix = str(cfg.get("mqtt_topic") or "bewaesserung")
-    # Die Altwerte frueherer Fassungen ('ok', '<zone>/ok', 'sperrgrund')
-    # einmal abraeumen - am Broker mit Nachlesen; geht das nicht, in jedem
+    # 'behalten' ist seit 0.9.34 leer (RETAINED_GLOBAL, RETAINED_ZONE).
+    # Die Altwerte frueherer Fassungen ('ok', '<zone>/ok', 'sperrgrund',
+    # seit 0.9.34 auch die Planwerte) einmal abraeumen - am Broker mit Nachlesen; geht das nicht, in jedem
     # Lauf im selben Zug ueber den UDP-Eingang (siehe mqtt_altlast_abraeumen()).
     abr = mqtt_altlast_abraeumen(praefix, list((abbild.get("zonen") or {}).keys()))
     bericht: dict = {}
