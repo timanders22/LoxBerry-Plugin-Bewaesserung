@@ -302,6 +302,79 @@ function bw_formulare_zaehlen($quelle)
     return array($formulare, $merkmale, $ohne);
 }
 
+/** b1 (Verbesserungsbau 30.09.2026): Uhrzeit fuer eine Pruefzeile - heute
+ *  als hh:mm, sonst mit Datum davor (dd.mm. hh:mm). */
+function bw_uhrzeit($ts)
+{
+    $ts = (int) $ts;
+    if ($ts <= 0) { return '?'; }
+    return date('Y-m-d', $ts) === date('Y-m-d') ? date('H:i', $ts) : date('d.m. H:i', $ts);
+}
+
+/**
+ * b1 (Verbesserungsbau 30.09.2026): Wetterquelle und letzter guter Plan.
+ *
+ * Seit 0.9.35 (M1, Entscheidung Frage 6/11) bleibt beim Ausfall der
+ * Wetterquelle der letzte gute Plan stehen, und ok geht auf 0. Wie alt
+ * dieser Plan ist, stand nirgends auf der Seite - nur im Protokoll. Die
+ * Zeile liest das Abbild: plan_gehalten, stoerung, stoerung_ts und ts
+ * (Zeitpunkt des guten Rechengangs, plan_halten() laesst ihn stehen).
+ */
+function bw_wetterquelle_zeile($cfg, $a)
+{
+    $f = bw_t('TEST.F_WETTERQUELLE');
+    $hat_ort = abs((float) $cfg['breite']) > 0.001 || abs((float) $cfg['laenge']) > 0.001;
+    if (!$hat_ort) {
+        return bw_pruefzeile(-1, $f, bw_t('TEST.A_WQ_KEIN_ORT'));
+    }
+    if (!is_array($a) || !$a) {
+        return bw_pruefzeile(-1, $f, bw_t('TEST.A_NIE_GERECHNET'));
+    }
+    $gut = !empty($a['ts']) && !empty($a['plan']);
+    $stoerung = trim((string) (isset($a['stoerung']) ? $a['stoerung'] : ''));
+    $seit = isset($a['stoerung_ts']) ? (int) $a['stoerung_ts'] : 0;
+    if (!empty($a['plan_gehalten']) || (empty($a['ok']) && $stoerung !== '')) {
+        if ($gut) {
+            return bw_pruefzeile(0, $f, sprintf(bw_t('TEST.A_WQ_GEHALTEN'),
+                bw_e(bw_uhrzeit($seit)), bw_e($stoerung), bw_e(bw_uhrzeit($a['ts']))));
+        }
+        return bw_pruefzeile(0, $f, sprintf(bw_t('TEST.A_WQ_KEIN_PLAN'),
+            bw_e(bw_uhrzeit($seit)), bw_e($stoerung)));
+    }
+    if (!$gut) {
+        return bw_pruefzeile(-1, $f, bw_t('TEST.A_NIE_GERECHNET'));
+    }
+    return bw_pruefzeile(1, $f, sprintf(bw_t('TEST.A_WQ_OK'), bw_e(bw_uhrzeit($a['ts']))));
+}
+
+/**
+ * Wetter-1 (Verbesserungsbau 30.09.2026): liefert die Ecowitt-Weiche den
+ * Regen des Tages? Gelesen wird das Abbild des letzten Rechengangs
+ * (abbild['ecowitt'], {} = Einstellung aus). Faellt sie aus, sagt die
+ * Zeile, welche Quelle stattdessen gilt.
+ */
+function bw_ecowitt_zeile($cfg, $a)
+{
+    $f = bw_t('TEST.F_ECOWITT');
+    if (empty($cfg['ecowitt_regen'])) {
+        return bw_pruefzeile(-1, $f, bw_t('TEST.A_EW_AUS'));
+    }
+    $e = (is_array($a) && isset($a['ecowitt']) && is_array($a['ecowitt'])) ? $a['ecowitt'] : array();
+    if (!$e || empty($e['ein'])) {
+        return bw_pruefzeile(-1, $f, bw_t('TEST.A_EW_NOCH_NICHT'));
+    }
+    $wann = bw_e(bw_uhrzeit(isset($e['ts']) ? $e['ts'] : 0));
+    if (!empty($e['ok'])) {
+        return bw_pruefzeile(1, $f, sprintf(bw_t('TEST.A_EW_OK'),
+            (float) (isset($e['tag_mm']) ? $e['tag_mm'] : 0), $wann));
+    }
+    $bisher = isset($e['bisher']) ? (string) $e['bisher'] : '';
+    $bt = $bisher === 'station' ? bw_t('QUELL.HK_STATION')
+        : ($bisher === 'open-meteo' ? bw_t('QUELL.HK_ONLINE') : bw_t('QUELL.HK_KEINE'));
+    return bw_pruefzeile(0, $f, sprintf(bw_t('TEST.A_EW_AUSGEFALLEN'), $wann,
+        bw_e((string) (isset($e['grund']) ? $e['grund'] : '')), bw_e($bt)));
+}
+
 function bw_pruefungen()
 {
     $zeilen = array();
@@ -503,6 +576,10 @@ function bw_pruefungen()
         $zeilen[] = bw_pruefzeile($alter <= $bw_gr ? 1 : 0, bw_t('TEST.F_ALTER'),
             sprintf(bw_t('TEST.A_ALTER'), (int) round($alter / 60), (int) round($bw_gr / 60)));
     }
+    /* b1 (Verbesserungsbau 30.09.2026): Wetterquelle, letzter guter Plan. */
+    $zeilen[] = bw_wetterquelle_zeile($cfg, $a);
+    /* Wetter-1: Regen aus der Ecowitt-Weiche. */
+    $zeilen[] = bw_ecowitt_zeile($cfg, $a);
 
     $v = bw_verlauf();
     $tage = isset($v['tage']) && is_array($v['tage']) ? count($v['tage']) : 0;

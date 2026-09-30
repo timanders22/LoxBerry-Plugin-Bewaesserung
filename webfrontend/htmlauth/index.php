@@ -112,6 +112,10 @@ $bw_misserfolg = array();
 $bw_erk = null;
 $bw_erk_fehler = '';
 $bw_bro = null;
+/* X-2 (Verbesserungsbau 30.09.2026): welches Formular, welche Felder
+ * beanstandet wurden - daraus reisen die Eingaben mit der Einmalmeldung. */
+$bw_eingaben_form = '';
+$bw_beanstandet = array();
 
 /* ---------------------------------------------------------------- *
  * Der Wachposten - EIN Posten, vor allen Handlern.
@@ -176,6 +180,14 @@ if ($bw_post && isset($_POST['speichern'])) {
      * 0.9.21 standen sie nur hier, und der Rueckspielweg kannte gar keine:
      * elf vom Formular verbotene Werte wurden elfmal angenommen. */
     $bw_gr = bw_grenzen();
+    /* X-2: neue Beanstandungen seit dem letzten Merken gehoeren zu $feld. */
+    $bw_n0 = count($bw_fehler);
+    $bw_merke = function ($feld) use (&$bw_fehler, &$bw_beanstandet, &$bw_n0) {
+        if ($feld !== '' && count($bw_fehler) > $bw_n0) {
+            $bw_beanstandet[] = $feld;
+        }
+        $bw_n0 = count($bw_fehler);
+    };
     foreach (array('breite', 'laenge', 'hoehe', 'wind_hoehe') as $f) {
         $g = $bw_gr[$f];
         $w = $bw_kommazahl($bw_sauber($f));
@@ -187,6 +199,7 @@ if ($bw_post && isset($_POST['speichern'])) {
         } else {
             $bw_cfg[$f] = (float) $w;
         }
+        $bw_merke($f);
     }
     foreach (array('vorschautage', 'zonendauer_s', 'pause_min',
                    'max_durchlaeufe', 'takt') as $f) {
@@ -200,6 +213,7 @@ if ($bw_post && isset($_POST['speichern'])) {
         } else {
             $bw_cfg[$f] = (int) $w;
         }
+        $bw_merke($f);
     }
     foreach (array('regen_anteil', 'wirkungsgrad') as $f) {
         $w = $bw_kommazahl($bw_sauber($f));
@@ -208,6 +222,7 @@ if ($bw_post && isset($_POST['speichern'])) {
         } else {
             $bw_cfg[$f] = (float) $w;
         }
+        $bw_merke($f);
     }
     foreach (array('fenster_von', 'fenster_bis') as $f) {
         $w = $bw_sauber($f);
@@ -216,6 +231,7 @@ if ($bw_post && isset($_POST['speichern'])) {
         } else {
             $bw_cfg[$f] = $w;
         }
+        $bw_merke($f);
     }
     // Gleiche Anfangs- und Endzeit wird abgewiesen.
     //
@@ -228,6 +244,7 @@ if ($bw_post && isset($_POST['speichern'])) {
     if (isset($bw_cfg['fenster_von'], $bw_cfg['fenster_bis'])
         && $bw_cfg['fenster_von'] === $bw_cfg['fenster_bis']) {
         $bw_fehler[] = bw_t('EINST.FEHLER_FENSTER_GLEICH');
+        $bw_merke('fenster_bis');
     }
     /* mqtt_ein und mqtt_topic werden hier NICHT mehr angefasst: sie
      * wohnen im Reiter MQTT und haben dort ein eigenes Formular. Die
@@ -244,6 +261,7 @@ if ($bw_post && isset($_POST['speichern'])) {
     } else {
         $bw_cfg['rechenzeit'] = $bw_rz;
     }
+    $bw_merke('rechenzeit');
 
     foreach (array('zonendauer_max_s', 'hoechstalter',
                    'melden_limit_tage', 'melden_station_tage') as $bw_f) {
@@ -257,6 +275,7 @@ if ($bw_post && isset($_POST['speichern'])) {
         } else {
             $bw_cfg[$bw_f] = (int) $bw_w;
         }
+        $bw_merke($bw_f);
     }
 
     // Die drei Sperrgrenzen. Sie duerfen negativ sein - Frost bei -3 Grad
@@ -272,14 +291,41 @@ if ($bw_post && isset($_POST['speichern'])) {
         } else {
             $bw_cfg[$bw_f] = (float) $bw_w;
         }
+        $bw_merke($bw_f);
     }
 
     // Die Haken. Sie stehen alle im SELBEN Formular wie der Speichern-Knopf -
     // sonst setzte isset() sie beim Absenden eines anderen Formulars auf 0,
     // und der Benutzer verloere Werte, die er nie gesehen hat.
     foreach (array('luecken_fuellen', 'plan_festhalten', 'frost_ein',
-                   'wind_ein', 'regen_ein', 'melden_ein') as $bw_f) {
+                   'wind_ein', 'regen_ein', 'melden_ein', 'ecowitt_regen') as $bw_f) {
         $bw_cfg[$bw_f] = isset($_POST[$bw_f]) ? 1 : 0;
+    }
+
+    /* Wetter-1 (Verbesserungsbau 30.09.2026): Ordner und Token der
+     * Ecowitt-Weiche. Geprueft wird der ROHE Wert - nichts wird still
+     * entfernt. Ein leeres Tokenfeld heisst "unveraendert": das Token
+     * reist nie ins Formular zurueck. */
+    $bw_eo = (isset($_POST['ecowitt_ordner']) && is_string($_POST['ecowitt_ordner']))
+        ? trim($_POST['ecowitt_ordner']) : '';
+    if (!bw_wert_pruefen('ecowitt_ordner', $bw_eo)) {
+        $bw_fehler[] = bw_t('EINST.FEHLER_ECOWITT_ORDNER');
+    } else {
+        $bw_cfg['ecowitt_ordner'] = $bw_eo;
+    }
+    $bw_merke('ecowitt_ordner');
+    $bw_et = (isset($_POST['ecowitt_token']) && is_string($_POST['ecowitt_token']))
+        ? trim($_POST['ecowitt_token']) : '';
+    if ($bw_et !== '') {
+        if (!bw_wert_pruefen('ecowitt_token', $bw_et)) {
+            $bw_fehler[] = bw_t('EINST.FEHLER_ECOWITT_TOKEN');
+        } else {
+            $bw_cfg['ecowitt_token'] = $bw_et;
+        }
+    }
+    $bw_merke('ecowitt_token');
+    if ($bw_beanstandet) {
+        $bw_eingaben_form = 'settings';
     }
 
     if (!$bw_fehler) {
@@ -302,6 +348,8 @@ if ($bw_post && isset($_POST['save_mqtt'])) {
         (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
     if ($bw_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $bw_mtopic)) {
         $bw_fehler[] = bw_t('EINST.FEHLER_TOPIC');
+        $bw_eingaben_form = 'mqtt';
+        $bw_beanstandet[] = 'mqtt_topic';
     } else {
         $bw_mcfg['mqtt_topic'] = trim($bw_mtopic, '/');
     }
@@ -471,6 +519,8 @@ if ($bw_post && isset($_POST['weg_speichern'])) {
     $bw_u = trim((string) (isset($_POST['http_url']) ? $_POST['http_url'] : ''));
     if ($bw_u !== '' && !preg_match('#^https?://\S{3,200}$#', $bw_u)) {
         $bw_fehler[] = bw_t('QUELL.FEHLER_URL');
+        $bw_eingaben_form = 'quellen_weg';
+        $bw_beanstandet[] = 'http_url';
     } else {
         $bw_q['http_url'] = $bw_u;
     }
@@ -478,6 +528,8 @@ if ($bw_post && isset($_POST['weg_speichern'])) {
         (string) (isset($_POST['mqtt_thema']) ? $_POST['mqtt_thema'] : '')));
     if ($bw_th !== '' && !preg_match('#^[A-Za-z0-9_/\#+.\-]{1,128}$#', $bw_th)) {
         $bw_fehler[] = bw_t('QUELL.FEHLER_HORCHTHEMA');
+        $bw_eingaben_form = 'quellen_weg';
+        $bw_beanstandet[] = 'mqtt_thema';
     } else {
         $bw_q['mqtt_thema'] = $bw_th;
     }
@@ -526,6 +578,8 @@ if ($bw_post && isset($_POST['quellen_speichern'])) {
     $bw_url = trim((string) (isset($_POST['http_url']) ? $_POST['http_url'] : ''));
     if ($bw_url !== '' && !preg_match('#^https?://\S{3,200}$#', $bw_url)) {
         $bw_fehler[] = bw_t('QUELL.FEHLER_URL');
+        $bw_eingaben_form = 'quellen';
+        $bw_beanstandet[] = 'http_url';
     } else {
         $bw_q['http_url'] = $bw_url;
     }
@@ -535,6 +589,8 @@ if ($bw_post && isset($_POST['quellen_speichern'])) {
         $bw_weg = isset($_POST['weg'][$bw_g]) ? (string) $_POST['weg'][$bw_g] : '';
         if (!in_array($bw_weg, array('', 'mqtt', 'http'), true)) {
             $bw_fehler[] = sprintf(bw_t('QUELL.FEHLER_WEG'), bw_e($bw_g));
+            $bw_eingaben_form = 'quellen';
+            $bw_beanstandet[] = 'weg[' . $bw_g . ']';
             continue;
         }
         if ($bw_weg === '') { continue; }
@@ -546,10 +602,14 @@ if ($bw_post && isset($_POST['quellen_speichern'])) {
             (string) (isset($_POST['einheit'][$bw_g]) ? $_POST['einheit'][$bw_g] : '')));
         if ($bw_weg === 'mqtt' && $bw_thema === '') {
             $bw_fehler[] = sprintf(bw_t('QUELL.FEHLER_THEMA'), bw_e($bw_g));
+            $bw_eingaben_form = 'quellen';
+            $bw_beanstandet[] = 'thema[' . $bw_g . ']';
             continue;
         }
         if ($bw_weg === 'http' && $bw_pfad === '') {
             $bw_fehler[] = sprintf(bw_t('QUELL.FEHLER_PFAD'), bw_e($bw_g));
+            $bw_eingaben_form = 'quellen';
+            $bw_beanstandet[] = 'pfad[' . $bw_g . ']';
             continue;
         }
         $bw_eintrag = array('weg' => $bw_weg);
@@ -616,19 +676,27 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
         if ($bw_name === '') {
             if ($bw_s !== '') {
                 $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_NAME_LEER'), bw_e($bw_s));
+                $bw_eingaben_form = 'zonen';
+                $bw_beanstandet[] = 'z_name[' . $bw_i . ']';
             }
             continue;
         }
         if ($bw_s === '') {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_SCHLUESSEL'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_schluessel[' . $bw_i . ']';
             continue;
         }
         if (!preg_match('/^[a-z0-9_-]{1,40}$/', $bw_s)) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_SCHLUESSEL_MUSTER'), bw_e($bw_name), bw_e($bw_s));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_schluessel[' . $bw_i . ']';
             continue;
         }
         if (isset($bw_schluessel[$bw_s])) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_DOPPELT'), bw_e($bw_s));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_schluessel[' . $bw_i . ']';
             continue;
         }
         $bw_schluessel[$bw_s] = 1;
@@ -640,6 +708,8 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
         $bw_fl = $bw_hol('z_flaeche');
         if ($bw_fl !== '' && (!is_numeric($bw_fl) || (float) $bw_fl < 0 || (float) $bw_fl > 100000)) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_FLAECHE'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_flaeche[' . $bw_i . ']';
             continue;
         }
         $bw_bep = preg_replace('/[^a-z_]/', '', strtolower($bw_hol('z_bepflanzung')));
@@ -648,17 +718,24 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
         $bw_bodd = isset($bw_pf['boden'][$bw_bod]) ? $bw_pf['boden'][$bw_bod] : null;
         if ($bw_bepd === null || $bw_bodd === null) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_AUSWAHL'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_bepflanzung[' . $bw_i . ']';
+            $bw_beanstandet[] = 'z_boden[' . $bw_i . ']';
             continue;
         }
         $bw_rate = $bw_hol('z_rate');
         if ($bw_rate !== '' && (!is_numeric($bw_rate) || (float) $bw_rate < 0 || (float) $bw_rate > 200)) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_RATE'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_rate[' . $bw_i . ']';
             continue;
         }
         // Mikroklima-Faktor. Leer heisst 1,0 - und das ist der Regelfall.
         $bw_mk = $bw_hol('z_mikroklima');
         if ($bw_mk !== '' && (!is_numeric($bw_mk) || (float) $bw_mk < 0.3 || (float) $bw_mk > 1.5)) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_MIKRO'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_mikroklima[' . $bw_i . ']';
             continue;
         }
         $bw_alt = bw_zone($bw_s);
@@ -677,10 +754,16 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
          * bw_zonen_grenzen() - dieselben prueft das Zurueckspielen (O5).
          */
         $bw_fein_fehler = array();
-        $bw_fein = function ($k, $roh, $titel) use (&$bw_fein_fehler) {
+        /* X-2: welches Formularfeld beanstandet wurde. */
+        $bw_fein_felder = array();
+        $bw_fein_name = array('dauer_s' => 'z_dauer', 'hoehe_pflanze' => 'z_hoehe_pflanze',
+                              'abfluss' => 'z_abfluss', 'sensor_gewicht' => 'z_sensor_gewicht',
+                              'theta_fc_eigen' => 'z_theta_fc', 'theta_wp_eigen' => 'z_theta_wp');
+        $bw_fein = function ($k, $roh, $titel) use (&$bw_fein_fehler, &$bw_fein_felder, $bw_fein_name) {
             if ($roh === '') { return null; }
             if (!bw_zonen_zahl_taugt($k, $roh)) {
                 $bw_fein_fehler[] = $titel;
+                if (isset($bw_fein_name[$k])) { $bw_fein_felder[] = $bw_fein_name[$k]; }
                 return null;
             }
             $g = bw_zonen_grenzen();
@@ -704,14 +787,20 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             ? $_POST['z_giess_art'][$bw_i] : 'minuten';
         if (!in_array($bw_gart, array('minuten', 'durchlaeufe', 'mm'), true)) {
             $bw_fein_fehler[] = $bw_klar('ZONE.T_GIESS_ART');
+            $bw_fein_felder[] = 'z_giess_art';
         }
         if ($bw_fein_fehler) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_FEIN'), bw_e($bw_name),
                                    bw_e(implode(', ', $bw_fein_fehler)));
+            $bw_eingaben_form = 'zonen';
+            foreach ($bw_fein_felder as $bw_ff) { $bw_beanstandet[] = $bw_ff . '[' . $bw_i . ']'; }
             continue;
         }
         if ($bw_tfc !== null && $bw_twp !== null && $bw_twp >= $bw_tfc) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_THETA'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_theta_fc[' . $bw_i . ']';
+            $bw_beanstandet[] = 'z_theta_wp[' . $bw_i . ']';
             $bw_tfc = null; $bw_twp = null;
         }
         $bw_gth = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
@@ -808,9 +897,14 @@ if ($bw_post && isset($_POST['becher_senden'])) {
     $bw_zone = bw_zone($bw_s);
     if ($bw_zone === null) {
         $bw_fehler[] = bw_t('ZONE.FEHLER_UNBEKANNT');
+        $bw_eingaben_form = 'becher';
+        $bw_beanstandet[] = 'becher';
     } elseif (!is_numeric($bw_mm) || !is_numeric($bw_min)
               || (float) $bw_mm <= 0 || (float) $bw_min <= 0) {
         $bw_fehler[] = bw_t('ZONE.FEHLER_BECHER');
+        $bw_eingaben_form = 'becher';
+        if (!is_numeric($bw_mm) || (float) $bw_mm <= 0) { $bw_beanstandet[] = 'becher_mm'; }
+        if (!is_numeric($bw_min) || (float) $bw_min <= 0) { $bw_beanstandet[] = 'becher_min'; }
     } else {
         $bw_rate = bw_becherprobe((float) $bw_mm, (float) $bw_min);
         $bw_liste = array();
@@ -875,7 +969,16 @@ if ($bw_post && isset($_POST['selbsttest'])) {
  * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
  * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
 if ($bw_post && isset($_POST['bw_sichern'])) {
-    $bw_js = json_encode(bw_sicherung_bauen(),
+    /* X-3 (Verbesserungsbau 30.09.2026): besteht ein gespeicherter Wert das
+     * eigene Zurueckspielen nicht, geht die Sicherung trotzdem vollstaendig
+     * hinaus - mit '_warnung' (nur Namen, nie Werte). */
+    $bw_sich = bw_sicherung_bauen();
+    $bw_sw = bw_rueckspiel_altwerte();
+    if ($bw_sw) {
+        $bw_sich = array('_warnung' => sprintf(bw_t('EINST.SICH_ALTWERTE_DATEI'),
+                                               implode(', ', $bw_sw))) + $bw_sich;
+    }
+    $bw_js = json_encode($bw_sich,
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($bw_js !== false) {
         header('Content-Type: application/json; charset=utf-8');
@@ -976,11 +1079,16 @@ if ($bw_post) {
     $bw_merk = array('meldungen' => $bw_meldungen, 'fehler' => $bw_fehler,
                      'misserfolg' => $bw_misserfolg, 'ausgabe' => $bw_ausgabe,
                      'erk' => $bw_erk, 'erk_fehler' => $bw_erk_fehler,
-                     'bro' => $bw_bro, 'tab' => $bw_tab);
+                     'bro' => $bw_bro, 'tab' => $bw_tab,
+                     /* X-2 */
+                     'eingaben' => bw_eingaben_sammeln($bw_eingaben_form, $bw_beanstandet));
     if (bw_einmalmeldung_schreiben($bw_merk)) {
         header('Location: index.php?form=' . substr($bw_tab, 4), true, 303);
         exit;
     }
+    /* X-2: auch ohne Umleitung (Einmalmeldung nicht schreibbar) die
+     * Eingaben zeigen. */
+    bw_eingaben_setzen($bw_merk['eingaben']);
 } elseif ((isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'GET') {
     $bw_em = bw_einmalmeldung_holen();
     if ($bw_em) {
@@ -996,6 +1104,13 @@ if ($bw_post) {
         $bw_bro = isset($bw_em['bro']) && is_array($bw_em['bro']) ? $bw_em['bro'] : null;
         if (isset($bw_em['tab']) && is_string($bw_em['tab']) && preg_match($bw_muster, $bw_em['tab'])) {
             $bw_tab = $bw_em['tab'];
+        }
+        /* X-2: nach einer Beanstandung die eingetippten Werte zeigen. */
+        if (isset($bw_em['eingaben']) && is_array($bw_em['eingaben'])) {
+            bw_eingaben_setzen($bw_em['eingaben']);
+            if (bw_eingaben_aktiv() !== '') {
+                $bw_meldungen[] = bw_t('ALLG.EINGABEN_ZURUECK');
+            }
         }
     }
 }
@@ -1085,6 +1200,10 @@ if ($bw_rahmen) {
 .sm-balken { height: 10px; border-radius: 5px; background: #eee; overflow: hidden; min-width: 90px; }
 .sm-balken i { display: block; height: 100%; background: #6dac20; }
 .sm-schaetz { color: #d97706; font-weight: 600; }
+/* X-2 (Verbesserungsbau 30.09.2026): rot umrandetes Feld nach einer
+ * Beanstandung - eigene Zutat dieser Linie. */
+.sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
+    border: 2px solid #c62828 !important; background-color: #fff5f5; }
 </style>
 
 <div class="sm-wrap">
@@ -1179,18 +1298,18 @@ if ($bw_rahmen) {
 <?php foreach (array('breite', 'laenge', 'hoehe', 'wind_hoehe') as $bw_f) { ?>
 <div class="sm-feld">
   <label for="<?= $bw_f ?>"><?= bw_t('EINST.L_' . strtoupper($bw_f)) ?></label>
-  <input data-role="none" type="text" name="<?= $bw_f ?>" id="<?= $bw_f ?>" value="<?= bw_e($bw_cfg[$bw_f]) ?>">
+  <input data-role="none" type="text" name="<?= $bw_f ?>" id="<?= $bw_f ?>" value="<?= bw_e(bw_eingabe('settings', $bw_f, $bw_cfg[$bw_f])) ?>"<?= bw_markierung($bw_f) ?>>
   <?php if ($bw_f === 'wind_hoehe') { ?><p class="sm-hilfe"><?= bw_t('EINST.H_WIND_HOEHE') ?></p><?php } ?>
 </div>
 <?php } ?>
-<label><input data-role="none" type="checkbox" name="kuestennah" value="1"<?= !empty($bw_cfg['kuestennah']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="kuestennah" value="1"<?= bw_eingabe_an('settings', 'kuestennah', !empty($bw_cfg['kuestennah'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_KUESTENNAH')) ?></label>
 
 <h2><?= bw_e(bw_t('EINST.H_RECHNUNG')) ?></h2>
 <?php foreach (array('vorschautage', 'regen_anteil', 'wirkungsgrad', 'takt') as $bw_f) { ?>
 <div class="sm-feld">
   <label for="<?= $bw_f ?>"><?= bw_t('EINST.L_' . strtoupper($bw_f)) ?></label>
-  <input data-role="none" type="text" name="<?= $bw_f ?>" id="<?= $bw_f ?>" value="<?= bw_e($bw_cfg[$bw_f]) ?>">
+  <input data-role="none" type="text" name="<?= $bw_f ?>" id="<?= $bw_f ?>" value="<?= bw_e(bw_eingabe('settings', $bw_f, $bw_cfg[$bw_f])) ?>"<?= bw_markierung($bw_f) ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_' . strtoupper($bw_f)) ?></p>
 </div>
 <?php } ?>
@@ -1200,69 +1319,87 @@ if ($bw_rahmen) {
 <?php foreach (array('zonendauer_s', 'pause_min', 'fenster_von', 'fenster_bis', 'max_durchlaeufe') as $bw_f) { ?>
 <div class="sm-feld">
   <label for="<?= $bw_f ?>"><?= bw_t('EINST.L_' . strtoupper($bw_f)) ?></label>
-  <input data-role="none" type="text" name="<?= $bw_f ?>" id="<?= $bw_f ?>" value="<?= bw_e($bw_cfg[$bw_f]) ?>">
+  <input data-role="none" type="text" name="<?= $bw_f ?>" id="<?= $bw_f ?>" value="<?= bw_e(bw_eingabe('settings', $bw_f, $bw_cfg[$bw_f])) ?>"<?= bw_markierung($bw_f) ?>>
 </div>
 <?php } ?>
 
 <div class="sm-feld">
   <label for="zonendauer_max_s"><?= bw_t('EINST.L_ZONENDAUER_MAX_S') ?></label>
-  <input data-role="none" type="text" name="zonendauer_max_s" id="zonendauer_max_s" value="<?= bw_e($bw_cfg['zonendauer_max_s']) ?>">
+  <input data-role="none" type="text" name="zonendauer_max_s" id="zonendauer_max_s" value="<?= bw_e(bw_eingabe('settings', 'zonendauer_max_s', $bw_cfg['zonendauer_max_s'])) ?>"<?= bw_markierung('zonendauer_max_s') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_ZONENDAUER_MAX_S') ?></p>
 </div>
 
 <h2><?= bw_e(bw_t('EINST.H_NACHTPLAN')) ?></h2>
 <p class="sm-hilfe"><?= bw_t('EINST.NACHTPLAN_ERKLAERUNG') ?></p>
-<label><input data-role="none" type="checkbox" name="plan_festhalten" value="1"<?= !empty($bw_cfg['plan_festhalten']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="plan_festhalten" value="1"<?= bw_eingabe_an('settings', 'plan_festhalten', !empty($bw_cfg['plan_festhalten'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_PLAN_FESTHALTEN')) ?></label>
 <div class="sm-feld">
   <label for="rechenzeit"><?= bw_t('EINST.L_RECHENZEIT') ?></label>
-  <input data-role="none" type="text" name="rechenzeit" id="rechenzeit" value="<?= bw_e($bw_cfg['rechenzeit']) ?>">
+  <input data-role="none" type="text" name="rechenzeit" id="rechenzeit" value="<?= bw_e(bw_eingabe('settings', 'rechenzeit', $bw_cfg['rechenzeit'])) ?>"<?= bw_markierung('rechenzeit') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_RECHENZEIT') ?></p>
 </div>
 
 <h2><?= bw_e(bw_t('EINST.H_SPERREN')) ?></h2>
 <div class="sm-warnung"><?= bw_t('EINST.SPERREN_ERKLAERUNG') ?></div>
-<label><input data-role="none" type="checkbox" name="frost_ein" value="1"<?= !empty($bw_cfg['frost_ein']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="frost_ein" value="1"<?= bw_eingabe_an('settings', 'frost_ein', !empty($bw_cfg['frost_ein'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_FROST_EIN')) ?></label>
 <div class="sm-feld">
   <label for="frost_c"><?= bw_t('EINST.L_FROST_C') ?></label>
-  <input data-role="none" type="text" name="frost_c" id="frost_c" value="<?= bw_e($bw_cfg['frost_c']) ?>">
+  <input data-role="none" type="text" name="frost_c" id="frost_c" value="<?= bw_e(bw_eingabe('settings', 'frost_c', $bw_cfg['frost_c'])) ?>"<?= bw_markierung('frost_c') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_FROST_C') ?></p>
 </div>
-<label><input data-role="none" type="checkbox" name="wind_ein" value="1"<?= !empty($bw_cfg['wind_ein']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="wind_ein" value="1"<?= bw_eingabe_an('settings', 'wind_ein', !empty($bw_cfg['wind_ein'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_WIND_EIN')) ?></label>
 <div class="sm-feld">
   <label for="wind_kmh_max"><?= bw_t('EINST.L_WIND_KMH_MAX') ?></label>
-  <input data-role="none" type="text" name="wind_kmh_max" id="wind_kmh_max" value="<?= bw_e($bw_cfg['wind_kmh_max']) ?>">
+  <input data-role="none" type="text" name="wind_kmh_max" id="wind_kmh_max" value="<?= bw_e(bw_eingabe('settings', 'wind_kmh_max', $bw_cfg['wind_kmh_max'])) ?>"<?= bw_markierung('wind_kmh_max') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_WIND_KMH_MAX') ?></p>
 </div>
-<label><input data-role="none" type="checkbox" name="regen_ein" value="1"<?= !empty($bw_cfg['regen_ein']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="regen_ein" value="1"<?= bw_eingabe_an('settings', 'regen_ein', !empty($bw_cfg['regen_ein'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_REGEN_EIN')) ?></label>
 <div class="sm-feld">
   <label for="regen_mmh_max"><?= bw_t('EINST.L_REGEN_MMH_MAX') ?></label>
-  <input data-role="none" type="text" name="regen_mmh_max" id="regen_mmh_max" value="<?= bw_e($bw_cfg['regen_mmh_max']) ?>">
+  <input data-role="none" type="text" name="regen_mmh_max" id="regen_mmh_max" value="<?= bw_e(bw_eingabe('settings', 'regen_mmh_max', $bw_cfg['regen_mmh_max'])) ?>"<?= bw_markierung('regen_mmh_max') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_REGEN_MMH_MAX') ?></p>
 </div>
 
 <h2><?= bw_e(bw_t('EINST.H_WEITERES')) ?></h2>
-<label><input data-role="none" type="checkbox" name="luecken_fuellen" value="1"<?= !empty($bw_cfg['luecken_fuellen']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="luecken_fuellen" value="1"<?= bw_eingabe_an('settings', 'luecken_fuellen', !empty($bw_cfg['luecken_fuellen'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_LUECKEN_FUELLEN')) ?></label>
 <p class="sm-hilfe"><?= bw_t('EINST.H_LUECKEN_FUELLEN') ?></p>
 <div class="sm-feld">
   <label for="hoechstalter"><?= bw_t('EINST.L_HOECHSTALTER') ?></label>
-  <input data-role="none" type="text" name="hoechstalter" id="hoechstalter" value="<?= bw_e($bw_cfg['hoechstalter']) ?>">
+  <input data-role="none" type="text" name="hoechstalter" id="hoechstalter" value="<?= bw_e(bw_eingabe('settings', 'hoechstalter', $bw_cfg['hoechstalter'])) ?>"<?= bw_markierung('hoechstalter') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_HOECHSTALTER') ?></p>
 </div>
-<label><input data-role="none" type="checkbox" name="melden_ein" value="1"<?= !empty($bw_cfg['melden_ein']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="melden_ein" value="1"<?= bw_eingabe_an('settings', 'melden_ein', !empty($bw_cfg['melden_ein'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_MELDEN_EIN')) ?></label>
 <p class="sm-hilfe"><?= bw_t('EINST.H_MELDEN_EIN') ?></p>
 <div class="sm-feld">
   <label for="melden_limit_tage"><?= bw_t('EINST.L_MELDEN_LIMIT_TAGE') ?></label>
-  <input data-role="none" type="text" name="melden_limit_tage" id="melden_limit_tage" value="<?= bw_e($bw_cfg['melden_limit_tage']) ?>">
+  <input data-role="none" type="text" name="melden_limit_tage" id="melden_limit_tage" value="<?= bw_e(bw_eingabe('settings', 'melden_limit_tage', $bw_cfg['melden_limit_tage'])) ?>"<?= bw_markierung('melden_limit_tage') ?>>
 </div>
 <div class="sm-feld">
   <label for="melden_station_tage"><?= bw_t('EINST.L_MELDEN_STATION_TAGE') ?></label>
-  <input data-role="none" type="text" name="melden_station_tage" id="melden_station_tage" value="<?= bw_e($bw_cfg['melden_station_tage']) ?>">
+  <input data-role="none" type="text" name="melden_station_tage" id="melden_station_tage" value="<?= bw_e(bw_eingabe('settings', 'melden_station_tage', $bw_cfg['melden_station_tage'])) ?>"<?= bw_markierung('melden_station_tage') ?>>
+</div>
+
+<?php /* Wetter-1 (Verbesserungsbau 30.09.2026): Regen aus der
+         Ecowitt-Weiche. Ab Werk aus; das Token reist nie ins Formular. */ ?>
+<h2><?= bw_e(bw_t('EINST.H_ECOWITT')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('EINST.ECOWITT_ERKLAERUNG') ?></p>
+<label><input data-role="none" type="checkbox" name="ecowitt_regen" value="1"<?= bw_eingabe_an('settings', 'ecowitt_regen', !empty($bw_cfg['ecowitt_regen'])) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_ECOWITT_REGEN')) ?></label>
+<div class="sm-feld">
+  <label for="ecowitt_ordner"><?= bw_t('EINST.L_ECOWITT_ORDNER') ?></label>
+  <input data-role="none" type="text" name="ecowitt_ordner" id="ecowitt_ordner" value="<?= bw_e(bw_eingabe('settings', 'ecowitt_ordner', $bw_cfg['ecowitt_ordner'])) ?>"<?= bw_markierung('ecowitt_ordner') ?>>
+  <p class="sm-hilfe"><?= bw_t('EINST.H_ECOWITT_ORDNER') ?></p>
+</div>
+<div class="sm-feld">
+  <label for="ecowitt_token"><?= bw_t('EINST.L_ECOWITT_TOKEN') ?></label>
+  <input data-role="none" type="password" name="ecowitt_token" id="ecowitt_token" value="" autocomplete="off"<?= bw_markierung('ecowitt_token') ?>
+         placeholder="<?= bw_e(trim((string) $bw_cfg['ecowitt_token']) !== '' ? bw_t('EINST.P_ECOWITT_TOKEN_DA') : bw_t('EINST.P_ECOWITT_TOKEN_LEER')) ?>">
+  <p class="sm-hilfe"><?= bw_t('EINST.H_ECOWITT_TOKEN') ?></p>
 </div>
 
 <?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
@@ -1273,6 +1410,12 @@ if ($bw_rahmen) {
 <h2><?= bw_e(bw_t('EINST.H_SICHERUNG')) ?></h2>
 <div class="sm-hinweis"><?= bw_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= bw_t('EINST.SICH_WARNUNG') ?></div>
+<?php /* X-3 (Verbesserungsbau 30.09.2026): dieselbe Pruefung wie das
+         Zurueckspielen, nur Namen. */
+      $bw_sw = bw_rueckspiel_altwerte();
+      if ($bw_sw) { ?>
+<div class="sm-warnung"><?= sprintf(bw_t('EINST.SICH_ALTWERTE'), bw_e(implode(', ', $bw_sw))) ?></div>
+<?php } ?>
 <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
      exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
      Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
@@ -1369,16 +1512,16 @@ foreach (bw_tabelle($bw_vorl['groessen']) as $bw_g => $bw_gd) {
 <tr>
   <td><?= bw_e(bw_txt($bw_gd)) ?><?= !empty($bw_gd['pflicht']) ? ' <span class="sm-aus">*</span>' : '' ?>
       <div class="sm-hilfe sm-mono"><?= bw_e($bw_g) ?> [<?= bw_e($bw_gd['einheit']) ?>]</div></td>
-  <td><select data-role="none" name="weg[<?= bw_e($bw_g) ?>]" style="min-width:88px">
+  <td><select data-role="none" name="weg[<?= bw_e($bw_g) ?>]" style="min-width:88px"<?= bw_markierung('weg[' . $bw_g . ']') ?>>
       <?php foreach (array('' => bw_t('QUELL.WEG_KEINE'), 'mqtt' => 'MQTT', 'http' => 'HTTP') as $bw_wk => $bw_wt) { ?>
-      <option value="<?= bw_e($bw_wk) ?>"<?= (isset($bw_f['weg']) ? $bw_f['weg'] : '') === $bw_wk ? ' selected' : '' ?>><?= bw_e($bw_wt) ?></option>
+      <option value="<?= bw_e($bw_wk) ?>"<?= bw_eingabe('quellen', 'weg[' . $bw_g . ']', isset($bw_f['weg']) ? $bw_f['weg'] : '') === $bw_wk ? ' selected' : '' ?>><?= bw_e($bw_wt) ?></option>
       <?php } ?></select></td>
   <td><input data-role="none" type="text" name="thema[<?= bw_e($bw_g) ?>]" size="20"
-             value="<?= bw_e(isset($bw_f['thema']) ? $bw_f['thema'] : '') ?>"></td>
+             value="<?= bw_e(bw_eingabe('quellen', 'thema[' . $bw_g . ']', isset($bw_f['thema']) ? $bw_f['thema'] : '')) ?>"<?= bw_markierung('thema[' . $bw_g . ']') ?>></td>
   <td><input data-role="none" type="text" name="pfad[<?= bw_e($bw_g) ?>]" size="16"
-             value="<?= bw_e(isset($bw_f['pfad']) ? $bw_f['pfad'] : '') ?>"></td>
+             value="<?= bw_e(bw_eingabe('quellen', 'pfad[' . $bw_g . ']', isset($bw_f['pfad']) ? $bw_f['pfad'] : '')) ?>"<?= bw_markierung('pfad[' . $bw_g . ']') ?>></td>
   <td><input data-role="none" type="text" name="einheit[<?= bw_e($bw_g) ?>]" size="5"
-             value="<?= bw_e(isset($bw_f['einheit_quelle']) ? $bw_f['einheit_quelle'] : '') ?>"></td>
+             value="<?= bw_e(bw_eingabe('quellen', 'einheit[' . $bw_g . ']', isset($bw_f['einheit_quelle']) ? $bw_f['einheit_quelle'] : '')) ?>"<?= bw_markierung('einheit[' . $bw_g . ']') ?>></td>
   <?php /* Der GRUND steht dabei.
            Bis 0.9.21 ueberschrieb der Open-Meteo-Rueckfall die Herkunft, und
            die Spalte zeigte "Open-Meteo" - auch dann, wenn die Groesse
@@ -1416,13 +1559,13 @@ foreach (bw_tabelle($bw_vorl['groessen']) as $bw_g => $bw_gd) {
   <?php $bw_u2 = (string) (isset($bw_q['http_url']) ? $bw_q['http_url'] : '');
         if (preg_match('/GATEWAY-ADRESSE|GERAET|BEISPIEL/i', $bw_u2)) { $bw_u2 = ''; } ?>
   <input data-role="none" type="text" name="http_url" id="http_url2"
-         value="<?= bw_e($bw_u2) ?>" placeholder="http://192.0.2.10/get_livedata_info">
+         value="<?= bw_e(bw_eingabe('quellen_weg', 'http_url', $bw_u2)) ?>" placeholder="http://192.0.2.10/get_livedata_info"<?= bw_markierung('http_url') ?>>
 </div>
 <div class="sm-feld">
   <label for="mqtt_thema"><?= bw_e(bw_t('QUELL.S1_L_MQTT')) ?></label>
   <input data-role="none" type="text" name="mqtt_thema" id="mqtt_thema"
-         value="<?= bw_e(isset($bw_q['mqtt_thema']) ? $bw_q['mqtt_thema'] : '') ?>"
-         placeholder="ecowitt/FCE8C0F0BCD3">
+         value="<?= bw_e(bw_eingabe('quellen_weg', 'mqtt_thema', isset($bw_q['mqtt_thema']) ? $bw_q['mqtt_thema'] : '')) ?>"
+         placeholder="ecowitt/FCE8C0F0BCD3"<?= bw_markierung('mqtt_thema') ?>>
   <p class="sm-hilfe"><?= bw_t('QUELL.S1_H_MQTT') ?></p>
 </div>
 <button data-role="none" class="sm-b sm-b-aktion" name="weg_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
@@ -1628,26 +1771,26 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
     $bw_z = isset($bw_zonen[$bw_i]) ? $bw_zonen[$bw_i] : array(); ?>
 <tr>
   <td><input data-role="none" type="text" name="z_name[<?= $bw_i ?>]" size="16"
-             value="<?= bw_e(isset($bw_z['name']) ? $bw_z['name'] : '') ?>"></td>
-  <td style="text-align:center"><input data-role="none" type="checkbox" name="z_zyklus[<?= $bw_i ?>]" value="1"<?= !empty($bw_z['im_zyklus']) ? ' checked' : '' ?>></td>
+             value="<?= bw_e(bw_eingabe('zonen', 'z_name[' . $bw_i . ']', isset($bw_z['name']) ? $bw_z['name'] : '')) ?>"<?= bw_markierung('z_name[' . $bw_i . ']') ?>></td>
+  <td style="text-align:center"><input data-role="none" type="checkbox" name="z_zyklus[<?= $bw_i ?>]" value="1"<?= bw_eingabe_an('zonen', 'z_zyklus[' . $bw_i . ']', !empty($bw_z['im_zyklus'])) ? ' checked' : '' ?>></td>
   <td><input data-role="none" type="text" name="z_schluessel[<?= $bw_i ?>]" size="9"
-             value="<?= bw_e(isset($bw_z['schluessel']) ? $bw_z['schluessel'] : '') ?>"></td>
+             value="<?= bw_e(bw_eingabe('zonen', 'z_schluessel[' . $bw_i . ']', isset($bw_z['schluessel']) ? $bw_z['schluessel'] : '')) ?>"<?= bw_markierung('z_schluessel[' . $bw_i . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_flaeche[<?= $bw_i ?>]" size="6"
-             value="<?= bw_e(isset($bw_z['flaeche']) ? $bw_z['flaeche'] : '') ?>"></td>
-  <td><select data-role="none" name="z_bepflanzung[<?= $bw_i ?>]">
+             value="<?= bw_e(bw_eingabe('zonen', 'z_flaeche[' . $bw_i . ']', isset($bw_z['flaeche']) ? $bw_z['flaeche'] : '')) ?>"<?= bw_markierung('z_flaeche[' . $bw_i . ']') ?>></td>
+  <td><select data-role="none" name="z_bepflanzung[<?= $bw_i ?>]"<?= bw_markierung('z_bepflanzung[' . $bw_i . ']') ?>>
       <?php foreach (bw_tabelle($bw_pf['bepflanzung']) as $bw_k => $bw_v) { ?>
-      <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['bepflanzung']) ? $bw_z['bepflanzung'] : 'rasen_kuehl') === $bw_k ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_v)) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
+      <option value="<?= bw_e($bw_k) ?>"<?= bw_eingabe('zonen', 'z_bepflanzung[' . $bw_i . ']', isset($bw_z['bepflanzung']) ? $bw_z['bepflanzung'] : 'rasen_kuehl') === $bw_k ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_v)) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
       <?php } ?></select></td>
-  <td><select data-role="none" name="z_boden[<?= $bw_i ?>]">
+  <td><select data-role="none" name="z_boden[<?= $bw_i ?>]"<?= bw_markierung('z_boden[' . $bw_i . ']') ?>>
       <?php foreach (bw_tabelle($bw_pf['boden']) as $bw_k => $bw_v) { ?>
-      <option value="<?= bw_e($bw_k) ?>"<?= (isset($bw_z['boden']) ? $bw_z['boden'] : 'lehm') === $bw_k ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_v)) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
+      <option value="<?= bw_e($bw_k) ?>"<?= bw_eingabe('zonen', 'z_boden[' . $bw_i . ']', isset($bw_z['boden']) ? $bw_z['boden'] : 'lehm') === $bw_k ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_v)) ?><?= !empty($bw_v['geschaetzt']) ? ' *' : '' ?></option>
       <?php } ?></select></td>
   <td><input data-role="none" type="text" name="z_rate[<?= $bw_i ?>]" size="5"
-             value="<?= bw_e(isset($bw_z['rate_mmh']) ? $bw_z['rate_mmh'] : '') ?>">
+             value="<?= bw_e(bw_eingabe('zonen', 'z_rate[' . $bw_i . ']', isset($bw_z['rate_mmh']) ? $bw_z['rate_mmh'] : '')) ?>"<?= bw_markierung('z_rate[' . $bw_i . ']') ?>>
       <select data-role="none" name="z_regner[<?= $bw_i ?>]" style="margin-top:3px">
       <option value=""><?= bw_e(bw_t('ZONE.REGNER_KEINER')) ?></option>
       <?php foreach (bw_tabelle($bw_pf['regner']) as $bw_rk => $bw_rv) { ?>
-      <option value="<?= bw_e($bw_rk) ?>"<?= (isset($bw_z['regner']) ? $bw_z['regner'] : '') === $bw_rk ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_rv)) ?> (<?= bw_e($bw_rv['mmh']) ?> mm/h)</option>
+      <option value="<?= bw_e($bw_rk) ?>"<?= bw_eingabe('zonen', 'z_regner[' . $bw_i . ']', isset($bw_z['regner']) ? $bw_z['regner'] : '') === $bw_rk ? ' selected' : '' ?>><?= bw_e(bw_txt($bw_rv)) ?> (<?= bw_e($bw_rv['mmh']) ?> mm/h)</option>
       <?php } ?></select>
       <?php if (!empty($bw_z['schluessel'])) { ?>
       <div class="sm-hilfe"><?= !empty($bw_z['rate_gemessen'])
@@ -1657,12 +1800,12 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
           : '<span class="sm-schaetz">' . bw_e(bw_t('ZONE.GESCHAETZT')) . '</span>' ?></div>
       <?php } ?></td>
   <td><input data-role="none" type="text" name="z_mikroklima[<?= $bw_i ?>]" size="4"
-             value="<?= bw_e(isset($bw_z['mikroklima']) && (float) $bw_z['mikroklima'] != 1.0
-                             ? $bw_z['mikroklima'] : '') ?>" placeholder="1,0"></td>
+             value="<?= bw_e(bw_eingabe('zonen', 'z_mikroklima[' . $bw_i . ']', isset($bw_z['mikroklima']) && (float) $bw_z['mikroklima'] != 1.0
+                             ? $bw_z['mikroklima'] : '')) ?>" placeholder="1,0"<?= bw_markierung('z_mikroklima[' . $bw_i . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_feuchte[<?= $bw_i ?>]" size="16"
-             value="<?= bw_e(isset($bw_z['feuchte_thema']) ? $bw_z['feuchte_thema'] : '') ?>"
+             value="<?= bw_e(bw_eingabe('zonen', 'z_feuchte[' . $bw_i . ']', isset($bw_z['feuchte_thema']) ? $bw_z['feuchte_thema'] : '')) ?>"
              placeholder="<?= bw_e(bw_t('ZONE.P_FEUCHTE')) ?>"></td>
-  <td style="text-align:center"><?php if (!empty($bw_z['schluessel'])) { ?><input data-role="none" type="checkbox" name="z_loeschen[<?= $bw_i ?>]" value="1"><?php } ?></td>
+  <td style="text-align:center"><?php if (!empty($bw_z['schluessel'])) { ?><input data-role="none" type="checkbox" name="z_loeschen[<?= $bw_i ?>]" value="1"<?= bw_eingabe_an('zonen', 'z_loeschen[' . $bw_i . ']', false) ? ' checked' : '' ?>><?php } ?></td>
 </tr>
 <?php } ?>
 </table>
@@ -1689,33 +1832,33 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
              durch bw_e(), das Zeichen daneben nicht. */ ?>
   <td class="sm-hilfe"><?= !empty($bw_z['name']) ? bw_e($bw_z['name']) : '&mdash;' ?></td>
   <td><input data-role="none" type="text" name="z_dauer[<?= $bw_j ?>]" size="5"
-             value="<?= bw_e(!empty($bw_z['dauer_s']) ? $bw_z['dauer_s'] : '') ?>"
-             placeholder="<?= bw_e($bw_cfg['zonendauer_s']) ?>"></td>
+             value="<?= bw_e(bw_eingabe('zonen', 'z_dauer[' . $bw_j . ']', !empty($bw_z['dauer_s']) ? $bw_z['dauer_s'] : '')) ?>"
+             placeholder="<?= bw_e($bw_cfg['zonendauer_s']) ?>"<?= bw_markierung('z_dauer[' . $bw_j . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_hoehe_pflanze[<?= $bw_j ?>]" size="5"
-             value="<?= bw_e(!empty($bw_z['hoehe_pflanze']) ? $bw_z['hoehe_pflanze'] : '') ?>"></td>
+             value="<?= bw_e(bw_eingabe('zonen', 'z_hoehe_pflanze[' . $bw_j . ']', !empty($bw_z['hoehe_pflanze']) ? $bw_z['hoehe_pflanze'] : '')) ?>"<?= bw_markierung('z_hoehe_pflanze[' . $bw_j . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_abfluss[<?= $bw_j ?>]" size="5"
-             value="<?= bw_e(!empty($bw_z['abfluss']) ? $bw_z['abfluss'] : '') ?>" placeholder="0"></td>
+             value="<?= bw_e(bw_eingabe('zonen', 'z_abfluss[' . $bw_j . ']', !empty($bw_z['abfluss']) ? $bw_z['abfluss'] : '')) ?>" placeholder="0"<?= bw_markierung('z_abfluss[' . $bw_j . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_sensor_gewicht[<?= $bw_j ?>]" size="5"
-             value="<?= bw_e(isset($bw_z['sensor_gewicht'])
-                 ? str_replace('.', ',', (string) $bw_z['sensor_gewicht']) : '') ?>" placeholder="0,5"></td>
+             value="<?= bw_e(bw_eingabe('zonen', 'z_sensor_gewicht[' . $bw_j . ']', isset($bw_z['sensor_gewicht'])
+                 ? str_replace('.', ',', (string) $bw_z['sensor_gewicht']) : '')) ?>" placeholder="0,5"<?= bw_markierung('z_sensor_gewicht[' . $bw_j . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_theta_fc[<?= $bw_j ?>]" size="5"
-             value="<?= bw_e(!empty($bw_z['theta_fc_eigen'])
-                 ? str_replace('.', ',', (string) $bw_z['theta_fc_eigen']) : '') ?>"
+             value="<?= bw_e(bw_eingabe('zonen', 'z_theta_fc[' . $bw_j . ']', !empty($bw_z['theta_fc_eigen'])
+                 ? str_replace('.', ',', (string) $bw_z['theta_fc_eigen']) : '')) ?>"
              placeholder="<?= bw_e(isset($bw_z['theta_fc'])
-                 ? str_replace('.', ',', (string) $bw_z['theta_fc']) : '') ?>"></td>
+                 ? str_replace('.', ',', (string) $bw_z['theta_fc']) : '') ?>"<?= bw_markierung('z_theta_fc[' . $bw_j . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_theta_wp[<?= $bw_j ?>]" size="5"
-             value="<?= bw_e(!empty($bw_z['theta_wp_eigen'])
-                 ? str_replace('.', ',', (string) $bw_z['theta_wp_eigen']) : '') ?>"
+             value="<?= bw_e(bw_eingabe('zonen', 'z_theta_wp[' . $bw_j . ']', !empty($bw_z['theta_wp_eigen'])
+                 ? str_replace('.', ',', (string) $bw_z['theta_wp_eigen']) : '')) ?>"
              placeholder="<?= bw_e(isset($bw_z['theta_wp'])
-                 ? str_replace('.', ',', (string) $bw_z['theta_wp']) : '') ?>"></td>
+                 ? str_replace('.', ',', (string) $bw_z['theta_wp']) : '') ?>"<?= bw_markierung('z_theta_wp[' . $bw_j . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_giess_thema[<?= $bw_j ?>]" size="18"
-             value="<?= bw_e(isset($bw_z['giess_thema']) ? $bw_z['giess_thema'] : '') ?>"
+             value="<?= bw_e(bw_eingabe('zonen', 'z_giess_thema[' . $bw_j . ']', isset($bw_z['giess_thema']) ? $bw_z['giess_thema'] : '')) ?>"
              placeholder="<?= bw_e(bw_t('ZONE.P_GIESS')) ?>"></td>
-  <td><select data-role="none" name="z_giess_art[<?= $bw_j ?>]">
+  <td><select data-role="none" name="z_giess_art[<?= $bw_j ?>]"<?= bw_markierung('z_giess_art[' . $bw_j . ']') ?>>
       <?php foreach (array('minuten' => bw_t('ZONE.GIESS_MINUTEN'),
                            'durchlaeufe' => bw_t('ZONE.GIESS_DURCHLAEUFE'),
                            'mm' => bw_t('ZONE.GIESS_MM')) as $bw_gk => $bw_gv) { ?>
-      <option value="<?= bw_e($bw_gk) ?>"<?= (isset($bw_z['giess_art']) ? $bw_z['giess_art'] : 'minuten') === $bw_gk ? ' selected' : '' ?>><?= bw_e($bw_gv) ?></option>
+      <option value="<?= bw_e($bw_gk) ?>"<?= bw_eingabe('zonen', 'z_giess_art[' . $bw_j . ']', isset($bw_z['giess_art']) ? $bw_z['giess_art'] : 'minuten') === $bw_gk ? ' selected' : '' ?>><?= bw_e($bw_gv) ?></option>
       <?php } ?></select></td>
 </tr>
 <?php } ?>
@@ -1741,15 +1884,15 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
   <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-zones">
 <div class="sm-feld"><label for="becher"><?= bw_e(bw_t('ZONE.L_BECHER_ZONE')) ?></label>
-<select data-role="none" name="becher" id="becher">
+<select data-role="none" name="becher" id="becher"<?= bw_markierung('becher') ?>>
 <?php foreach ($bw_zonen as $bw_z) { ?>
-<option value="<?= bw_e($bw_z['schluessel']) ?>"><?= bw_e($bw_z['name']) ?></option>
+<option value="<?= bw_e($bw_z['schluessel']) ?>"<?= bw_eingabe('becher', 'becher', '') === (string) $bw_z['schluessel'] ? ' selected' : '' ?>><?= bw_e($bw_z['name']) ?></option>
 <?php } ?>
 </select></div>
 <div class="sm-feld"><label for="becher_min"><?= bw_e(bw_t('ZONE.L_BECHER_MIN')) ?></label>
-<input data-role="none" type="text" name="becher_min" id="becher_min" value="15"></div>
+<input data-role="none" type="text" name="becher_min" id="becher_min" value="<?= bw_e(bw_eingabe('becher', 'becher_min', '15')) ?>"<?= bw_markierung('becher_min') ?>></div>
 <div class="sm-feld"><label for="becher_mm"><?= bw_e(bw_t('ZONE.L_BECHER_MM')) ?></label>
-<input data-role="none" type="text" name="becher_mm" id="becher_mm" value=""></div>
+<input data-role="none" type="text" name="becher_mm" id="becher_mm" value="<?= bw_e(bw_eingabe('becher', 'becher_mm', '')) ?>"<?= bw_markierung('becher_mm') ?>></div>
 <button data-role="none" class="sm-b sm-b-aktion" name="becher_senden" value="1"><?= bw_e(bw_t('ZONE.K_BECHER')) ?></button>
 </form>
 <?php } ?>
@@ -1905,11 +2048,11 @@ if (!$bw_vt) { ?>
 <input data-role="none" type="hidden" name="save_mqtt" value="1">
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <h2><?= bw_e(bw_t('EINST.H_MQTT')) ?></h2>
-<label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= !empty($bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
+<label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= bw_eingabe_an('mqtt', 'mqtt_ein', !empty($bw_cfg['mqtt_ein'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_MQTT_EIN')) ?></label>
 <div class="sm-feld">
   <label for="mqtt_topic"><?= bw_e(bw_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" name="mqtt_topic" id="mqtt_topic" value="<?= bw_e($bw_cfg['mqtt_topic']) ?>">
+  <input data-role="none" type="text" name="mqtt_topic" id="mqtt_topic" value="<?= bw_e(bw_eingabe('mqtt', 'mqtt_topic', $bw_cfg['mqtt_topic'])) ?>"<?= bw_markierung('mqtt_topic') ?>>
 </div>
 <?php /* Schreibweise wie im uebrigen Plugin: die Knopf-Grundklasse dieser
          Linie ist die kurze Form, und die Legendenpunkte bekommen ihre
@@ -1960,7 +2103,8 @@ $bw_ret_zone = $bw_rt['zone'];
                      'alter' => 'MQTT.B_ALTER', 'ts' => 'MQTT.B_TS',
                      'zaehler' => 'MQTT.B_ZAEHLER',
                      'gesperrt' => 'MQTT.B_GESPERRT', 'sperrgrund' => 'MQTT.B_SPERRGRUND',
-                     'plan_fest' => 'MQTT.B_PLANFEST') as $bw_k => $bw_v) { ?>
+                     'plan_fest' => 'MQTT.B_PLANFEST',
+                     'gekuerzt_min' => 'MQTT.B_GEKUERZT') as $bw_k => $bw_v) { ?>
 <tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?></td>
     <td><?= in_array($bw_k, $bw_ret, true) ? bw_e(bw_t('MQTT.RETAIN_JA')) : '<span class="sm-hilfe">' . bw_e(bw_t('MQTT.RETAIN_NEIN')) . '</span>' ?></td></tr>
 <?php } ?>

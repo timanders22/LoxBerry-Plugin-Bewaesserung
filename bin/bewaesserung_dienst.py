@@ -38,10 +38,13 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import signal
 import socket
 import sys
 import time
+import urllib.error
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -236,6 +239,13 @@ VORGABEN = {
     #
     # Groesstes Alter eines Stationswerts in Sekunden.
     "hoechstalter": 3600,
+    #
+    # Wetter-1 (Verbesserungsbau 30.09.2026): der Regen des Tages aus der
+    # Ecowitt-Weiche (deren Endpunkt live.php) als lokale Regenquelle. AUS ab
+    # Werk - eine eingerichtete Anlage rechnet nach dem Update wie vorher.
+    # Ordner und Token sind die der Ecowitt-Weiche; das Token nur, wenn dort
+    # eines hinterlegt ist.
+    "ecowitt_regen": 0, "ecowitt_ordner": "ecowittweiche", "ecowitt_token": "",
 }
 
 _LOG = logging.getLogger("bewaesserung")
@@ -901,6 +911,11 @@ def plan_halten(grund: str, frisch: dict | None = None) -> dict:
     if frisch is not None:
         neu["online_ok"] = int(frisch.get("online_ok") or 0)
         neu["online_fehler"] = str(frisch.get("online_fehler") or grund)
+        # Wetter-1: der Stand der Ecowitt-Weiche ist eine Messung dieses
+        # Rechengangs, kein Teil des gehaltenen Plans - der Reiter Test soll
+        # ihn auch dann zeigen, wenn Open-Meteo ausfaellt.
+        if "ecowitt" in frisch:
+            neu["ecowitt"] = frisch.get("ecowitt") or {}
     json_schreiben(DATEI_ABBILD, neu)
     return neu
 
@@ -1051,7 +1066,7 @@ RETAINED_ZONE = ()
 # geloescht (etwa ein fremdes Thema unter demselben Praefix).
 MQTT_GLOBAL = ("ok", "et0", "durchlaeufe", "noetige_durchlaeufe", "reicht",
                "giessen", "alter", "ts", "zaehler", "gesperrt", "sperrgrund",
-               "plan_fest", "deckt")
+               "plan_fest", "deckt", "gekuerzt_min")
 MQTT_ZONE = ("ok", "defizit_mm", "bedarf_mm", "dr_mm", "fuellstand", "liter",
              "minuten", "sekunden", "durchlaeufe", "gegossen_mm")
 # Was frueher zurueckbehalten hinausging und es heute nicht mehr tut: 'ok'
@@ -1848,6 +1863,106 @@ def zonenfeuchte(sammler, zone: dict, cfg: dict,
 
 _FENSTER_GEMELDET = {"zeit": 0.0}
 
+# ------------------------------------------------ Wetter-1: Ecowitt-Weiche
+# Belegt in templates/quellen.json ("kennungen"): 0x10 = Regen des Tages,
+# gemessen an einem GW3000A gegen die Hersteller-App. Gesucht wird in dieser
+# Reihenfolge; die Projektdatei des Hauses fuehrt beide Listen (WH40, WS90).
+ECOWITT_TAG_KENNUNG = "0x10"
+ECOWITT_LISTEN = ("rain", "piezoRain")
+_ECOWITT_GEMELDET = {"zeit": 0.0, "grund": ""}
+
+
+def lb_webport() -> int:
+    """Port des LoxBerry-Webservers (general.json Webserver.Port), sonst 80 -
+    dieselbe Regel wie ew_webport() in der Ecowitt-Weiche."""
+    if not ANLAGE:
+        return 80
+    d = json_lesen(os.path.join(HOME, "config", "system", "general.json"))
+    w = d.get("Webserver") if isinstance(d.get("Webserver"), dict) else {}
+    try:
+        port = int(str(w.get("Port") or "0").strip())
+    except ValueError:
+        port = 0
+    return port if 0 < port <= 65535 else 80
+
+
+def ecowitt_regen_holen(cfg: dict) -> dict:
+    """Den Regen des Tages ueber den Endpunkt der Ecowitt-Weiche holen.
+
+    Rueckgabe {"ein": 1, "ok": 0|1, "ts", "grund", "tag_mm", "liste"}.
+    'grund' ist leer, wenn ok; sonst ein kurzer Satz ohne Adresse und ohne
+    Token. Nie wird ein alter Wert weitergereicht: scheitert der Abruf,
+    gilt in diesem Rechengang die bisherige Quelle.
+    """
+    aus = {"ein": 1, "ok": 0, "ts": int(time.time()), "grund": "",
+           "tag_mm": None, "liste": ""}
+    ordner = str(cfg.get("ecowitt_ordner") or "").strip()
+    token = str(cfg.get("ecowitt_token") or "").strip()
+    if not re.match(r"^[A-Za-z0-9_-]{1,64}$", ordner):
+        aus["grund"] = "Ordner der Ecowitt-Weiche ungueltig"
+        return aus
+    if token and not re.match(r"^[A-Za-z0-9_.\-]{1,64}$", token):
+        aus["grund"] = "Token der Ecowitt-Weiche ungueltig"
+        return aus
+    url = "http://127.0.0.1:%d/plugins/%s/live.php" % (lb_webport(), ordner)
+    if token:
+        url += "?token=" + urllib.parse.quote(token, safe="")
+    try:
+        d = quellen.http_holen(url, 12)
+    except urllib.error.HTTPError as f:
+        aus["grund"] = {403: "HTTP 403 (Token passt nicht)",
+                        404: "HTTP 404 (Plugin nicht installiert?)",
+                        503: "HTTP 503 (Station nicht erreichbar)"}.get(
+                            f.code, "HTTP %d" % f.code)
+        return aus
+    except Exception as f:          # noqa: BLE001 - Netz kann alles werfen
+        t = "%s: %s" % (type(f).__name__, f)
+        if token:
+            t = t.replace(token, "***")
+        aus["grund"] = "keine Antwort (%s)" % t[:120]
+        return aus
+    if not isinstance(d, dict):
+        aus["grund"] = "Antwort ist kein JSON-Objekt"
+        return aus
+    roh = None
+    for liste in ECOWITT_LISTEN:
+        roh = quellen.json_pfad(d, "%s[id=%s].val" % (liste, ECOWITT_TAG_KENNUNG))
+        if roh is not None:
+            aus["liste"] = liste
+            break
+    if roh is None:
+        aus["grund"] = "kein Regen des Tages (%s) in der Antwort" % ECOWITT_TAG_KENNUNG
+        return aus
+    m = re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(mm|in)\s*$", str(roh), re.IGNORECASE)
+    if not m:
+        # Platzhalter ("--", "---.-") oder ein Wert ohne Einheit: nicht raten.
+        aus["grund"] = "Regen des Tages unlesbar (%s)" % str(roh)[:20]
+        return aus
+    mm = float(m.group(1).replace(",", "."))
+    if m.group(2).lower() == "in":
+        mm *= 25.4
+    if not quellen.plausibel("regen_tag", mm):
+        aus["grund"] = "Regen des Tages unplausibel (%.1f mm)" % mm
+        return aus
+    aus["ok"] = 1
+    aus["tag_mm"] = round(mm, 2)
+    return aus
+
+
+def _ecowitt_melden(e: dict) -> None:
+    """Ausfall hoechstens einmal je Stunde (sofort bei neuem Grund), die
+    Rueckkehr einmal."""
+    grund = "" if e.get("ok") else str(e.get("grund") or "")
+    jetzt = time.time()
+    if grund:
+        if grund != _ECOWITT_GEMELDET["grund"] or jetzt - _ECOWITT_GEMELDET["zeit"] >= 3600:
+            _ECOWITT_GEMELDET["zeit"] = jetzt
+            _LOG.warning("Ecowitt-Weiche: %s - es gilt die bisherige Regenquelle.", grund)
+    elif _ECOWITT_GEMELDET["grund"]:
+        _LOG.info("Ecowitt-Weiche liefert wieder: Regen des Tages %.1f mm.",
+                  float(e.get("tag_mm") or 0.0))
+    _ECOWITT_GEMELDET["grund"] = grund
+
 
 def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
     """Einmal alles rechnen: Messwerte, ET0, Bilanz je Zone, Plan."""
@@ -2000,6 +2115,22 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         regen_heute = w
     elif online_heute and online_heute.get("regen") is not None:
         regen_heute = float(online_heute["regen"])
+    # Wetter-1 (Verbesserungsbau 30.09.2026): die Ecowitt-Weiche vor der
+    # bisherigen Quelle - nur mit der Einstellung (ab Werk aus). Scheitert
+    # der Abruf, bleibt es bei der bisherigen Zahl oben.
+    regen_quelle = ("station" if w is not None
+                    else ("open-meteo" if regen_heute is not None else "keine"))
+    ecowitt: dict = {}
+    if int(cfg.get("ecowitt_regen") or 0):
+        ecowitt = ecowitt_regen_holen(cfg)
+        _ecowitt_melden(ecowitt)
+        if ecowitt.get("ok"):
+            regen_heute = float(ecowitt["tag_mm"])
+            regen_quelle = "ecowitt"
+        ecowitt["bisher"] = ("station" if w is not None
+                             else ("open-meteo" if online_heute
+                                   and online_heute.get("regen") is not None
+                                   else "keine"))
 
     # --- Was hat Loxone ausgebracht? (neu in 0.9.7) ---
     zonenliste = zonen()
@@ -2084,6 +2215,9 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
     if sperre["aktiv"]:
         plan["durchlaeufe_ohne_sperre"] = plan["durchlaeufe"]
         plan["durchlaeufe"] = 0
+        # a1: gesperrt wird nicht gegossen - also auch nichts gekuerzt.
+        plan["fenster_gekuerzt_min_ohne_sperre"] = plan.get("fenster_gekuerzt_min", 0)
+        plan["fenster_gekuerzt_min"] = 0
         plan["grund"] = sperre["grund"]
         for jz in plan.get("je_zone", {}).values():
             jz["durchlaeufe"] = 0
@@ -2101,6 +2235,10 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         "et0_verworfen": et0_verworfen,
         "et0_teile": et0_eigen or {},
         "regen_heute": regen_heute,
+        # Wetter-1: woher der Regen des Tages kam, und der Stand der
+        # Ecowitt-Weiche ({} = Einstellung aus).
+        "regen_quelle": regen_quelle,
+        "ecowitt": ecowitt,
         "herkunft": zus["herkunft"],
         # 'herkunft_grund' steht NEBEN 'herkunft': warum eine eingerichtete
         # Groesse nichts geliefert hat ('pfad_fehlt', 'mqtt_veraltet',
@@ -2139,11 +2277,13 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         if time.time() - _FENSTER_GEMELDET["zeit"] >= 3600:
             _FENSTER_GEMELDET["zeit"] = time.time()
             _LOG.warning("Giessfenster %s bis %s (%d min): der Plan passte nicht hinein. "
-                         "Die Ventilzeiten wurden anteilig auf %d %% gekuerzt; das "
-                         "fehlende Wasser bleibt als Defizit in der Bilanz.",
+                         "Die Ventilzeiten wurden anteilig auf %d %% gekuerzt (%d min "
+                         "Ventilzeit, Thema gekuerzt_min); das fehlende Wasser bleibt "
+                         "als Defizit in der Bilanz.",
                          cfg.get("fenster_von"), cfg.get("fenster_bis"),
                          int(plan.get("fenster_minuten") or 0),
-                         int(round(100 * float(plan.get("fenster_anteil") or 0))))
+                         int(round(100 * float(plan.get("fenster_anteil") or 0))),
+                         int(plan.get("fenster_gekuerzt_min") or 0))
     return abbild
 
 
@@ -2194,6 +2334,7 @@ def nachtplan_pflegen(abbild: dict, cfg: dict, jetzt_dt) -> dict:
             "noetige_durchlaeufe": int(plan.get("noetige_durchlaeufe") or 0),
             "reicht": int(plan.get("reicht") or 0),
             "grund": str(plan.get("grund") or ""),
+            "gekuerzt_min": int(plan.get("fenster_gekuerzt_min") or 0),
             "je_zone": {k: {"sekunden_soll": w.get("sekunden_soll", 0),
                             "durchlaeufe": w.get("durchlaeufe", 0)}
                         for k, w in (plan.get("je_zone") or {}).items()}}
@@ -2284,6 +2425,19 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     # als DECKT fuehrt. Ein reiner MQTT-Anwender bekam ausgerechnet die
     # Zahl nicht, die eine gedeckelte Ventilzeit sichtbar macht.
     p["deckt"] = int(plan.get("ventilzeit_deckt") or 0)
+    # a1 (Verbesserungsbau 30.09.2026): um wie viele Minuten Ventilzeit das
+    # Giessfenster den Plan dieser Nacht gekuerzt hat (0 = nicht gekuerzt).
+    # Fluechtig wie der ganze Plan (Zeitbezug "heute Nacht"). Der
+    # eingefrorene Nachtplan geht vor, eine Sperre setzt 0 - dieselbe
+    # Rangfolge wie bei 'durchlaeufe'. Ein Nachtplan aus einer Fassung ohne
+    # diese Zahl nimmt die des laufenden Plans.
+    if int(sperre.get("aktiv") or 0):
+        gekuerzt = 0
+    elif fest and "gekuerzt_min" in fest:
+        gekuerzt = int(fest.get("gekuerzt_min") or 0)
+    else:
+        gekuerzt = int(plan.get("fenster_gekuerzt_min") or 0)
+    p["gekuerzt_min"] = gekuerzt
     for s, e in (abbild.get("zonen") or {}).items():
         # Der eingefrorene Plan gilt AUCH je Zone.
         #

@@ -407,15 +407,25 @@ def plan_bauen(zonen: list[dict], ergebnisse: dict, cfg: dict) -> dict:
     # 'fenster_gekuerzt'.
     fenster_gekuerzt = 0
     fenster_anteil = 1.0
+    # a1 (Verbesserungsbau 30.09.2026): um wie viele Minuten Ventilzeit der
+    # Plan gekuerzt wurde - ueber alle Zonen und Durchlaeufe. Die Pausen
+    # bleiben dabei gleich; die Zahl ist also zugleich die Zeit, um die der
+    # ungekuerzte Plan das Fenster ueberzogen haette. 0 = nicht gekuerzt;
+    # eine Kuerzung unter einer halben Minute zaehlt als 1, damit 0 nur
+    # "nicht gekuerzt" heisst.
+    fenster_gekuerzt_min = 0
     if durchlaeufe >= 1 and fenster_min > 0 and summe_s > 0:
         gesamt = durchlaeufe * (summe_s / 60.0) + (durchlaeufe - 1) * pause_min
         if gesamt > fenster_min:
             frei_s = (fenster_min - (durchlaeufe - 1) * pause_min) * 60.0 / durchlaeufe
             fenster_anteil = max(0.0, min(1.0, frei_s / summe_s))
+            summe_vor_s = summe_s
             sekunden = {s2: float(math.floor(sek * fenster_anteil))
                         for s2, sek in sekunden.items()}
             summe_s = sum(sekunden.values())
             fenster_gekuerzt = 1
+            fenster_gekuerzt_min = max(1, int(round(
+                durchlaeufe * (summe_vor_s - summe_s) / 60.0)))
     # Ein gedeckelter Plan deckt den Bedarf NICHT - also sagt 'reicht' das.
     #
     # Hier stand bis 0.9.21 die Begruendung, ein 'if gedeckelt: reicht = 0'
@@ -519,6 +529,7 @@ def plan_bauen(zonen: list[dict], ergebnisse: dict, cfg: dict) -> dict:
         "ventilzeit_deckt": 0 if (gedeckelt or fenster_gekuerzt) else 1,
         "fenster_gekuerzt": fenster_gekuerzt,
         "fenster_anteil": round(fenster_anteil, 3),
+        "fenster_gekuerzt_min": fenster_gekuerzt_min,
         "ventilzeit_gekuerzt": gekuerzt,
         "je_zone": je_zone,
         "zonen_im_zyklus": len(im_zyklus),
@@ -1062,6 +1073,21 @@ def selbstpruefung() -> list[tuple[bool, str]]:
               and pl6["reicht"] == 0,
               "Fenster 30 min, drei Zonen: %.1f min Ventilzeit samt Pausen "
               "(hoechstens 30), anteilig gekuerzt" % min6))
+    # a1 (Verbesserungsbau 30.09.2026): die gekuerzten Minuten sind die
+    # Ueberziehung des ungekuerzten Plans. Derselbe Plan ohne Fenstergrenze
+    # (00:00 bis 23:59) rechnet die Ventilzeiten ungekuerzt.
+    pl6o = plan_bauen(z6, erg6, dict(cfg, fenster_von="00:00", fenster_bis="23:59",
+                                     zonendauer_max_s=3600,
+                                     max_durchlaeufe=pl6["durchlaeufe"]))
+    ohne6 = (pl6o["durchlaeufe"] * sum(j.get("sekunden_soll", 0)
+                                       for j in pl6o["je_zone"].values()) / 60.0)
+    mit6 = (pl6["durchlaeufe"] * sum(j.get("sekunden_soll", 0)
+                                     for j in pl6["je_zone"].values()) / 60.0)
+    e.append((pl6o["durchlaeufe"] == pl6["durchlaeufe"]
+              and pl6o["fenster_gekuerzt_min"] == 0
+              and abs(pl6["fenster_gekuerzt_min"] - (ohne6 - mit6)) <= 1.0,
+              "Gekuerzt: %d min (ungekuerzt %.1f, gekuerzt %.1f min Ventilzeit); "
+              "ohne Kuerzung 0" % (pl6["fenster_gekuerzt_min"], ohne6, mit6)))
 
     # Anlage am Limit -> benannt, nicht beschoenigt
     erg4 = {z["schluessel"]: zone_rechnen(dict(z, dr=100.0), [],

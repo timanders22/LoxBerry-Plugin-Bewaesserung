@@ -198,6 +198,9 @@ function bw_vorgaben()
         'plan_festhalten' => 0,
         'melden_ein' => 0, 'melden_limit_tage' => 3, 'melden_station_tage' => 2,
         'hoechstalter' => 3600,
+        // Wetter-1 (Verbesserungsbau 30.09.2026): Regen aus der
+        // Ecowitt-Weiche, ab Werk aus.
+        'ecowitt_regen' => 0, 'ecowitt_ordner' => 'ecowittweiche', 'ecowitt_token' => '',
     );
 }
 
@@ -877,7 +880,29 @@ function bw_status_felder()
         'GESPERRT'     => array('',   'BW_FELD.GESPERRT',    'BW_TITEL.GESPERRT'),
         'DECKT'        => array('',   'BW_FELD.DECKT',       'BW_TITEL.DECKT'),
         'PLANFEST'     => array('',   'BW_FELD.PLANFEST',    'BW_TITEL.PLANFEST'),
+        /* a1 (Verbesserungsbau 30.09.2026): hinten angehaengt. */
+        'GEKUERZT'     => array('min', 'BW_FELD.GEKUERZT',    'BW_TITEL.GEKUERZT'),
     );
+}
+
+/**
+ * a1 (Verbesserungsbau 30.09.2026): um wie viele Minuten Ventilzeit das
+ * Giessfenster den Plan dieser Nacht gekuerzt hat. Dieselbe Rangfolge wie
+ * veroeffentlichen() in bin/bewaesserung_dienst.py: eine Sperre setzt 0,
+ * sonst gilt der eingefrorene Nachtplan (wenn er die Zahl traegt), sonst
+ * der laufende Plan.
+ */
+function bw_gekuerzt_min($a = null)
+{
+    if (!is_array($a)) { $a = bw_abbild(); }
+    $plan = isset($a['plan']) && is_array($a['plan']) ? $a['plan'] : array();
+    $fest = isset($a['nachtplan']) && is_array($a['nachtplan']) ? $a['nachtplan'] : array();
+    $sp = isset($a['sperre']) && is_array($a['sperre']) ? $a['sperre'] : array();
+    if (!empty($sp['aktiv'])) { return 0; }
+    if ($fest && array_key_exists('gekuerzt_min', $fest)) {
+        return max(0, (int) $fest['gekuerzt_min']);
+    }
+    return max(0, (int) (isset($plan['fenster_gekuerzt_min']) ? $plan['fenster_gekuerzt_min'] : 0));
 }
 
 /**
@@ -926,7 +951,7 @@ function bw_statuszeile()
      * (Pruefung-Bewaesserung-0.9.33, locale_probe.php, Faelle L1a/L2a).
      * Bauart: LoxBerry-Plugin-ACTiKamera-1.9.21 (cam_lib.php). */
     /* C2: OK nur, solange der Plan gilt (bw_ok_gilt()). */
-    return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2F;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d;GESPERRT=%d;DECKT=%d;PLANFEST=%d',
+    return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2F;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d;GESPERRT=%d;DECKT=%d;PLANFEST=%d;GEKUERZT=%d',
         (int) bw_ok_gilt($a),
         isset($a['et0']) && $a['et0'] !== null ? (float) $a['et0'] : 0.0,
         (int) ($durchlaeufe > 0),
@@ -936,7 +961,8 @@ function bw_statuszeile()
         bw_alter(),
         (int) (isset($sp['aktiv']) ? $sp['aktiv'] : 0),
         (int) (isset($plan['ventilzeit_deckt']) ? $plan['ventilzeit_deckt'] : 0),
-        (int) (!empty($fest)));
+        (int) (!empty($fest)),
+        bw_gekuerzt_min($a));
 }
 
 /**
@@ -1645,6 +1671,174 @@ function bw_abo_text()
  * aelter als 120 s wird verworfen. Muster: Regeln/04, Docker NG 1.3.5,
  * Raumklima 0.11.8.
  * ================================================================== */
+/* ==================================================================
+ * X-2 (Verbesserungsbau 30.09.2026; Regeln/04 "Nach einer Beanstandung
+ * stehen die eingetippten Werte wieder im Formular")
+ *
+ * Nur nach einer Beanstandung, nur das eine Formular und nur seine Felder.
+ * Tabellenfelder reisen als 'name[schluessel]'. Nie ein Geheimnis: das
+ * Token der Ecowitt-Weiche steht in keiner Liste (es wird nur markiert).
+ * ================================================================== */
+
+/** Die Felder je Formular: array(text => [...], haken => [...]). */
+function bw_eingabe_felder($form)
+{
+    $felder = array(
+        'settings' => array(
+            'text'  => array('breite', 'laenge', 'hoehe', 'wind_hoehe', 'vorschautage',
+                             'regen_anteil', 'wirkungsgrad', 'takt', 'zonendauer_s',
+                             'pause_min', 'fenster_von', 'fenster_bis', 'max_durchlaeufe',
+                             'zonendauer_max_s', 'rechenzeit', 'frost_c', 'wind_kmh_max',
+                             'regen_mmh_max', 'hoechstalter', 'melden_limit_tage',
+                             'melden_station_tage', 'ecowitt_ordner'),
+            'haken' => array('kuestennah', 'luecken_fuellen', 'plan_festhalten', 'frost_ein',
+                             'wind_ein', 'regen_ein', 'melden_ein', 'ecowitt_regen'),
+        ),
+        'mqtt' => array('text' => array('mqtt_topic'), 'haken' => array('mqtt_ein')),
+        'quellen_weg' => array('text' => array('http_url', 'mqtt_thema'), 'haken' => array()),
+        'quellen' => array('text' => array('weg', 'thema', 'pfad', 'einheit'), 'haken' => array()),
+        'zonen' => array(
+            'text'  => array('z_name', 'z_schluessel', 'z_flaeche', 'z_bepflanzung', 'z_boden',
+                             'z_rate', 'z_regner', 'z_mikroklima', 'z_feuchte', 'z_dauer',
+                             'z_hoehe_pflanze', 'z_abfluss', 'z_sensor_gewicht', 'z_theta_fc',
+                             'z_theta_wp', 'z_giess_thema', 'z_giess_art'),
+            'haken' => array('z_zyklus', 'z_loeschen'),
+        ),
+        'becher' => array('text' => array('becher', 'becher_min', 'becher_mm'), 'haken' => array()),
+    );
+    return isset($felder[$form]) ? $felder[$form] : null;
+}
+
+/** Nur markiert, nie mitgenommen. */
+function bw_eingabe_geheim()
+{
+    return array('ecowitt_token');
+}
+
+/** Der Grundname eines Feldes ('z_name[3]' -> 'z_name'). */
+function bw_eingabe_grund($name)
+{
+    $i = strpos((string) $name, '[');
+    return $i === false ? (string) $name : substr((string) $name, 0, $i);
+}
+
+/**
+ * Die eingetippten Werte eines Formulars aus $_POST, fuer die Einmalmeldung.
+ * Ein Wert, der kein gueltiges UTF-8 ist oder laenger als 256 Byte, reist
+ * nicht mit (sonst scheiterte json_encode und mit ihm die Umleitung) - das
+ * Feld zeigt dann den gespeicherten Stand. Tabellenschluessel nur als Zahl
+ * oder [a-z0-9_]{1,40}.
+ */
+function bw_eingaben_sammeln($form, $beanstandet)
+{
+    $f = bw_eingabe_felder($form);
+    if ($f === null || !$beanstandet) {
+        return null;
+    }
+    $gut = function ($v) {
+        return is_string($v) && strlen($v) <= 256 && preg_match('//u', $v) === 1;
+    };
+    $schl = function ($k) {
+        return is_int($k) || preg_match('/^[a-z0-9_]{1,40}$/', (string) $k) === 1;
+    };
+    $werte = array();
+    foreach ($f['text'] as $feld) {
+        if (!isset($_POST[$feld])) { continue; }
+        if (is_array($_POST[$feld])) {
+            foreach ($_POST[$feld] as $k => $v) {
+                if ($schl($k) && $gut($v)) { $werte[$feld . '[' . $k . ']'] = $v; }
+            }
+        } elseif ($gut($_POST[$feld])) {
+            $werte[$feld] = $_POST[$feld];
+        }
+    }
+    foreach ($f['haken'] as $feld) {
+        if (isset($_POST[$feld]) && is_array($_POST[$feld])) {
+            /* Tabellenhaken: nur die angekreuzten stehen im POST; ein
+             * fehlender heisst "nicht angekreuzt" (bw_eingabe_an()). */
+            foreach ($_POST[$feld] as $k => $v) {
+                if ($schl($k)) { $werte[$feld . '[' . $k . ']'] = '1'; }
+            }
+        } else {
+            $werte[$feld] = isset($_POST[$feld]) ? '1' : '';
+        }
+    }
+    return array('form' => $form, 'werte' => $werte,
+                 'beanstandet' => array_values(array_unique(array_map('strval', $beanstandet))));
+}
+
+/** Die Eingaben aus der Einmalmeldung annehmen (nur bekannte Felder, nur Text).
+ *  Ohne Argument: der angenommene Stand. */
+function bw_eingaben_setzen($roh = null)
+{
+    static $ein = array('form' => '', 'werte' => array(), 'beanstandet' => array());
+    if ($roh === null) {
+        return $ein;
+    }
+    if (!is_array($roh) || !isset($roh['form']) || !is_string($roh['form'])
+        || bw_eingabe_felder($roh['form']) === null) {
+        return $ein;
+    }
+    $f = bw_eingabe_felder($roh['form']);
+    $namen = array_merge($f['text'], $f['haken']);
+    $werte = array();
+    if (isset($roh['werte']) && is_array($roh['werte'])) {
+        foreach ($roh['werte'] as $k => $v) {
+            if (is_string($v) && in_array(bw_eingabe_grund($k), $namen, true)) {
+                $werte[(string) $k] = $v;
+            }
+        }
+    }
+    $bean = array();
+    if (isset($roh['beanstandet']) && is_array($roh['beanstandet'])) {
+        foreach ($roh['beanstandet'] as $b) {
+            if (is_string($b) && strlen($b) <= 80
+                && in_array(bw_eingabe_grund($b), array_merge($namen, bw_eingabe_geheim()), true)) {
+                $bean[] = $b;
+            }
+        }
+    }
+    if ($bean) {
+        $ein = array('form' => $roh['form'], 'werte' => $werte, 'beanstandet' => $bean);
+    }
+    return $ein;
+}
+
+/** Welches Formular zeigt gerade Eingaben ('' = keines)? */
+function bw_eingaben_aktiv()
+{
+    $ein = bw_eingaben_setzen();
+    return $ein['form'];
+}
+
+/** Wert eines Feldes: die Eingabe nach einer Beanstandung, sonst der gespeicherte. */
+function bw_eingabe($form, $feld, $gespeichert)
+{
+    $ein = bw_eingaben_setzen();
+    if ($ein['form'] === $form && array_key_exists($feld, $ein['werte'])) {
+        return $ein['werte'][$feld];
+    }
+    return $gespeichert;
+}
+
+/** Haken: nach einer Beanstandung der abgeschickte Stand, sonst der gespeicherte. */
+function bw_eingabe_an($form, $feld, $gespeichert)
+{
+    $ein = bw_eingaben_setzen();
+    if ($ein['form'] === $form) {
+        return isset($ein['werte'][$feld]) && $ein['werte'][$feld] === '1';
+    }
+    return (bool) $gespeichert;
+}
+
+/** Das beanstandete Feld wird rot umrandet (Klasse sm-beanstandet). */
+function bw_markierung($feld)
+{
+    $ein = bw_eingaben_setzen();
+    return in_array((string) $feld, $ein['beanstandet'], true)
+        ? ' class="sm-beanstandet" aria-invalid="true"' : '';
+}
+
 function bw_einmalmeldung_pfad()
 {
     return bw_paths()['datadir'] . '/einmalmeldung.json';
@@ -1746,6 +1940,7 @@ function bw_vorlage_art($feld)
         case 'DURCHLAEUFE': return array('false', 'true', '0', '24', '<v.1>');
         case 'NOETIG':      return array('false', 'true', '0', '2147483647', '<v.1>');
         case 'ALTER':       return array('true', 'true', '-1', '2147483647', '<v.1> s');
+        case 'GEKUERZT':    return array('false', 'true', '0', '1440', '<v.1> min');
     }
     return array('true', 'true', '-2147483647', '2147483647', '<v.1>');
 }
@@ -2027,6 +2222,7 @@ function bw_grenzen()
         'frost_c'             => array(-20.0, 15.0),
         'wind_kmh_max'        => array(5.0, 150.0),
         'regen_mmh_max'       => array(0.1, 50.0),
+        'ecowitt_regen'       => array(0, 1),
     );
 }
 
@@ -2064,6 +2260,12 @@ function bw_wert_pruefen($k, $w)
             return preg_match('/^[A-Za-z0-9_.\-]{0,64}$/', $s) === 1;
         case 'vorlage':
             return preg_match('/^[a-z0-9_]{0,40}$/', $s) === 1;
+        /* Wetter-1: Ordner und Token der Ecowitt-Weiche - das Token nach
+         * deren eigenem Muster (ew_token_taugt(), leer = keines). */
+        case 'ecowitt_ordner':
+            return preg_match('/^[A-Za-z0-9_-]{1,64}$/', $s) === 1;
+        case 'ecowitt_token':
+            return preg_match('/^[A-Za-z0-9_.\-]{0,64}$/', $s) === 1;
     }
     return is_string($w);
 }
@@ -2116,10 +2318,14 @@ function bw_zonen_schluessel()
  * uebernommen wird - eine zur Haelfte zurueckgespielte Zonentabelle ist
  * schlimmer als die alte, und man sieht es ihr nicht an.
  */
-function bw_zonen_pruefen($liste)
+function bw_zonen_pruefen($liste, &$namen = null)
 {
+    /* X-3 (Verbesserungsbau 30.09.2026): zu jeder Beanstandung ein NAME,
+     * nie ein Wert - fuer die Warnung beim Sichern. */
+    if (!is_array($namen)) { $namen = array(); }
     $mangel = array();
     if (!is_array($liste)) {
+        $namen[] = 'zonen';
         return array(null, array(bw_t('EINST.SICH_ZONEN_KEINE_LISTE')));
     }
     $erlaubt = bw_zonen_schluessel();
@@ -2128,6 +2334,7 @@ function bw_zonen_pruefen($liste)
     foreach (array_values($liste) as $i => $z) {
         if (!is_array($z)) {
             $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_KAPUTT'), (int) $i + 1);
+            $namen[] = 'zonen[' . (int) $i . ']';
             continue;
         }
         $s = isset($z['schluessel']) ? (string) $z['schluessel'] : '';
@@ -2138,11 +2345,13 @@ function bw_zonen_pruefen($liste)
         if (!preg_match('/^[a-z0-9_-]{1,40}$/', $s)) {
             $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_SCHLUESSEL'),
                                 htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'zonen[' . (int) $i . '].schluessel';
             continue;
         }
         if (isset($gesehen[$s])) {
             $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_DOPPELT'),
                                 htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'zonen[' . (int) $i . '].schluessel';
             continue;
         }
         $gesehen[$s] = 1;
@@ -2152,12 +2361,14 @@ function bw_zonen_pruefen($liste)
                 $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_FREMD'),
                                     htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                                     htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'zonen[' . (int) $i . '].' . substr((string) $k, 0, 60);
                 continue;
             }
             if (!bw_wert_taugt($w)) {
                 $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_WERT'),
                                     htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                                     htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'zonen[' . (int) $i . '].' . (string) $k;
                 continue;
             }
             if ($erlaubt[$k] === 'zahl') {
@@ -2165,6 +2376,7 @@ function bw_zonen_pruefen($liste)
                     $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_WERT'),
                                         htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                                         htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                    $namen[] = 'zonen[' . (int) $i . '].' . (string) $k;
                     continue;
                 }
                 /* O5: dieselben Grenzen wie das Formular. */
@@ -2172,6 +2384,7 @@ function bw_zonen_pruefen($liste)
                     $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_BEREICH'),
                                         htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                                         htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                    $namen[] = 'zonen[' . (int) $i . '].' . (string) $k;
                     continue;
                 }
                 $neu[$k] = (float) $w;
@@ -2181,6 +2394,7 @@ function bw_zonen_pruefen($liste)
                     $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_BEREICH'),
                                         htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                                         htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                    $namen[] = 'zonen[' . (int) $i . '].' . (string) $k;
                     continue;
                 }
                 $neu[$k] = (string) $w;
@@ -2194,6 +2408,7 @@ function bw_zonen_pruefen($liste)
                 $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_PFLICHT'),
                                     htmlspecialchars($pk, ENT_QUOTES, 'UTF-8'),
                                     htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'zonen[' . (int) $i . '].' . $pk;
             }
         }
         $aus[] = $neu;
@@ -2208,10 +2423,13 @@ function bw_zonen_pruefen($liste)
  * Verzeichnis mit Weg, Thema, Pfad und Einheit. Steuerzeichen und
  * Anfuehrungszeichen fliegen heraus - dieselbe Saeuberung wie im Formular.
  */
-function bw_quellen_pruefen($q)
+function bw_quellen_pruefen($q, &$namen = null)
 {
+    /* X-3: zu jeder Beanstandung ein NAME, nie ein Wert. */
+    if (!is_array($namen)) { $namen = array(); }
     $mangel = array();
     if (!is_array($q)) {
+        $namen[] = 'quellen';
         return array(null, array(bw_t('EINST.SICH_QUELLEN_KEINE')));
     }
     $aus = array();
@@ -2219,11 +2437,13 @@ function bw_quellen_pruefen($q)
         if (!in_array($k, array('felder', 'http_url', 'vorlage', 'mqtt_thema'), true)) {
             $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_FREMD'),
                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'quellen.' . substr((string) $k, 0, 60);
             continue;
         }
         if ($k === 'felder') {
             if (!is_array($w)) {
                 $mangel[] = bw_t('EINST.SICH_QUELLEN_FELDER');
+                $namen[] = 'quellen.felder';
                 continue;
             }
             $f = array();
@@ -2232,6 +2452,7 @@ function bw_quellen_pruefen($q)
                     || !in_array((string) $e['weg'], array('mqtt', 'http'), true)) {
                     $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_WEG'),
                                         htmlspecialchars((string) $g, ENT_QUOTES, 'UTF-8'));
+                    $namen[] = 'quellen.felder.' . substr((string) $g, 0, 60);
                     continue;
                 }
                 $e2 = array('weg' => (string) $e['weg']);
@@ -2255,6 +2476,7 @@ function bw_quellen_pruefen($q)
                 if (!$bw_qok) {
                     $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_FELD'),
                                         htmlspecialchars((string) $g, ENT_QUOTES, 'UTF-8'));
+                    $namen[] = 'quellen.felder.' . substr((string) $g, 0, 60);
                     continue;
                 }
                 $f[(string) $g] = $e2;
@@ -2278,6 +2500,7 @@ function bw_quellen_pruefen($q)
         if (!$bw_qtaugt) {
             $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_WERT'),
                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'quellen.' . (string) $k;
             continue;
         }
         $aus[$k] = $bw_qs;
@@ -2374,11 +2597,16 @@ function bw_sicherung_bauen()
     );
 }
 
-function bw_sicherung_lesen($roh)
+function bw_sicherung_lesen($roh, &$namen = null)
 {
+    /* X-3 (Verbesserungsbau 30.09.2026): zu jeder Beanstandung ein NAME
+     * (config.<schluessel>, zonen[<nr>].<schluessel>, quellen...), nie ein
+     * Wert - bw_rueckspiel_altwerte() warnt damit beim Sichern. */
+    $namen = array();
     $mangel = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
+        $namen[] = '(json)';
         return array(null, array(bw_t('EINST.SICH_KEIN_JSON')), 0, null, null);
     }
     /* Zwei Gestalten werden angenommen.
@@ -2393,10 +2621,12 @@ function bw_sicherung_lesen($roh)
         /* O5 (Durchgang 30.09.2026): ein fremder oberster Abschnitt wird
          * abgelehnt, nicht still uebergangen. */
         foreach (array_keys($daten) as $bw_ok) {
-            if (!in_array((string) $bw_ok, array('_stand', '_fassung', '_hinweis',
+            /* X-3: '_warnung' ist eine Kopfzeile wie '_stand'. */
+            if (!in_array((string) $bw_ok, array('_stand', '_fassung', '_hinweis', '_warnung',
                                                  'config', 'zonen', 'quellen'), true)) {
                 $mangel[] = sprintf(bw_t('EINST.SICH_ABSCHNITT_FREMD'),
                                     htmlspecialchars((string) $bw_ok, ENT_QUOTES, 'UTF-8'));
+                $namen[] = substr((string) $bw_ok, 0, 60);
             }
         }
         $zonen_roh = isset($daten['zonen']) ? $daten['zonen'] : null;
@@ -2404,7 +2634,7 @@ function bw_sicherung_lesen($roh)
         $daten = $daten['config'];
     } else {
         /* Der lesbare Kopf gehoert nicht zur Konfiguration. */
-        unset($daten['_stand'], $daten['_fassung']);
+        unset($daten['_stand'], $daten['_fassung'], $daten['_warnung']);
     }
     $vorgaben = bw_vorgaben();
     $neu = $vorgaben;
@@ -2414,11 +2644,13 @@ function bw_sicherung_lesen($roh)
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(bw_t('EINST.SICH_FREMD'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'config.' . substr((string) $k, 0, 60);
             continue;
         }
         if (!bw_wert_taugt($w) || !bw_wert_pruefen($k, $w)) {
             $mangel[] = sprintf(bw_t('EINST.SICH_WERT'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'config.' . (string) $k;
             continue;
         }
         /* Art angleichen, Wert nicht aendern: die Pruefung oben hat
@@ -2434,19 +2666,24 @@ function bw_sicherung_lesen($roh)
     }
     if ($anzahl === 0) {
         $mangel[] = bw_t('EINST.SICH_LEER');
+        $namen[] = 'config';
     }
     /* Die beiden anderen Teile werden GEPRUEFT, auch wenn die Konfiguration
      * schon beanstandet ist: der Anwender bekommt alle Beanstandungen auf
      * einmal, nicht die erste. */
     $zonen = null;
     if ($zonen_roh !== null) {
-        list($zonen, $zm) = bw_zonen_pruefen($zonen_roh);
+        $bw_zn = array();
+        list($zonen, $zm) = bw_zonen_pruefen($zonen_roh, $bw_zn);
         $mangel = array_merge($mangel, $zm);
+        $namen = array_merge($namen, $bw_zn);
     }
     $quellen = null;
     if ($quellen_roh !== null) {
-        list($quellen, $qm) = bw_quellen_pruefen($quellen_roh);
+        $bw_qn = array();
+        list($quellen, $qm) = bw_quellen_pruefen($quellen_roh, $bw_qn);
         $mangel = array_merge($mangel, $qm);
+        $namen = array_merge($namen, $bw_qn);
     }
     if ($mangel) {
         /* Eine Beanstandung in EINEM Teil laesst ALLE drei unberuehrt. */
@@ -2482,6 +2719,31 @@ function bw_sicherung_lesen($roh)
     return array($neu, $mangel, $anzahl, $zonen, $quellen);
 }
 
+
+/**
+ * X-3 (Verbesserungsbau 30.09.2026): wuerde die eigene Sicherung beim
+ * Zurueckspielen abgewiesen? Gebaut wie der Knopf "Einstellungen sichern"
+ * (bw_sicherung_bauen()) und durch DIESELBE Pruefung geschickt wie das
+ * Zurueckspielen (bw_sicherung_lesen()). Rueckgabe: die Namen der
+ * beanstandeten Werte (nie die Werte), leer = besteht.
+ * Der Name enthaelt bewusst nicht "sicherung": das Kettenwerkzeug
+ * sicherung_pruefen nimmt die erste Funktion *_sicherung* mit json_encode
+ * fuer die Ausfuhr.
+ */
+function bw_rueckspiel_altwerte()
+{
+    $j = json_encode(bw_sicherung_bauen(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($j === false) {
+        return array('(json)');
+    }
+    $namen = array();
+    $erg = bw_sicherung_lesen($j, $namen);
+    if ($erg[0] !== null) {
+        return array();
+    }
+    return $namen ? array_values(array_unique($namen)) : array('(unbekannt)');
+}
 
 /* ==================================================================
  * WACHPOSTEN GEGEN FREMDE FORMULARE

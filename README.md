@@ -5,12 +5,35 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.35 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.36 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.36
+
+Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`). Gemessen an Attrappen
+für Wetterdienst, Ecowitt-Weiche und Broker unter PHP 7.4, 8.3 und 8.5; nicht am
+Gerät.
+
+* **Neues Thema `gekuerzt_min`** (flüchtig, dazu `GEKUERZT` am Endpunkt): um wie
+  viele Minuten das Gießfenster die Ventilzeit gekürzt hat; 0 = nicht gekürzt,
+  eine Sperre setzt 0. Die Loxone-Vorlage hat jetzt 11 Eingänge – wer sie nutzt,
+  importiert sie neu.
+* **Reiter Test: „Wetterquelle“** – ob Open-Meteo liefert und von wann der
+  letzte gute Plan stammt; bei Ausfall seit wann und warum.
+* **Neu, ab Werk aus: Regen aus der Ecowitt-Weiche** (Tagesregen) als lokale
+  Regenquelle mit Vorrang; die Vorhersage kommt weiter von Open-Meteo. Fällt die
+  Weiche aus, gilt die bisherige Quelle, und der Reiter Test sagt es. Das Token
+  der Weiche wird nie angezeigt.
+* Nach einer Beanstandung stehen die eingetippten Werte wieder im Formular, das
+  Feld ist rot umrandet; gespeichert wird nichts (wie bisher).
+* „Einstellungen sichern“ warnt gelb mit Namen, wenn ein Wert das Zurückspielen
+  nicht bestünde. Sicherungen aus 0.9.35 werden angenommen; eine Sicherung aus
+  dieser Fassung lässt sich in 0.9.35 nicht zurückspielen.
 
 ## Neu in 0.9.35 — kein Gießen mehr bei Quellenausfall, das Fenster ist eine Grenze, nur noch ein Dienst
 
@@ -443,6 +466,62 @@ Der Plan rechnet mit Zonendauer, Pause zwischen den Durchläufen und
 Zeitfenster. Reicht das nicht, sagt er das (`REICHT=0`) — statt eine Zahl
 auszugeben, die niemand liefern kann. Bei einem Brunnen mit Erholungspause ist
 das der Regelfall an heißen Tagen, und man sollte es wissen.
+
+Das Gießfenster ist dabei eine harte Grenze: passt schon ein Durchlauf nicht
+hinein, werden die Ventilzeiten anteilig gekürzt, und der Rest bleibt als
+Defizit in der Bilanz. **Um wie viele Minuten Ventilzeit gekürzt wurde**,
+steht im MQTT-Thema `<präfix>/gekuerzt_min` (nicht zurückbehalten, `0` = nicht
+gekürzt) und im Feld `GEKUERZT` der Statuszeile am Endpunkt. Die Zahl zählt
+über alle Zonen und Durchläufe und ist zugleich die Zeit, um die der
+ungekürzte Plan das Fenster überzogen hätte. Eine Sperre setzt sie auf `0`,
+ein festgehaltener Nachtplan hält sie mit fest.
+
+## Regen aus der Ecowitt-Weiche (Einstellung, ab Werk aus)
+
+Wer das Plugin **Ecowitt-Weiche** betreibt, kann dessen *Regen des Tages* als
+lokale Regenquelle nehmen: Reiter Einstellungen, Abschnitt „Regen aus der
+Ecowitt-Weiche“. Ab Werk ist das aus; eine eingerichtete Anlage rechnet nach
+dem Update wie vorher.
+
+* **Quelle:** der Endpunkt der Ecowitt-Weiche,
+  `http://127.0.0.1:<Webserver-Port>/plugins/<Ordner>/live.php[?token=…]`
+  (Ordner ab Werk `ecowittweiche`; Token nur, wenn dort eines hinterlegt ist).
+  Die Dateien der anderen Linie werden nie gelesen.
+* **Wert:** Kennung `0x10` (Regen des Tages) aus der Liste `rain`, sonst
+  `piezoRain`, mit Einheit `mm` oder `in`. Gemessen ist die Kennung an einem
+  GW3000A gegen die Hersteller-App (siehe `templates/quellen.json`,
+  „kennungen“).
+* **Vorrang:** vor der bisherigen Quelle (Zuordnung `regen_tag` im Reiter
+  Quellen, sonst Open-Meteo).
+* **Ausfall:** antwortet die Ecowitt-Weiche nicht (keine Antwort, 403, 404,
+  503) oder liefert sie keinen lesbaren Wert, gilt in diesem Rechengang die
+  bisherige Quelle. Die Zeile „Regen aus der Ecowitt-Weiche“ im Reiter Test
+  nennt Grund und Ersatzquelle, das Protokoll höchstens einmal je Stunde.
+* **Unberührt:** die Regenvorhersage kommt weiter von Open-Meteo. Fällt
+  Open-Meteo aus, bleibt wie bisher der letzte gute Plan stehen und `ok` geht
+  auf 0 — die Ecowitt-Weiche ersetzt keine Vorhersage.
+* Ein Wert „Regen der letzten 24 Stunden“ wird nicht übernommen: die
+  Bilanz rechnet tageweise, und eine Kennung dafür ist an keinem Gerät dieses
+  Hauses belegt.
+
+## Reiter Test: Wetterquelle und letzter guter Plan
+
+Die Zeile „Wetterquelle“ sagt, ob Open-Meteo liefert und **von wann der letzte
+gute Plan stammt** (`hh:mm`, an einem anderen Tag mit Datum). Fällt die
+Quelle aus, steht dort seit wann und warum; es gilt dann der letzte gute Plan,
+und `ok` steht auf 0.
+
+## Beanstandung und Sicherung
+
+* Wird beim Speichern ein Feld beanstandet, wird **nichts** gespeichert —
+  auch die übrigen Werte des Formulars nicht. Die eingetippten Werte stehen
+  danach wieder im Formular, das beanstandete Feld ist rot umrandet
+  (Einstellungen, MQTT, Quellen, Zonen, Becherprobe). Das Token der
+  Ecowitt-Weiche kommt nie ins Formular zurück.
+* „Einstellungen sichern“ prüft die eigene Sicherung mit derselben Prüfung
+  wie das Zurückspielen. Würde ein gespeicherter Wert abgewiesen, steht am
+  Knopf eine gelbe Warnung mit den Namen der Werte; die Datei wird trotzdem
+  vollständig geliefert und trägt `_warnung` (nur Namen, nie Werte).
 
 ## Millimeter kann es rechnen, Liter nur mit Messung
 
