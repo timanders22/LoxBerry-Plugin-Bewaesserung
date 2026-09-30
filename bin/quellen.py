@@ -102,6 +102,43 @@ AGGREGAT = {
 # Modell als eine Zahl, die aussieht wie eine Messung.
 MITTEL_MINDESTSTUNDEN = 18.0
 
+# C7 (Durchgang 30.09.2026): was eine Station liefern KANN.
+#
+# Bis 0.9.34 ging jeder lesbare Wert in die Rechnung. Ein Fuehler, der
+# 85 Grad meldet (Sonne auf dem Gehaeuse, falsche Einheit, Defekt), ergab
+# eine ET0 um 15 mm und einen Plan, der die Zonen flutete (Pruefbericht
+# Code, C7). Ein Wert ausserhalb dieser Grenzen zaehlt wie ein fehlender:
+# es gilt dann Open-Meteo, und das Protokoll nennt ihn (je Groesse
+# hoechstens eine Zeile je Stunde). Die Grenzen gelten nach der
+# Umrechnung in die Rechen-Einheit (Grad Celsius, W/m2, m/s, %, mm).
+PLAUSIBEL = {
+    "tmin": (-40.0, 60.0), "tmax": (-40.0, 60.0),
+    "strahlung_wm2": (0.0, 1400.0),
+    "wind": (0.0, 60.0),
+    "rh_min": (0.0, 100.0), "rh_max": (0.0, 100.0), "rh_mittel": (0.0, 100.0),
+    "regen_tag": (0.0, 300.0), "regen_stunde": (0.0, 300.0),
+}
+_UNPLAUSIBEL_GEMELDET: dict = {}
+_UHR_ZURUECK_GEMELDET = {"zeit": 0.0}
+
+
+def plausibel(groesse: str, wert) -> bool:
+    """Liegt der Wert in den Grenzen aus PLAUSIBEL? Ohne Grenze: ja."""
+    g = PLAUSIBEL.get(groesse)
+    if g is None or wert is None:
+        return True
+    try:
+        if g[0] <= float(wert) <= g[1]:
+            return True
+    except (TypeError, ValueError):
+        pass
+    jetzt = time.time()
+    if jetzt - _UNPLAUSIBEL_GEMELDET.get(groesse, 0.0) >= 3600:
+        _UNPLAUSIBEL_GEMELDET[groesse] = jetzt
+        _LOG.warning("Messwert %s = %s liegt ausserhalb von %s bis %s - er zaehlt "
+                     "als fehlend.", groesse, wert, g[0], g[1])
+    return False
+
 
 # --------------------------------------------------------------------------
 # Pfade in JSON
@@ -208,6 +245,13 @@ def umrechnen(wert: float, einheit: str, tabelle: dict) -> float:
 
 def http_holen(url: str, zeit: int = 10) -> Any:
     """Eine JSON-Antwort abholen. Keine Zugangsdaten in der Adresse."""
+    # O5 (Durchgang 30.09.2026): nur http und https. urllib oeffnet auch
+    # file:// - eine von Hand geaenderte oder zurueckgespielte
+    # quellen_zuordnung.json liess den Dienst sonst jede lesbare Datei
+    # lesen und ihren Anfang in roh.json ablegen, die der Reiter Quellen
+    # anzeigt.
+    if not str(url).lower().startswith(("http://", "https://")):
+        raise ValueError("nur http:// und https:// sind als Quelle zugelassen")
     req = urllib.request.Request(url, headers={
         "User-Agent": "LoxBerry-Bewaesserung", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=zeit) as a:
@@ -487,7 +531,12 @@ class Sammler:
         z = zahl(roh)
         if z is None:
             return None, "unlesbar"
-        return umrechnen(z, str(f.get("einheit_quelle") or ""), self.einheiten), weg
+        w = umrechnen(z, str(f.get("einheit_quelle") or ""), self.einheiten)
+        # C7: ein unmoeglicher Wert zaehlt als fehlend - und kommt damit
+        # auch nie in den Tagesverlauf (beobachten() liest hier).
+        if not plausibel(groesse, w):
+            return None, "unplausibel"
+        return w, weg
 
 
     # ---- Tagesverlauf ----
@@ -506,7 +555,24 @@ class Sammler:
         Rueckgabe: wie viele Groessen einen Wert beigesteuert haben.
         """
         jetzt = time.time() if jetzt is None else jetzt
-        if self.tag.get("datum") != datum:
+        # C10 (Durchgang 30.09.2026): der Tag wechselt nur VORWAERTS.
+        #
+        # Bis 0.9.34 hiess jedes andere Datum "neuer Tag". Springt die Uhr
+        # zurueck (am Geraet beim Systemstart gesehen, Journal 28.09.2026)
+        # und landet dabei auf gestern, war der Tagesspeicher samt
+        # Tiefstwert der Nacht fort - und beim Sprung nach vorn noch
+        # einmal. Ein aelteres Datum laesst den Speicher jetzt stehen, und
+        # in dieser Zeit wird nichts eingetragen: die Zeitstempel passten
+        # nicht zur Reihe.
+        bisher = str(self.tag.get("datum") or "")
+        if bisher and datum < bisher:
+            if time.time() - _UHR_ZURUECK_GEMELDET["zeit"] >= 3600:
+                _UHR_ZURUECK_GEMELDET["zeit"] = time.time()
+                _LOG.warning("Die Uhr steht auf %s, der Tagesverlauf auf %s - er "
+                             "bleibt stehen, bis das Datum wieder vorwaerts geht.",
+                             datum, bisher)
+            return 0
+        if bisher != datum:
             self.tag = {"datum": datum, "werte": {}}
         n = 0
         # Der Grund wird MITGESCHRIEBEN, nicht weggeworfen.
@@ -538,6 +604,17 @@ class Sammler:
         return n
 
     def tageswert(self, groesse: str, datum: str) -> tuple[float | None, str]:
+        """Der Tageswert - C7: nur, wenn er plausibel ist.
+
+        Der Tagesspeicher kann aus einer Fassung vor 0.9.35 stammen
+        (tagesextreme.json) und dort einen unmoeglichen Wert tragen.
+        """
+        w, grund = self._tageswert_roh(groesse, datum)
+        if w is not None and not plausibel(groesse, w):
+            return None, "unplausibel"
+        return w, grund
+
+    def _tageswert_roh(self, groesse: str, datum: str) -> tuple[float | None, str]:
         """Der Tageswert einer Groesse nach der Regel aus AGGREGAT.
 
         Rueckgabe: (Wert, Grund). Der Grund ist leer, wenn ein Wert kommt,

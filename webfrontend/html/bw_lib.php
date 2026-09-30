@@ -418,9 +418,64 @@ function bw_config_heilen($p)
     return $d;
 }
 
+/**
+ * M3 (Durchgang 30.09.2026): die Abodatei des MQTT-Gateways.
+ *
+ * config/plugins/<ordner>/mqtt_subscriptions.cfg mit '<praefix>/#'. Das
+ * Plugin liefert sie mit ('bewaesserung/#'); beim Speichern wird sie auf
+ * das geltende Praefix nachgefuehrt, nur wenn sie abweicht, und das steht
+ * im Protokoll. Bis 0.9.34 gab es sie nicht, und unter Gateway V1 kam
+ * ohne Handeintrag nichts am Miniserver an (Pruefbericht MQTT, M3).
+ * Bauart: Einspeisebremse 0.9.22 (eb_abo_datei()).
+ * Rueckgabe array(Pfad, traegt die Datei das Abo).
+ */
+function bw_abo_datei($praefix, $schreiben = false)
+{
+    $p = bw_paths();
+    $pfad = $p['configdir'] . '/mqtt_subscriptions.cfg';
+    $soll = trim((string) $praefix, '/') . '/#';
+    $roh = is_readable($pfad) ? (string) @file_get_contents($pfad) : '';
+    $da = in_array($soll, array_map('trim', preg_split('/\r?\n/', $roh)), true);
+    if ($schreiben && $soll !== '/#' && $roh !== $soll . "\n" && is_dir($p['configdir'])) {
+        if (@file_put_contents($pfad, $soll . "\n") !== false) {
+            @chmod($pfad, 0644);
+            bw_log('Gateway-Abo gesetzt: ' . $soll);
+            $da = true;
+        } else {
+            bw_log('Gateway-Abo nicht schreibbar: ' . $pfad);
+        }
+    }
+    return array($pfad, $da);
+}
+
+/**
+ * M6 (Durchgang 30.09.2026): das bisherige Praefix merken, wenn es
+ * wechselt. Der Dienst raeumt darunter seine behaltenen Themen am Broker
+ * ab und liest nach (mqtt_nebenwege_abraeumen()); die Deinstallation
+ * leert es mit (--mqtt-leeren). Gemerkt wird das ZULETZT benutzte.
+ */
+function bw_praefix_alt_merken($alt)
+{
+    $p = bw_paths();
+    $d = array('praefix' => (string) $alt, 'ts' => time(), 'geleert' => 0);
+    if (!bw_json_schreiben($p['datadir'] . '/mqtt_praefix_alt', $d, 0644)) {
+        bw_log('Das alte MQTT-Praefix ' . $alt . ' liess sich nicht vormerken - '
+             . 'seine behaltenen Themen bleiben im Broker.');
+        return false;
+    }
+    bw_log('MQTT-Praefix gewechselt: ' . $alt . ' ist vorgemerkt; der Dienst '
+         . 'raeumt die behaltenen Themen darunter am Broker ab.');
+    return true;
+}
+
 function bw_config_speichern($cfg)
 {
     $p = bw_paths();
+    /* M6: das bisherige Praefix VOR dem Schreiben lesen. */
+    $bw_vorher = bw_json_lesen($p['config']);
+    $bw_alt_pr = (is_array($bw_vorher) && isset($bw_vorher['mqtt_topic']))
+        ? trim((string) $bw_vorher['mqtt_topic'], '/') : '';
+    $bw_neu_pr = isset($cfg['mqtt_topic']) ? trim((string) $cfg['mqtt_topic'], '/') : '';
     // 0600, nicht 0644: in dieser Datei steht das Aktionstoken, mit dem der
     // Miniserver den unangemeldeten Endpunkt erreicht.
     if (!bw_json_schreiben($p['config'], $cfg, 0600)) { return false; }
@@ -438,6 +493,11 @@ function bw_config_speichern($cfg)
                  . ' liess sich nicht erneuern.');
         }
     }
+    if ($bw_alt_pr !== '' && $bw_neu_pr !== '' && $bw_alt_pr !== $bw_neu_pr) {
+        bw_praefix_alt_merken($bw_alt_pr);
+    }
+    /* M3: die Abodatei folgt dem geltenden Praefix. */
+    bw_abo_datei($bw_neu_pr !== '' ? $bw_neu_pr : 'bewaesserung', true);
     return true;
 }
 
@@ -628,6 +688,36 @@ function bw_alter()
 {
     $a = bw_abbild();
     return isset($a['ts']) ? max(0, time() - (int) $a['ts']) : -1;
+}
+
+/**
+ * C2 (Durchgang 30.09.2026): ab welchem Alter gilt ein Plan nicht mehr?
+ *
+ * Entscheidung Nr. 4 vom 29.09.2026: OK=0 ab 3 x max(600, takt) Sekunden,
+ * am Endpunkt fuer alle Zeilen. Der Dienst rechnet hoechstens alle
+ * max(600, takt) Sekunden; drei ausgefallene Rechengaenge sind kein
+ * Zufall mehr. Bis 0.9.34 hing OK allein am Merker im Abbild - stand der
+ * Dienst, meldete der Endpunkt tagelang OK=1 mit einem Plan von vorgestern
+ * (Pruefbericht Code, C2). Der Takt wird wie im Dienst auf 60 bis 3600
+ * begrenzt. Dieselbe Zahl nutzen Schritt 5 und die Pruefzeile im Reiter
+ * Test (O13).
+ */
+function bw_ok_grenze($cfg = null)
+{
+    if (!is_array($cfg)) { $cfg = bw_config(false); }
+    $takt = (isset($cfg['takt']) && is_numeric($cfg['takt'])) ? (int) $cfg['takt'] : 300;
+    $takt = max(60, min(3600, $takt));
+    return 3 * max(600, $takt);
+}
+
+/** Gilt der Plan im Abbild? ok=1 UND nicht aelter als bw_ok_grenze().
+ * Ein Zeitstempel mehr als 300 s in der Zukunft (Uhrsprung) gilt nicht. */
+function bw_ok_gilt($a = null)
+{
+    if (!is_array($a)) { $a = bw_abbild(); }
+    if (empty($a['ok']) || empty($a['ts'])) { return false; }
+    $alter = time() - (int) $a['ts'];
+    return $alter >= -300 && $alter <= bw_ok_grenze();
 }
 
 /* ---------------- Token ---------------- */
@@ -835,8 +925,9 @@ function bw_statuszeile()
      * die Zahl mit Punkt. Unter Windows mit PHP 7.4.33 und 8.4.24 gemessen
      * (Pruefung-Bewaesserung-0.9.33, locale_probe.php, Faelle L1a/L2a).
      * Bauart: LoxBerry-Plugin-ACTiKamera-1.9.21 (cam_lib.php). */
+    /* C2: OK nur, solange der Plan gilt (bw_ok_gilt()). */
     return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2F;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d;GESPERRT=%d;DECKT=%d;PLANFEST=%d',
-        (int) (!empty($a['ok'])),
+        (int) bw_ok_gilt($a),
         isset($a['et0']) && $a['et0'] !== null ? (float) $a['et0'] : 0.0,
         (int) ($durchlaeufe > 0),
         $durchlaeufe,
@@ -909,8 +1000,13 @@ function bw_zonenzeile($schluessel)
         && is_array($a2['plan']['je_zone'][$schluessel])) {
         $jz = $a2['plan']['je_zone'][$schluessel];
     }
-    /* %F statt %f aus demselben Grund wie in bw_statuszeile() (Fall L1b). */
-    return sprintf('ZONE;OK=1;DEFIZIT=%.1F;FUELLSTAND=%.0F;BEDARF=%.1F;LITER=%.0F;MINUTEN=%.0F;GEMESSEN=%d;SEKUNDEN=%d;DURCHLAEUFE=%d;GEGOSSEN=%.1F',
+    /* %F statt %f aus demselben Grund wie in bw_statuszeile() (Fall L1b).
+     * C2 (Durchgang 30.09.2026): OK folgt dem Plan als Ganzem - bis 0.9.34
+     * stand hier fest OK=1, auch mit einem Plan von vorgestern oder bei
+     * ausgefallener Wetterquelle. Die Werte bleiben stehen (der letzte gute
+     * Plan, Entscheidung Frage 6/11); OK sagt, ob er gilt. */
+    return sprintf('ZONE;OK=%d;DEFIZIT=%.1F;FUELLSTAND=%.0F;BEDARF=%.1F;LITER=%.0F;MINUTEN=%.0F;GEMESSEN=%d;SEKUNDEN=%d;DURCHLAEUFE=%d;GEGOSSEN=%.1F',
+        (int) bw_ok_gilt($a2),
         (float) $z['dr'], (float) $z['fuellstand'], (float) $z['bedarf_mm'],
         (float) (isset($z['liter']) ? $z['liter'] : 0),
         (float) (isset($z['minuten']) ? $z['minuten'] : 0),
@@ -925,7 +1021,8 @@ function bw_selbsttest_ausgabe()
 {
     $p = bw_paths();
     $s = $p['bindir'] . '/dienst.sh';
-    if (!is_file($s)) { return 'dienst.sh nicht gefunden: ' . $s; }
+    /* O14 (Durchgang 30.09.2026): der Text ueber bw_t(). */
+    if (!is_file($s)) { return sprintf(bw_t('ALLG.DIENST_SH_FEHLT'), $s); }
     $a = array(); $c = 0;
     // Der Pfad wird als ARGUMENT maskiert. Die Maskierung fuer eine ganze
     // Kommandozeile laesst ein Leerzeichen im Pfad unangetastet, und der
@@ -938,7 +1035,7 @@ function bw_jetzt_rechnen()
 {
     $p = bw_paths();
     $s = $p['bindir'] . '/dienst.sh';
-    if (!is_file($s)) { return array(0, 'dienst.sh nicht gefunden.'); }
+    if (!is_file($s)) { return array(0, sprintf(bw_t('ALLG.DIENST_SH_FEHLT'), $s)); }
     $a = array(); $c = 0;
     @exec(escapeshellarg($s) . ' einmal 2>&1', $a, $c);
     return array($c === 0 ? 1 : 0, implode("\n", $a));
@@ -947,16 +1044,19 @@ function bw_jetzt_rechnen()
 function bw_vorlage()
 {
     $p = bw_paths();
-    $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
-        ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
-        : (gethostname() ?: 'loxberry');
+    $host = bw_host();
     $token = bw_token();
     $cmds = array();
     foreach (bw_status_felder() as $feld => $info) {
+        /* O11 (Durchgang 30.09.2026): kurzer Kommentar (hoechstens 40
+         * Zeichen, BW_KOMMENTAR), Art, Grenzen und Einheit nach der
+         * Massvorlage (bw_vorlage_art()). */
+        $art = bw_vorlage_art($feld);
         $cmds[] = array(
             'title'   => isset($info[2]) ? bw_t($info[2]) : ('BEW_' . $feld),
-            'comment' => trim(strip_tags(html_entity_decode(bw_t($info[1]), ENT_QUOTES, 'UTF-8')))
-                       . ($info[0] !== '' ? ' [' . $info[0] . ']' : ''),
+            'comment' => bw_kommentar_kurz(bw_t('BW_KOMMENTAR.' . $feld)),
+            'signed'  => $art[0], 'analog' => $art[1],
+            'min'     => $art[2], 'max' => $art[3], 'unit' => $art[4],
             // Das Semikolon gehoert ins Suchmuster: jedes Feld steht hinter
             // einem ';', und ein kuenftiger Feldname, der auf einen
             // bestehenden endet, traefe sonst die falsche Stelle. Gemessen
@@ -966,11 +1066,13 @@ function bw_vorlage()
         );
     }
     return array('bewaesserung_status.xml', bw_xml_virtual_in_http(array(
-        'title'   => 'Bewässerung vorausschauend',
+        /* O14: Titel und Kommentar ueber bw_t(); der Kommentar hoechstens
+         * 40 Zeichen (O11). */
+        'title'   => bw_t('ALLG.TITEL'),
         'address' => 'http://' . $host . '/plugins/' . $p['plugin']
                    . '/index.php?token=' . $token . '&aktion=status',
         'polling' => '300',
-        'comment' => 'Erzeugt vom LoxBerry-Plugin Bewässerung (' . date('d.m.Y') . ')',
+        'comment' => bw_kommentar_kurz(sprintf(bw_t('LOX.VORLAGE_KOMMENTAR'), date('d.m.Y'))),
     ), $cmds));
 }
 
@@ -1412,11 +1514,11 @@ function bw_upgrade_marke()
 function bw_dienst($befehl)
 {
     if (!in_array($befehl, array('start', 'stop', 'restart'), true)) {
-        return array(0, 'Unbekannter Befehl.');
+        return array(0, bw_t('ALLG.BEFEHL_UNBEKANNT'));
     }
     $skript = bw_paths()['bindir'] . '/dienst.sh';
     if (!is_file($skript)) {
-        return array(0, 'dienst.sh nicht gefunden: ' . $skript);
+        return array(0, sprintf(bw_t('ALLG.DIENST_SH_FEHLT'), $skript));
     }
     $ausgabe = array();
     $code = 0;
@@ -1505,6 +1607,15 @@ function bw_abo_text()
     }
     $gemessen = ' <span class="sm-mono">'
               . sprintf(bw_t('MQTT.ABO_GEMESSEN'), $f) . '</span>';
+    /* M3: unter V1 liest das Gateway die mitgelieferte Abodatei. Traegt sie
+     * das geltende Praefix, ist nichts einzutragen. */
+    if ($f < 2) {
+        $cfg = bw_config(false);
+        $ab = bw_abo_datei(isset($cfg['mqtt_topic']) ? $cfg['mqtt_topic'] : 'bewaesserung');
+        if ($ab[1]) {
+            return bw_t('MQTT.ABO_MITGELIEFERT') . $gemessen;
+        }
+    }
     return bw_t($f >= 2 ? 'MQTT.ABO_V2' : 'MQTT.ABO_WARNUNG') . $gemessen;
 }
 
@@ -1521,6 +1632,217 @@ function bw_abo_text()
 
 
 
+/* ==================================================================
+ * O1 (Durchgang 30.09.2026): Post/Redirect/Get mit Einmalmeldung.
+ *
+ * Bis 0.9.34 antwortete jeder POST-Zweig mit fertigem HTML. Ein F5 schickte
+ * denselben POST noch einmal: "Neues Token" erzeugte ein zweites Token (die
+ * gerade in Loxone eingetragene Adresse war sofort wieder ungueltig), und
+ * Dienst-Neustart, "Jetzt rechnen" und das Zurueckspielen liefen doppelt
+ * (Pruefbericht Oberflaeche, Befund 1). Jetzt endet jeder POST mit 303;
+ * was die Seite danach zeigen soll, liegt in data/plugins/<x>/einmalmeldung.json
+ * (0600), wird nur beim GET gelesen und sofort geloescht, und eine Datei
+ * aelter als 120 s wird verworfen. Muster: Regeln/04, Docker NG 1.3.5,
+ * Raumklima 0.11.8.
+ * ================================================================== */
+function bw_einmalmeldung_pfad()
+{
+    return bw_paths()['datadir'] . '/einmalmeldung.json';
+}
+
+function bw_einmalmeldung_schreiben($daten)
+{
+    $daten['ts'] = time();
+    return bw_json_schreiben(bw_einmalmeldung_pfad(), $daten, 0600);
+}
+
+function bw_einmalmeldung_holen()
+{
+    $pf = bw_einmalmeldung_pfad();
+    clearstatcache(true, $pf);
+    if (!is_file($pf)) { return array(); }
+    $d = bw_json_lesen($pf);
+    @unlink($pf);
+    if (!is_array($d) || !isset($d['ts']) || abs(time() - (int) $d['ts']) > 120) {
+        return array();
+    }
+    return $d;
+}
+
+/* O12 (Durchgang 30.09.2026): der Rechnername fuer Adressen - EINE Stelle
+ * fuer Vorlage und Baustein-Liste. */
+function bw_host()
+{
+    return isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
+        ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
+        : (gethostname() ?: 'loxberry');
+}
+
+/**
+ * O12 (Durchgang 30.09.2026): die Baustein-Liste aus Schritt 3.
+ *
+ * Bis 0.9.34 stand sie als feste Tabelle in index.php, mit eigenen Namen
+ * (BAUSTEIN.N01 bis N04): im Englischen wich N04 vom Titel der
+ * Importvorlage ab, P08 nannte den seit 0.9.22 fortgefallenen Namen
+ * BEW_DURCHLAEUFE, #1 bis #4 hiessen "Virtueller Eingang (analog)", die
+ * Zeile fuer den virtuellen HTTP-Eingang selbst fehlte, und die
+ * Ruecksetzzeit stand fest auf 22:00 (Pruefbericht Oberflaeche, Befund 12).
+ * Jetzt: Namen 1 bis 4 aus BW_TITEL - also genau die Titel, die die Vorlage
+ * anlegt -, eine Zeile 0 mit Adresse und Abfragezeit, P08 mit dem geltenden
+ * Namen, P07 mit fenster_von. Der Reiter Test vergleicht diese Liste mit
+ * der erzeugten Vorlage.
+ *
+ * Rueckgabe: Zeilen array(Nr, Typ (HTML), Name (Klartext), Parameter
+ * (HTML), Eingaenge (HTML)).
+ */
+function bw_baustein_liste($cfg, $token)
+{
+    $p = bw_paths();
+    $f = bw_status_felder();
+    $von = (isset($cfg['fenster_von'])
+            && preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', (string) $cfg['fenster_von']))
+        ? (string) $cfg['fenster_von'] : '22:00';
+    $adresse = 'http://' . bw_host() . '/plugins/' . $p['plugin']
+             . '/index.php?token=' . $token . '&aktion=status';
+    $mono = function ($s) { return '<span class="sm-mono">' . bw_e($s) . '</span>'; };
+    return array(
+        array(0,  bw_t('BAUSTEIN.T_VHTTP'), bw_t('ALLG.TITEL'),
+              sprintf(bw_t('BAUSTEIN.P00'), $mono($adresse), 300), '&mdash;'),
+        array(1,  bw_t('BAUSTEIN.T_VE'), bw_t($f['GIESSEN'][2]),
+              sprintf(bw_t('BAUSTEIN.P01'), $mono(bw_check('GIESSEN'))), '&mdash;'),
+        array(2,  bw_t('BAUSTEIN.T_VE'), bw_t($f['DURCHLAEUFE'][2]),
+              sprintf(bw_t('BAUSTEIN.P02'), $mono(bw_check('DURCHLAEUFE'))), '&mdash;'),
+        array(3,  bw_t('BAUSTEIN.T_VE'), bw_t($f['ET0'][2]),
+              sprintf(bw_t('BAUSTEIN.P03'), $mono(bw_check('ET0'))), '&mdash;'),
+        array(4,  bw_t('BAUSTEIN.T_VE'), bw_t($f['REICHT'][2]),
+              sprintf(bw_t('BAUSTEIN.P04'), $mono(bw_check('REICHT'))), '&mdash;'),
+        array(5,  bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N05'), bw_t('BAUSTEIN.P05'), 'I &larr; #1'),
+        array(6,  bw_t('BAUSTEIN.T_NICHT'),   bw_t('BAUSTEIN.N06'), '',                   'I &larr; #5'),
+        array(7,  bw_t('BAUSTEIN.T_ZAEHLER'), bw_t('BAUSTEIN.N07'),
+              sprintf(bw_t('BAUSTEIN.P07'), bw_e($von)), 'I &larr; ' . bw_t('BAUSTEIN.E_DURCHLAUF')),
+        array(8,  bw_t('BAUSTEIN.T_VERGL'),   bw_t('BAUSTEIN.N08'),
+              sprintf(bw_t('BAUSTEIN.P08'), bw_e(bw_t($f['DURCHLAEUFE'][2]))),
+              'AI1 &larr; #7, AI2 &larr; #2'),
+        array(9,  bw_t('BAUSTEIN.T_ODER'),    bw_t('BAUSTEIN.N09'), '',                   'I1 &larr; #6, I2 &larr; #8'),
+        array(10, bw_t('BAUSTEIN.T_BEW'),     bw_t('BAUSTEIN.N10'), bw_t('BAUSTEIN.P10'), 'Off &larr; #9'),
+        array(11, bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N11'), bw_t('BAUSTEIN.P11'), 'I &larr; #4'),
+        array(12, bw_t('BAUSTEIN.T_BENACHR'), bw_t('BAUSTEIN.N12'), bw_t('BAUSTEIN.P12'), 'I &larr; #11'),
+    );
+}
+
+/**
+ * O11 (Durchgang 30.09.2026): was ein Feld in der Vorlage ist.
+ * Rueckgabe array(Signed, Analog, MinVal, MaxVal, Unit) nach der
+ * Massvorlage XML_Vorlagen_0.9.10: 0/1-Felder digital und nicht signed,
+ * Grenzen 0/1; die Einheit mit Platzhalter <v.1> (ET0 zwei Stellen).
+ */
+function bw_vorlage_art($feld)
+{
+    if (in_array($feld, array('OK', 'GIESSEN', 'REICHT', 'GESPERRT', 'DECKT', 'PLANFEST'), true)) {
+        return array('false', 'false', '0', '1', '<v.1>');
+    }
+    switch ($feld) {
+        case 'ET0':         return array('false', 'true', '0', '50', '<v.2> mm');
+        case 'DURCHLAEUFE': return array('false', 'true', '0', '24', '<v.1>');
+        case 'NOETIG':      return array('false', 'true', '0', '2147483647', '<v.1>');
+        case 'ALTER':       return array('true', 'true', '-1', '2147483647', '<v.1> s');
+    }
+    return array('true', 'true', '-2147483647', '2147483647', '<v.1>');
+}
+
+/* O11: ein Kommentar in Loxone Config traegt hoechstens 40 Zeichen. Ohne
+ * mbstring zulaessig (Regeln/02): per preg mit /u gekuerzt. */
+function bw_kommentar_kurz($t)
+{
+    $t = trim(strip_tags(html_entity_decode((string) $t, ENT_QUOTES, 'UTF-8')));
+    if (preg_match('/^.{0,40}/us', $t, $m)) { return $m[0]; }
+    return substr($t, 0, 40);
+}
+
+/* ==================================================================
+ * O5 (Durchgang 30.09.2026): Zonen - dieselben Regeln fuer Formular und
+ * Sicherung.
+ *
+ * Bis 0.9.34 prueften bw_zonen_pruefen() und bw_quellen_pruefen() nur Art
+ * und Schluesselname. Eine Sicherung mit Flaeche -5, Rate 9999, Gießart
+ * "xyz" oder einer Zone nur aus dem Schluessel lief ohne Beanstandung durch,
+ * und eine http_url "file:///..." liess "Antwort abholen" eine beliebige
+ * lesbare Datei anzeigen (Pruefbericht Oberflaeche, Befund 5). Die Grenzen
+ * stehen jetzt HIER, und der Speicher-Handler im Reiter Zonen nimmt
+ * dieselben (bw_zonen_zahl_taugt()).
+ * ================================================================== */
+/* Schluessel => array(min, max, 0 heisst "nicht eingetragen", ganzzahlig) */
+function bw_zonen_grenzen()
+{
+    return array(
+        'flaeche'        => array(0, 100000, false, false),
+        'rate_mmh'       => array(0, 200, false, false),
+        'mikroklima'     => array(0.3, 1.5, false, false),
+        'dauer_s'        => array(30, 3600, true, true),
+        'hoehe_pflanze'  => array(0.05, 10, true, false),
+        'abfluss'        => array(0, 1, false, false),
+        'sensor_gewicht' => array(0, 1, false, false),
+        'theta_fc_eigen' => array(0.05, 0.60, true, false),
+        'theta_wp_eigen' => array(0.01, 0.45, true, false),
+        'theta_fc'       => array(0.01, 0.99, false, false),
+        'theta_wp'       => array(0, 0.99, false, false),
+        'kc'             => array(0, 3, false, false),
+        'zr'             => array(0, 10, false, false),
+        'p'              => array(0, 1, false, false),
+        'dr'             => array(0, 10000, false, false),
+        'im_zyklus'      => array(0, 1, false, true),
+        'rate_gemessen'  => array(0, 1, false, true),
+    );
+}
+
+function bw_zonen_zahl_taugt($k, $w)
+{
+    $g = bw_zonen_grenzen();
+    if (!isset($g[$k])) { return true; }
+    if (is_bool($w) || !is_numeric($w)) { return false; }
+    $z = (float) $w;
+    if ($g[$k][2] && $z == 0.0) { return true; }
+    if ($g[$k][3] && $z != floor($z)) { return false; }
+    return $z >= $g[$k][0] && $z <= $g[$k][1];
+}
+
+/* Die Pflichtschluessel einer Zone: ohne sie rechnet der Dienst die Zone
+ * nicht (zone_rechnen braucht Kc, Wurzeltiefe, p und die Bodenwerte), und
+ * die Oberflaeche braucht den Namen. */
+function bw_zonen_pflicht()
+{
+    return array('schluessel', 'name', 'bepflanzung', 'boden',
+                 'kc', 'zr', 'p', 'theta_fc', 'theta_wp');
+}
+
+/* Die Textfelder einer Zone gegen die Regeln des Formulars; Rueckgabe
+ * true, wenn der Wert taugt. */
+function bw_zonen_text_taugt($k, $w)
+{
+    $w = (string) $w;
+    if (preg_match('/[\x00-\x1F\x7F"]/', $w)) { return false; }
+    switch ($k) {
+        case 'name':
+            return trim($w) !== '';
+        case 'bepflanzung':
+        case 'boden':
+            $pf = bw_pflanzen();
+            return isset($pf[$k][$w]) && is_array($pf[$k][$w]) && $w !== '' && $w[0] !== '_';
+        case 'regner':
+            if ($w === '') { return true; }
+            $pf = bw_pflanzen();
+            return isset($pf['regner'][$w]) && is_array($pf['regner'][$w]) && $w[0] !== '_';
+        case 'giess_art':
+            return in_array($w, array('minuten', 'durchlaeufe', 'mm'), true);
+        case 'rate_gemessen_am':
+            return $w === '' || preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $w) === 1;
+        case 'feuchte_thema':
+        case 'giess_thema':
+            return strpos($w, "'") === false;
+    }
+    return true;
+}
+
 function bw_x($s)
 {
     return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8');
@@ -1530,26 +1852,35 @@ function bw_xml_virtual_in_http($kopf, $cmds)
 {
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualInHttp ';
+    /* O11 (Durchgang 30.09.2026): nach der Massvorlage XML_Vorlagen_0.9.10 -
+     * HintText zuerst am Kopf, das Element Info, je Befehl Unit und
+     * HintText, 0/1-Werte digital und nicht signed, SourceValHigh und
+     * DestValHigh 1. Bis 0.9.34 fehlten Info, Unit und HintText, und alle
+     * zehn Befehle waren analog und signed (Pruefbericht Oberflaeche,
+     * Befund 11). */
+    $o .= '<VirtualInHttp HintText="" ';
     $o .= 'Title="' . bw_x($kopf['title']) . '" ';
     $o .= 'Comment="' . bw_x(isset($kopf['comment']) ? $kopf['comment'] : '') . '" ';
     $o .= 'Address="' . bw_x(isset($kopf['address']) ? $kopf['address'] : '') . '" ';
     $o .= 'PollingTime="' . bw_x(isset($kopf['polling']) ? $kopf['polling'] : '60') . '"';
     $o .= '>' . $crlf;
+    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
     foreach ($cmds as $c) {
         $o .= "\t" . '<VirtualInHttpCmd ';
         $o .= 'Title="' . bw_x($c['title']) . '" ';
         $o .= 'Comment="' . bw_x(isset($c['comment']) ? $c['comment'] : '') . '" ';
         $o .= 'Check="' . bw_x(isset($c['check']) ? $c['check'] : ' ') . '" ';
-        $o .= 'Signed="true" ';
-        $o .= 'Analog="true" ';
+        $o .= 'Signed="' . bw_x(isset($c['signed']) ? $c['signed'] : 'true') . '" ';
+        $o .= 'Analog="' . bw_x(isset($c['analog']) ? $c['analog'] : 'true') . '" ';
         $o .= 'SourceValLow="0" ';
         $o .= 'DestValLow="0" ';
-        $o .= 'SourceValHigh="100" ';
-        $o .= 'DestValHigh="100" ';
+        $o .= 'SourceValHigh="1" ';
+        $o .= 'DestValHigh="1" ';
         $o .= 'DefVal="0" ';
-        $o .= 'MinVal="-2147483647" ';
-        $o .= 'MaxVal="2147483647"';
+        $o .= 'MinVal="' . bw_x(isset($c['min']) ? $c['min'] : '-2147483647') . '" ';
+        $o .= 'MaxVal="' . bw_x(isset($c['max']) ? $c['max'] : '2147483647') . '" ';
+        $o .= 'Unit="' . bw_x(isset($c['unit']) ? $c['unit'] : '<v.1>') . '" ';
+        $o .= 'HintText=""';
         $o .= '/>' . $crlf;
     }
     $o .= '</VirtualInHttp>' . $crlf;
@@ -1836,9 +2167,33 @@ function bw_zonen_pruefen($liste)
                                         htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
                     continue;
                 }
+                /* O5: dieselben Grenzen wie das Formular. */
+                if (!bw_zonen_zahl_taugt($k, $w)) {
+                    $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_BEREICH'),
+                                        htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
+                                        htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                    continue;
+                }
                 $neu[$k] = (float) $w;
             } else {
+                /* O5: Auswahllisten, Name und Themen wie im Formular. */
+                if (!bw_zonen_text_taugt($k, $w)) {
+                    $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_BEREICH'),
+                                        htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
+                                        htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+                    continue;
+                }
                 $neu[$k] = (string) $w;
+            }
+        }
+        /* O5: die Pflichtschluessel. Eine Zone nur aus dem Schluessel lief
+         * bis 0.9.34 durch und liess die Seite danach elfmal "Undefined
+         * array key" melden. */
+        foreach (bw_zonen_pflicht() as $pk) {
+            if (!array_key_exists($pk, $z)) {
+                $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_PFLICHT'),
+                                    htmlspecialchars($pk, ENT_QUOTES, 'UTF-8'),
+                                    htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
             }
         }
         $aus[] = $neu;
@@ -1880,22 +2235,52 @@ function bw_quellen_pruefen($q)
                     continue;
                 }
                 $e2 = array('weg' => (string) $e['weg']);
+                /* O5 (Durchgang 30.09.2026): wie das Formular - aber
+                 * ABGEWIESEN statt still gesaeubert: ein Zeichen, das das
+                 * Formular entfernt, ist in einer Sicherung ein Mangel. */
+                $bw_qok = preg_match('/^[a-z0-9_]{1,40}$/', (string) $g) === 1;
                 foreach (array('thema', 'pfad', 'einheit_quelle') as $t) {
-                    if (isset($e[$t]) && bw_wert_taugt($e[$t])) {
-                        $e2[$t] = preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $e[$t]);
+                    if (!isset($e[$t])) { continue; }
+                    if (!bw_wert_taugt($e[$t])
+                        || preg_match('/[\x00-\x1F\x7F"\']/', (string) $e[$t])
+                        || ($t === 'einheit_quelle'
+                            && !preg_match('#^[A-Za-z0-9/]{0,20}$#', (string) $e[$t]))) {
+                        $bw_qok = false;
+                        continue;
                     }
+                    $e2[$t] = (string) $e[$t];
+                }
+                if ($e2['weg'] === 'mqtt' && (!isset($e2['thema']) || trim($e2['thema']) === '')) { $bw_qok = false; }
+                if ($e2['weg'] === 'http' && (!isset($e2['pfad']) || trim($e2['pfad']) === '')) { $bw_qok = false; }
+                if (!$bw_qok) {
+                    $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_FELD'),
+                                        htmlspecialchars((string) $g, ENT_QUOTES, 'UTF-8'));
+                    continue;
                 }
                 $f[(string) $g] = $e2;
             }
             $aus['felder'] = $f;
             continue;
         }
-        if (!bw_wert_taugt($w)) {
+        /* O5 (Durchgang 30.09.2026): dieselben Muster wie die Formulare -
+         * http_url nur http/https (bis 0.9.34 ging file:/// durch), die
+         * Vorlage aus der Liste, das Horchthema nach dem Formularmuster. */
+        $bw_qs = is_string($w) || is_numeric($w) ? (string) $w : '';
+        $bw_qtaugt = bw_wert_taugt($w) && !preg_match('/[\x00-\x1F\x7F"\']/', $bw_qs);
+        if ($bw_qtaugt && $k === 'http_url' && $bw_qs !== ''
+            && !preg_match('#^https?://\S{3,200}\z#i', $bw_qs)) { $bw_qtaugt = false; }
+        if ($bw_qtaugt && $k === 'mqtt_thema' && $bw_qs !== ''
+            && !preg_match('#^[A-Za-z0-9_/\#+.\-]{1,128}$#', $bw_qs)) { $bw_qtaugt = false; }
+        if ($bw_qtaugt && $k === 'vorlage' && $bw_qs !== '') {
+            $bw_qv = bw_vorlagen();
+            if (!isset($bw_qv['vorlagen'][$bw_qs]) || $bw_qs[0] === '_') { $bw_qtaugt = false; }
+        }
+        if (!$bw_qtaugt) {
             $mangel[] = sprintf(bw_t('EINST.SICH_QUELLEN_WERT'),
                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
             continue;
         }
-        $aus[$k] = preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $w);
+        $aus[$k] = $bw_qs;
     }
     return array($mangel ? null : $aus, $mangel);
 }
@@ -1980,7 +2365,7 @@ function bw_sicherung_bauen()
     return array(
         /* Die Fassung kommt aus plugin.cfg, nicht aus einer zweiten
          * Konstante im Quelltext: eine Fassungsnummer hat EINE Quelle. */
-        '_stand'   => sprintf('%s %s, gesichert %s', bw_t('ALLG.TITEL'),
+        '_stand'   => sprintf(bw_t('EINST.SICH_STAND'), bw_t('ALLG.TITEL'),
                               bw_plugin_fassung(), date('Y-m-d H:i:s')),
         '_fassung' => 2,
         'config'   => bw_config(),
@@ -2005,6 +2390,15 @@ function bw_sicherung_lesen($roh)
     $zonen_roh = null;
     $quellen_roh = null;
     if (isset($daten['config']) && is_array($daten['config'])) {
+        /* O5 (Durchgang 30.09.2026): ein fremder oberster Abschnitt wird
+         * abgelehnt, nicht still uebergangen. */
+        foreach (array_keys($daten) as $bw_ok) {
+            if (!in_array((string) $bw_ok, array('_stand', '_fassung', '_hinweis',
+                                                 'config', 'zonen', 'quellen'), true)) {
+                $mangel[] = sprintf(bw_t('EINST.SICH_ABSCHNITT_FREMD'),
+                                    htmlspecialchars((string) $bw_ok, ENT_QUOTES, 'UTF-8'));
+            }
+        }
         $zonen_roh = isset($daten['zonen']) ? $daten['zonen'] : null;
         $quellen_roh = isset($daten['quellen']) ? $daten['quellen'] : null;
         $daten = $daten['config'];

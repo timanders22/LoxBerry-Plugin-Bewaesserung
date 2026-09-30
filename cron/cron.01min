@@ -9,4 +9,13 @@
 # nirgends, wenn dienst.sh vor seiner ersten Protokollzeile scheitert
 # (kein python3, 'su' bricht ab, bin/plugins/<x>/ gerade im Umbau):
 # der Waechter ist dann stumm tot.
+#
+# I4 (Durchgang 30.09.2026): Ordner und Datei VOR dem Aufruf anlegen und
+# die Aenderungszeit auffrischen (Regeln/06, am Geraet gemessen beim
+# Abfahrts-Assistenten 1.6.9): eine Umlenkung zum Anhaengen legt den
+# Ordner nicht an und frischt die Aenderungszeit nicht auf - nach dem
+# Leeren der Ramdisk ging die Fehlerausgabe verloren, und die Logwartung
+# raeumte die Datei als alt ab.
+mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
+touch "REPLACELBPLOGDIR/cron.err" 2>/dev/null
 "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"

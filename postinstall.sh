@@ -42,14 +42,28 @@ fi
 # Zwischen dem "touch soll_laufen" in bin/dienst.sh und dem Augenblick, in
 # dem der neue Prozess als Dienst erkennbar ist, koennte der Minutentakt
 # denselben Dienst ein zweites Mal starten; solange die Marke liegt, ist
-# dieses Fenster zu. Gemessen (Pruefung-Bewaesserung-0.9.30,
-# messe_reihenfolge.sh, vier Waechterschleifen ohne Pause waehrend
-# postinstall.sh): in dieser Linie trat der Doppelstart in KEINER Reihenfolge
-# auf - je 0 von 15 Runden mit der Marke danach, mit der Marke davor und ganz
-# ohne Marke; starten() fragt vor dem Start ein zweites Mal nach einem
-# laufenden Dienst. Die Reihenfolge ist hier also Vorsicht, kein gemessener
-# Schaden; bei Chromecast4lox 1.3.10 war sie einer (Regeln/06).
+# dieses Fenster zu.
+#
+# BERICHTIGT 30.09.2026 (C1). Hier stand, der Doppelstart trete "in KEINER
+# Reihenfolge" auf. Gemessen war damals (Pruefung-Bewaesserung-0.9.30,
+# messe_reihenfolge.sh) nur postinstall.sh gegen Waechterschleifen: je 0 von
+# 15 Runden. ZWEI WAECHTER gegeneinander hat niemand gemessen - und genau
+# das trat am Geraet ein: seit 28.09.2026 liefen zwei Dienste, weil beim
+# Systemstart die Uhr sprang und cron cron.01min zweimal in derselben
+# Sekunde startete (Journal CRON[3038]/CRON[3170]; in WSL nachgestellt, 5
+# von 5 Doppelaufrufen ergaben zwei Dienste). Die Frage "laeuft schon
+# einer?" in starten() half nicht: beide fragten, bevor einer lief. Seit
+# 0.9.35 sperren bin/dienst.sh (flock auf das Skript, um starten() und um
+# den Waechter) und der Dienst selbst (dienst.lock); die Marke bleibt als
+# zweite Sicherung fuer die Aktualisierung.
 BW_MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+# I1 (Durchgang 30.09.2026, Entscheidung 1): Zweitschriften, Verlauf,
+# Update-Sicherung und der Startmerker werden NUR bei einer Aktualisierung
+# eingespielt - erkannt an der Marke von preupgrade.sh, festgehalten hier,
+# bevor der trap sie entfernt. Eine Neuinstallation spielt nichts zurueck
+# und startet nichts; preinstall.sh hat die Reste nach .alt gelegt.
+UPGRADE=0
+[ -f "$BW_MARKE" ] && UPGRADE=1
 bw_marke_weg() {
     if [ -f "$BW_MARKE" ]; then
         rm -f "$BW_MARKE" && echo "<INFO> Die Aktualisierung ist durch - Dienststart wieder frei."
@@ -155,6 +169,7 @@ bw_beiseite() {   # $1 Datei
 # WSL gemessen, Pruefung-Bewaesserung-0.9.33, Faelle S3a/S3b). Und nur eine
 # fehlende verlauf.json wurde zurueckgeholt, eine "{}" nicht (Fall S4a).
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
+    [ "$UPGRADE" = 1 ] || break
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
     if [ -f "$BK" ] && ! bw_sicherung_taugt "$f" "$CF"; then
@@ -171,7 +186,7 @@ for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     fi
 done
 BKV="$BASE/config/plugins/$PFOLDER.backup.verlauf.json"
-if [ -f "$BKV" ] && ! bw_verlauf_inhalt "$PDATA/verlauf.json"; then
+if [ "$UPGRADE" = 1 ] && [ -f "$BKV" ] && ! bw_verlauf_inhalt "$PDATA/verlauf.json"; then
     if ! bw_verlauf_inhalt "$BKV"; then
         echo "<INFO> Die Sicherung des Verlaufs traegt keine Tage - nichts zurueckgespielt."
     else
@@ -222,12 +237,41 @@ fi
 
 
 # ---------- venv nur fuer das freiwillige Paket ----------
+#
+# I5 (Durchgang 30.09.2026): ist eine MQTT-Quelle eingerichtet (eine Groesse
+# auf dem Weg mqtt, ein Horchthema, ein Feuchte- oder Rueckmeldethema einer
+# Zone), ist ein fehlendes paho-mqtt kein Hinweis, sondern ein Ausfall: die
+# Werte kommen nicht an, und der Plan rechnet ohne sie. Bis 0.9.34 stand
+# auch dann nur <INFO>, und die Schlussmeldung sagte "abgeschlossen".
+bw_mqtt_quelle() {
+    "$PY3" -c 'import json,sys
+def lies(p):
+    try:
+        d=json.load(open(p))
+        return d if isinstance(d,dict) else {}
+    except Exception:
+        return {}
+q=lies(sys.argv[1]); z=lies(sys.argv[2])
+f=q.get("felder") if isinstance(q.get("felder"),dict) else {}
+ja=any(isinstance(e,dict) and e.get("weg")=="mqtt" for e in f.values())
+ja=ja or bool(str(q.get("mqtt_thema") or "").strip())
+zl=z.get("zonen") if isinstance(z.get("zonen"),list) else []
+ja=ja or any(isinstance(x,dict) and (str(x.get("feuchte_thema") or "").strip() or str(x.get("giess_thema") or "").strip()) for x in zl)
+sys.exit(0 if ja else 1)' "$PCONFIG/quellen_zuordnung.json" "$PCONFIG/zonen.json" >/dev/null 2>&1
+}
+BW_PAHO_FEHLT=0
 if [ ! -x "$VENV/bin/python3" ]; then
     if "$PY3" -m venv "$VENV" 2>/dev/null; then
         echo "<OK> Virtuelle Umgebung angelegt."
     else
-        echo "<INFO> Virtuelle Umgebung liess sich nicht anlegen (python3-venv fehlt?)."
-        echo "<INFO> Das Plugin laeuft trotzdem - dann aber ohne MQTT-Quellen."
+        BW_PAHO_FEHLT=1
+        if bw_mqtt_quelle; then
+            echo "<WARNING> Die virtuelle Umgebung liess sich nicht anlegen (python3-venv fehlt?) -"
+            echo "<WARNING> die eingerichteten MQTT-Quellen liefern damit NICHTS, bis paho-mqtt da ist."
+        else
+            echo "<INFO> Virtuelle Umgebung liess sich nicht anlegen (python3-venv fehlt?)."
+            echo "<INFO> Das Plugin laeuft trotzdem - dann aber ohne MQTT-Quellen."
+        fi
     fi
 fi
 if [ -x "$VENV/bin/pip" ]; then
@@ -241,8 +285,14 @@ if [ -x "$VENV/bin/pip" ]; then
     if "$VENV/bin/pip" install --no-cache-dir "paho-mqtt<2" >"$PIPLOG" 2>&1; then
         echo "<OK> Paket paho-mqtt eingerichtet - Messwerte koennen ueber MQTT kommen."
     else
-        echo "<INFO> paho-mqtt liess sich nicht einrichten. Open-Meteo und die"
-        echo "<INFO> HTTP-Quellen funktionieren trotzdem; MQTT-Quellen bleiben leer."
+        BW_PAHO_FEHLT=1
+        if bw_mqtt_quelle; then
+            echo "<WARNING> paho-mqtt liess sich nicht einrichten, obwohl MQTT-Quellen eingerichtet"
+            echo "<WARNING> sind - sie liefern NICHTS, bis das Paket da ist (Reiter Test)."
+        else
+            echo "<INFO> paho-mqtt liess sich nicht einrichten. Open-Meteo und die"
+            echo "<INFO> HTTP-Quellen funktionieren trotzdem; MQTT-Quellen bleiben leer."
+        fi
         tail -n 5 "$PIPLOG"
     fi
     rm -f "$PIPLOG"
@@ -288,7 +338,7 @@ bw_json_inhalt() {
     "$PY3" -c 'import json,sys
 sys.exit(0 if json.load(open(sys.argv[1])) else 1)' "$1" >/dev/null 2>&1
 }
-if [ -d "$LANG_SICHER" ]; then
+if [ "$UPGRADE" = 1 ] && [ -d "$LANG_SICHER" ]; then
     LANG_OFFEN=""
     for LANG_F in tagesextreme.json nachtplan.json zustand.json; do
         LANG_Q="$LANG_SICHER/$LANG_F"
@@ -340,7 +390,7 @@ fi
 # soll erst Standort, Quellen und Zonen eintragen. Wer den Dienst vorher
 # bewusst angehalten hatte, findet ihn nach dem Update ebenfalls angehalten.
 MERKER="$BASE/config/plugins/$PFOLDER.backup.lief_vorher"
-if [ -f "$MERKER" ]; then
+if [ "$UPGRADE" = 1 ] && [ -f "$MERKER" ]; then
     rm -f "$MERKER"
     if [ -x "$PBIN/dienst.sh" ]; then
         # Die Ausnahme von der Marke - siehe bw_marke_weg() oben.
@@ -369,6 +419,10 @@ fi
 # Aktionstoken in bewaesserung.json (bw_hat_token, oben beim Zurueckholen).
 # Fehlt es nach einem Upgrade, ist die Rueckholung gescheitert, und dann ist
 # die Anleitung genau richtig.
+if [ "$BW_PAHO_FEHLT" = 1 ] && bw_mqtt_quelle; then
+    # I5: die Schlussmeldung sagt es auch.
+    echo "<WARNING> Abgeschlossen, aber OHNE paho-mqtt: die eingerichteten MQTT-Quellen liefern nichts."
+fi
 if bw_hat_token "$PCONFIG/bewaesserung.json"; then
     echo "<OK> Aktualisierung abgeschlossen, Einstellungen uebernommen."
 else
@@ -377,7 +431,7 @@ else
     echo "<INFO>   2. Reiter Quellen: Wetterstation zuordnen - oder bei Open-Meteo bleiben"
     echo "<INFO>   3. Reiter Zonen: je Kreis Flaeche, Bepflanzung und Boden eintragen"
     echo "<INFO>   4. Becherprobe machen - ohne sie sind Liter und Minuten geschaetzt"
-    echo "<INFO>   5. Reiter MQTT: das Abo im Gateway eintragen"
+    echo "<INFO>   5. Reiter MQTT: nachsehen, ob das Abo im Gateway steht (das Plugin bringt es mit)"
     echo "<OK> Installation abgeschlossen."
 fi
 

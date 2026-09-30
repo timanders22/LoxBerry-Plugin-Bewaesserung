@@ -191,13 +191,64 @@ else
     rm -f "$PID"
 fi
 
+# I2 (Durchgang 30.09.2026): gesichert wird nur, was INHALT traegt, und
+# zwar ueber eine Nebendatei <zweitschrift>.neu, die erst nach cmp und
+# Inhaltspruefung an ihren Platz kommt. Bis 0.9.34 kopierte cp -p jede
+# vorhandene Datei - eine abgeschnittene zonen.json ueberschrieb die heile
+# Zweitschrift, und nach dem Update waren die Zonen fort (Pruefbericht
+# Installer). Inhalt heisst dasselbe wie in postinstall.sh: bei
+# bewaesserung.json ein nicht leeres Aktionstoken, beim Verlauf Tage, sonst
+# lesbares JSON, das nicht leer ist. Ohne python3 genuegt eine Datei, die
+# mehr als Leerraum, "{}" oder "[]" traegt.
+BW_PY=$(command -v python3 2>/dev/null)
+bw_inhalt() {   # $1 Dateiname, $2 Pfad
+    [ -f "$2" ] || return 1
+    if [ -n "$BW_PY" ]; then
+        case "$1" in
+            bewaesserung.json) "$BW_PY" -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+t=d.get("aktionstoken") if isinstance(d,dict) else None
+sys.exit(0 if t is not None and str(t).strip() else 1)' "$2" >/dev/null 2>&1 ;;
+            verlauf.json) "$BW_PY" -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+t=d.get("tage") if isinstance(d,dict) else None
+sys.exit(0 if isinstance(t,dict) and t else 1)' "$2" >/dev/null 2>&1 ;;
+            *) "$BW_PY" -c 'import json,sys
+sys.exit(0 if json.load(open(sys.argv[1])) else 1)' "$2" >/dev/null 2>&1 ;;
+        esac
+        return $?
+    fi
+    case "$(tr -d ' \t\r\n' < "$2" 2>/dev/null)" in ''|'{}'|'[]') return 1 ;; esac
+    return 0
+}
+bw_sichern() {   # $1 Dateiname, $2 Quelle, $3 Zweitschrift
+    rm -f "$3.neu" 2>/dev/null
+    if cp -p "$2" "$3.neu" 2>/dev/null && cmp -s "$2" "$3.neu" && bw_inhalt "$1" "$3.neu"; then
+        # 0600: cp -p erbt die Rechte der Quelle, und in bewaesserung.json
+        # steht das Aktionstoken.
+        chmod 600 "$3.neu" 2>/dev/null
+        mv -f "$3.neu" "$3" && return 0
+    fi
+    rm -f "$3.neu" 2>/dev/null
+    return 1
+}
+BW_FEHLT=""
 for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
     CF="$BASE/config/plugins/$PFOLDER/$f"
-    # 0600 auch auf die Zweitschrift: cp -p erbt die Rechte der Quelle,
-    # und in bewaesserung.json steht das Aktionstoken.
-    if [ -f "$CF" ] && cp -p "$CF" "$BASE/config/plugins/$PFOLDER.backup.$f"; then
-        chmod 600 "$BASE/config/plugins/$PFOLDER.backup.$f" 2>/dev/null
+    BK="$BASE/config/plugins/$PFOLDER.backup.$f"
+    [ -f "$CF" ] || continue
+    if ! bw_inhalt "$f" "$CF"; then
+        if bw_inhalt "$f" "$BK"; then
+            echo "<WARNING> $f ist leer oder beschaedigt - die heile Zweitschrift bleibt und wird nach dem Update eingespielt."
+        else
+            echo "<INFO> $f traegt keine Einstellungen - nichts zu sichern."
+        fi
+        continue
+    fi
+    if bw_sichern "$f" "$CF" "$BK"; then
         echo "<INFO> $f gesichert."
+    else
+        BW_FEHLT="$BW_FEHLT $f"
     fi
 done
 # 0600 auch hier. Die Schleife darueber setzt es, diese Kopie liess es
@@ -208,22 +259,25 @@ done
 # eine Ausnahme, die niemand beabsichtigt hat, ist keine.
 VL="$BASE/data/plugins/$PFOLDER/verlauf.json"
 VLB="$BASE/config/plugins/$PFOLDER.backup.verlauf.json"
-if [ -f "$VL" ] && cp -p "$VL" "$VLB"; then
-    chmod 600 "$VLB" 2>/dev/null
-    echo "<INFO> Verlauf des Wasserhaushalts gesichert."
+# I2: derselbe Weg - ein Verlauf ohne Tage ueberschreibt keinen mit Tagen.
+if [ -f "$VL" ]; then
+    if ! bw_inhalt verlauf.json "$VL"; then
+        if bw_inhalt verlauf.json "$VLB"; then
+            echo "<WARNING> verlauf.json ist leer oder beschaedigt - die heile Sicherung des Verlaufs bleibt."
+        fi
+    elif bw_sichern verlauf.json "$VL" "$VLB"; then
+        echo "<INFO> Verlauf des Wasserhaushalts gesichert."
+    else
+        echo "<WARNING> Der Verlauf liess sich nicht sichern - nach dem Update faengt die Bilanz bei null an."
+    fi
 fi
 # Die WIRKUNG pruefen, nicht den Rueckgabewert: liegt hinterher etwas da?
 #
 # Scheiterte 'cp' (volles Dateisystem, Rechte), fehlte bis 0.9.21 nur eine
 # <INFO>-Zeile, und 'exit 0' am Ende meldete Erfolg - waehrend der Purge
 # gleich danach das Original loeschte.
-BW_FEHLT=""
-for f in bewaesserung.json zonen.json quellen_zuordnung.json; do
-    if [ -f "$BASE/config/plugins/$PFOLDER/$f" ] \
-       && [ ! -f "$BASE/config/plugins/$PFOLDER.backup.$f" ]; then
-        BW_FEHLT="$BW_FEHLT $f"
-    fi
-done
+# BW_FEHLT fuellt seit 0.9.35 die Sicherungsschleife oben: nur eine Datei
+# MIT Inhalt, deren Zweitschrift nicht entstand oder nicht gleich ist.
 if [ -n "$BW_FEHLT" ]; then
     echo "<FAIL> Nicht gesichert:$BW_FEHLT - das Update wird abgebrochen, damit der Purge die Originale nicht loescht."
     # Mit 'exit 2' endet die Installation hier (&fail), postinstall.sh
@@ -244,6 +298,14 @@ echo "<OK> preupgrade abgeschlossen."
 # Deshalb NEBEN den Ordner: "rm -rf .../<x>/" trifft den Nachbarn mit dem
 # Punkt nicht. postinstall.sh holt ihn zurueck und raeumt ihn weg.
 LANG_SICHER="$BASE/data/plugins/$PFOLDER.upgrade_sicherung"
+# I3 (Durchgang 30.09.2026): alter Bestand aus einem frueheren Vorgang
+# wird VOR dem Anlegen entfernt. postinstall.sh laesst die Sicherung
+# liegen, wenn es nicht alles zurueckholen konnte; bis 0.9.34 spielte das
+# naechste Update diesen alten Stand mit ein - etwa den Nachtplan einer
+# laengst vergangenen Nacht. Der Pfad wird vorher geprueft.
+case "$LANG_SICHER" in
+    */data/plugins/?*.upgrade_sicherung) rm -rf "${LANG_SICHER:?}" 2>/dev/null ;;
+esac
 mkdir -p "$LANG_SICHER" 2>/dev/null
 chmod 0700 "$LANG_SICHER" 2>/dev/null
 # nachtplan.json gehoert dazu: ein Update im Giessfenster raeumte ihn

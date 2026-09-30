@@ -51,12 +51,20 @@ header('Cache-Control: no-store');
  * als eingerichtet und in der Bibliothek gleichzeitig als fehlend -
  * zwei Stellen, zwei Urteile ueber denselben Wert. */
 $bw_soll = trim((string) $bw_cfg['aktionstoken']);
-$bw_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
+/* C8/O18 (Durchgang 30.09.2026): nur eine Zeichenkette nach dem Muster des
+ * Bestands (Regeln/05) gilt als Token. Bis 0.9.34 machte (string) aus
+ * ?token[]=x das Wort "Array" - ein so gesetztes Token liess sich damit
+ * ohne Kenntnis erraten (Pruefbericht Code, C8). Alles andere ist ein
+ * leeres Token und endet unten mit 403. */
+$bw_ist = (isset($_GET['token']) && is_string($_GET['token'])
+           && preg_match('/^[A-Za-z0-9_.\-]{1,64}$/', $_GET['token']) === 1)
+    ? $_GET['token'] : '';
 
 /* Die Tokenprobe steht unmittelbar hinter dem Einlesen und VOR jeder
  * Aktion. Sie benutzt dieselbe Pruefung wie alles andere - ein Selbsttest
  * darf keine Abkuerzung an der Sicherheit vorbei sein. */
-$bw_selftest = isset($_GET['selftest']) && (string) $_GET['selftest'] === '1';
+$bw_selftest = isset($_GET['selftest']) && is_string($_GET['selftest'])
+    && $_GET['selftest'] === '1';
 
 if ($bw_soll === '') {
     http_response_code(403);
@@ -90,7 +98,9 @@ if ($bw_selftest) {
 }
 
 $bw_erlaubt = array('status', 'zone', 'zonen', 'roh');
-$bw_aktion = isset($_GET['aktion']) ? (string) $_GET['aktion'] : 'status';
+/* C8: eine Liste statt einer Zeichenkette ist eine unbekannte Aktion. */
+$bw_aktion = !isset($_GET['aktion']) ? 'status'
+    : (is_string($_GET['aktion']) ? $_GET['aktion'] : '');
 if (!in_array($bw_aktion, $bw_erlaubt, true)) {
     http_response_code(400);
     header('Content-Type: text/plain; charset=utf-8');
@@ -155,13 +165,14 @@ if ($bw_aktion === 'zonen') {
             'mikroklima' => isset($e['mikroklima']) ? (float) $e['mikroklima'] : 1.0,
         );
     }
-    bw_json_ausgeben(array('ok' => (int) (!empty($a['ok'])), 'zonen' => $aus));
+    /* C2: dieselbe Frage wie in der Statuszeile. */
+    bw_json_ausgeben(array('ok' => (int) bw_ok_gilt($a), 'zonen' => $aus));
     exit;
 }
 
 if ($bw_aktion === 'zone') {
     header('Content-Type: text/plain; charset=utf-8');
-    $bw_z = isset($_GET['zone']) ? (string) $_GET['zone'] : '';
+    $bw_z = (isset($_GET['zone']) && is_string($_GET['zone'])) ? $_GET['zone'] : '';
     if (!preg_match('/^[a-z0-9_-]{1,40}$/', $bw_z)) {
         http_response_code(400);
         echo "FEHLER;OK=0;GRUND=ZONE_UNGUELTIG\n";
@@ -183,4 +194,17 @@ if ($bw_aktion === 'zone') {
 }
 
 header('Content-Type: text/plain; charset=utf-8');
+/* C3 (Durchgang 30.09.2026): ohne Daten 503 (Regeln/07, "Das gilt auch
+ * vor dem ersten Abruf"). Bis 0.9.34 kam vor dem ersten Rechengang HTTP 200
+ * mit einer Zeile aus lauter Nullen und ALTER=-1 - in Loxone sah das aus
+ * wie "heute kein Bedarf". Das gilt auch, wenn der Dienst noch nie einen
+ * guten Plan hatte und die Wetterquelle ausfaellt (plan_halten()). */
+$bw_a = bw_abbild();
+if (empty($bw_a['ts'])) {
+    http_response_code(503);
+    echo "BEWAESSERUNG;OK=0;GRUND=NOCH_NICHT_GERECHNET\n";
+    echo "Es liegt noch kein gueltiger Plan vor. Reiter Test, Knopf \"Jetzt rechnen\"; "
+       . "der Grund steht im Reiter Logdateien.\n";
+    exit;
+}
 echo bw_statuszeile() . "\n";

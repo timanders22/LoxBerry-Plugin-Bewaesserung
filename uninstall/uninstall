@@ -196,6 +196,10 @@ for un_f in "$UN_BASE/config/plugins/$UN_FOLDER".backup.*; do
 done
 rm -f  "$UN_BASE/config/plugins/$UN_FOLDER".backup.* 2>/dev/null
 rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
+# I1 (Durchgang 30.09.2026): was preinstall.sh bei einer Neuinstallation
+# beiseitegelegt hat. Die Zweitschriften darunter (<x>.backup.*.alt) trifft
+# schon das Sternchen oben, samt Ueberschreiben.
+rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.alt" 2>/dev/null
 # Die Marke einer abgebrochenen Aktualisierung liegt ebenfalls neben dem
 # Datenordner (preupgrade.sh). Bliebe sie liegen, sperrte sie bei einer
 # Neuinstallation innerhalb der Stunde den Dienststart (Fall C9).
@@ -207,6 +211,7 @@ rm -rf "$UN_BASE/log/plugins/$UN_FOLDER" 2>/dev/null
 UN_UEBRIG=0
 for un_f in "$UN_BASE/config/plugins/$UN_FOLDER".backup.* \
             "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" \
+            "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.alt" \
             "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" \
             "$UN_BASE/log/plugins/$UN_FOLDER"; do
     [ -e "$un_f" ] && UN_UEBRIG=$((UN_UEBRIG + 1)) && echo "<WARNING> Liegt noch: $un_f"

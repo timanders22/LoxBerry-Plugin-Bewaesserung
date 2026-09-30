@@ -180,6 +180,8 @@ DATEI_ROH = os.path.join(DATADIR, "roh.json")
 DATEI_EXTREME = os.path.join(DATADIR, "tagesextreme.json")
 DATEI_NACHTPLAN = os.path.join(DATADIR, "nachtplan.json")
 DATEI_PID = os.path.join(DATADIR, "dienst.pid")
+# C1 (Durchgang 30.09.2026): die Sperre des Dienstes selbst.
+DATEI_DIENSTSPERRE = os.path.join(DATADIR, "dienst.lock")
 DATEI_LOG = os.path.join(LOGDIR, "bewaesserung.log")
 
 VORGABEN = {
@@ -580,6 +582,42 @@ class Rechensperre:
             self._f = None
 
 
+def dienstsperre_nehmen() -> bool:
+    """C1 (Durchgang 30.09.2026): nur EIN Dienst je Installation.
+
+    Sperrdatei dienst.lock im Datenordner, fcntl.flock ohne Warten. Der
+    Deskriptor wird mit O_CLOEXEC geoeffnet und bleibt offen, solange der
+    Dienst laeuft; das Betriebssystem gibt die Sperre beim Prozessende
+    selbst frei. Rueckgabe False: ein anderer Dienst haelt sie.
+
+    Ohne fcntl (Bau-Rechner) oder ohne anlegbare Datei faellt die Sperre
+    OFFEN aus, wie die Rechensperre: dann bleibt es bei der Sperre in
+    dienst.sh.
+    """
+    global _DIENSTSPERRE
+    try:
+        import fcntl  # noqa: PLC0415
+    except ImportError:
+        return True
+    try:
+        fd = os.open(DATEI_DIENSTSPERRE,
+                     os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o644)
+    except OSError as f:
+        _LOG.warning("Sperrdatei %s nicht anlegbar (%s) - es gilt nur die "
+                     "Startsperre in dienst.sh.", DATEI_DIENSTSPERRE, f)
+        return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    _DIENSTSPERRE = fd
+    return True
+
+
+_DIENSTSPERRE = None
+
+
 def json_lesen(p: str) -> dict:
     """Eine JSON-Datei lesen - und einen Schaden nicht verschweigen.
 
@@ -654,6 +692,240 @@ def config() -> dict:
     c = dict(VORGABEN)
     c.update(json_lesen(DATEI_CONFIG))
     return c
+
+
+# ---------------------------------------------------------------------
+# C4, C5 (Durchgang 30.09.2026): die Konfiguration des Dienstes.
+#
+# config() oben bleibt fuer die Deinstallation (--mqtt-leeren) und den
+# Selbsttest. Der Rechenweg liest ueber config_streng(), und das rechnet
+# NIE mit Werksvorgaben (Entscheidung Frage 6/11: "Nie wird mit
+# Werksvorgaben gegossen").
+#
+# Bis 0.9.34 legte json_lesen() eine unlesbare bewaesserung.json beiseite
+# und gab {} zurueck; config() fuellte daraus die Werksvorgaben, und der
+# Dienst rechnete mit Breite 0, Laenge 0 und dem Werksfenster weiter. Die
+# Datei war danach fort, und schon der naechste Neustart scheiterte an
+# der fehlenden Konfiguration, bis jemand die Oberflaeche oeffnete. Ein
+# unlesbarer Takt ("takt": "x") warf vor dem try und liess den Dienst im
+# Minutentakt abstuerzen (Pruefbericht Code, C4/C5).
+#
+# Jetzt: wie bw_config() in bw_lib.php. Traegt die Konfiguration kein
+# Aktionstoken (fehlt, leer, "{}", unlesbar, ohne Token) und liegt eine
+# Zweitschrift MIT Token daneben, wird sie zurueckgeholt; der verdraengte
+# Stand bleibt als <datei>.kaputt.<zeit> (0600) liegen. Sonst gilt die
+# Konfiguration als kaputt: nicht rechnen, der letzte gute Plan bleibt
+# stehen, ok=0 geht hinaus, gebremst eine Zeile im Protokoll.
+# ---------------------------------------------------------------------
+if ANLAGE:
+    DATEI_SICHERUNG = os.path.join(HOME, "config", "plugins", ORDNER + ".backup.json")
+else:
+    DATEI_SICHERUNG = os.path.join(CONFIGDIR, "bewaesserung.backup.json")
+
+
+class KonfigKaputt(Exception):
+    """Die Konfiguration taugt nicht zum Rechnen (C4, C5)."""
+
+
+def _json_lage(p: str) -> tuple:
+    """Wie bw_json_lage() in bw_lib.php: (Lage, Daten). Legt NICHTS beiseite.
+
+    Lage: fehlt, unlesbar, leer, ungueltig, neu (genau "{}") oder ok.
+    """
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            roh = fh.read()
+    except FileNotFoundError:
+        return ("fehlt", {})
+    except (OSError, UnicodeDecodeError, ValueError):
+        return ("unlesbar", {})
+    roh = roh.strip()
+    if not roh:
+        return ("leer", {})
+    try:
+        d = json.loads(roh)
+    except ValueError:
+        return ("ungueltig", {})
+    if not isinstance(d, dict):
+        return ("ungueltig", {})
+    return ("neu" if roh == "{}" else "ok", d)
+
+
+def _hat_token(d: dict) -> bool:
+    return isinstance(d, dict) and str(d.get("aktionstoken") or "").strip() != ""
+
+
+def _config_beiseite(grund: str) -> None:
+    """Wie bw_config_beiseite(): der verdraengte Stand bleibt liegen, 0600.
+    Leerraum, "{}" und "[]" tragen nichts und bekommen keine Nebendatei."""
+    try:
+        with open(DATEI_CONFIG, "rb") as fh:
+            rest = b"".join(fh.read().split())
+    except OSError:
+        return
+    if rest in (b"", b"{}", b"[]"):
+        return
+    beiseite = "%s.kaputt.%s" % (DATEI_CONFIG, time.strftime("%Y%m%d_%H%M%S"))
+    if os.path.exists(beiseite):
+        return
+    try:
+        os.replace(DATEI_CONFIG, beiseite)
+        os.chmod(beiseite, 0o600)
+        _LOG.error("Die Konfiguration %s und liegt jetzt als %s daneben.",
+                   grund, os.path.basename(beiseite))
+    except OSError as f:
+        _LOG.error("Die Konfiguration %s und liess sich nicht beiseitelegen: %s",
+                   grund, f)
+
+
+def _pflichtzahlen(c: dict) -> dict:
+    """Jede Zahl, die VORGABEN als Zahl fuehrt, muss eine endliche Zahl sein.
+
+    Eine Zahl als Zeichenkette ("300") wird zur Zahl - so lesen sie die
+    Rechenwege ohnehin (int(), float()). Was sich nicht lesen laesst, macht
+    die Konfiguration kaputt, und der Name steht in der Meldung.
+    """
+    schlecht = []
+    for k, vorgabe in VORGABEN.items():
+        if isinstance(vorgabe, bool) or not isinstance(vorgabe, (int, float)):
+            continue
+        w = c.get(k)
+        z = None
+        if isinstance(w, bool):
+            z = float(int(w))
+        elif isinstance(w, (int, float)):
+            z = float(w)
+        elif isinstance(w, str):
+            try:
+                z = float(w.strip())
+            except ValueError:
+                z = None
+        if z is None or z != z or z in (float("inf"), float("-inf")):
+            schlecht.append(k)
+            continue
+        if isinstance(w, str):
+            c[k] = int(z) if isinstance(vorgabe, int) else z
+    if schlecht:
+        raise KonfigKaputt("unlesbare Zahl in %s" % ", ".join(sorted(schlecht)))
+    return c
+
+
+_LAGE_TEXT = {
+    "fehlt": "fehlt",
+    "unlesbar": "ist nicht lesbar",
+    "leer": "ist leer",
+    "neu": "ist noch nicht eingerichtet ({})",
+    "ungueltig": "ist kein gueltiges JSON",
+    "ok": "traegt kein Aktionstoken",
+}
+
+
+def config_streng() -> dict:
+    """Die Konfiguration fuer den Rechenweg - oder KonfigKaputt."""
+    lage, d = _json_lage(DATEI_CONFIG)
+    if not (lage == "ok" and _hat_token(d)):
+        z_lage, z = _json_lage(DATEI_SICHERUNG)
+        if z_lage == "ok" and _hat_token(z):
+            _config_beiseite("war " + _LAGE_TEXT.get(lage, lage))
+            if json_schreiben(DATEI_CONFIG, z, 0o600):
+                _LOG.error("Die Konfiguration %s und wurde aus der Zweitschrift %s "
+                           "zurueckgeholt. Die Ursache besteht moeglicherweise fort.",
+                           _LAGE_TEXT.get(lage, lage), os.path.basename(DATEI_SICHERUNG))
+            else:
+                _LOG.error("Die Konfiguration %s; die Zweitschrift %s liess sich nicht "
+                           "zurueckschreiben - gerechnet wird mit der Zweitschrift.",
+                           _LAGE_TEXT.get(lage, lage), os.path.basename(DATEI_SICHERUNG))
+            lage, d = "ok", z
+    if lage != "ok":
+        raise KonfigKaputt("%s %s" % (os.path.basename(DATEI_CONFIG),
+                                      _LAGE_TEXT.get(lage, lage)))
+    c = dict(VORGABEN)
+    c.update(d)
+    return _pflichtzahlen(c)
+
+
+# ---------------------------------------------------------------------
+# M1, C4 (Durchgang 30.09.2026): der letzte gute Plan bleibt stehen.
+#
+# Entscheidung Frage 6/11: "Faellt die Wetterquelle aus oder ist die
+# Konfiguration kaputt, bleibt der letzte gute Plan stehen (aus dem
+# Abbild), und ok geht auf 0." Bis 0.9.34 rechnete der Dienst bei einem
+# Ausfall von Open-Meteo mit leerer Vorschau weiter - ohne
+# Regenvorhersage kippte der Plan auf "giessen" (Pruefbericht MQTT, M1).
+# ---------------------------------------------------------------------
+def standort_gesetzt(cfg: dict) -> bool:
+    try:
+        return abs(float(cfg["breite"])) > 0.001 or abs(float(cfg["laenge"])) > 0.001
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def quelle_ausgefallen(abbild: dict, cfg: dict) -> str:
+    """Der Grund, warum dieser Rechengang keinen Plan stellen darf - oder ''.
+
+    Nur mit eingetragenem Standort: ohne ihn fragt der Dienst Open-Meteo gar
+    nicht, und das Verhalten bleibt wie bis 0.9.34.
+    """
+    if not standort_gesetzt(cfg):
+        return ""
+    if not int(abbild.get("online_ok") or 0):
+        return ("Wetterquelle Open-Meteo ausgefallen: %s"
+                % (abbild.get("online_fehler") or "keine brauchbare Antwort"))
+    if not int(abbild.get("online_zukunft") or 0):
+        return "Wetterquelle Open-Meteo lieferte keine Vorhersagetage"
+    if abbild.get("et0") is None:
+        return "fuer heute liegt keine Verdunstung (ET0) vor"
+    return ""
+
+
+def plan_halten(grund: str, frisch: dict | None = None) -> dict:
+    """Das Abbild auf ok=0 stellen und den letzten guten Plan darin lassen.
+
+    Gut ist ein Abbild mit Plan und Zeitstempel, das ok=1 traegt oder
+    selbst schon einen gehaltenen Plan fuehrt. 'ts' bleibt der des guten
+    Rechengangs - ALTER am Endpunkt waechst also weiter und sagt die
+    Wahrheit ueber den Plan. Gibt es keinen guten Plan, bleibt ein Abbild
+    ohne 'ts' und ohne Plan; der Endpunkt antwortet dann mit 503 (C3).
+    """
+    alt = json_lesen(DATEI_ABBILD)
+    gut = (bool(alt.get("plan")) and bool(alt.get("ts"))
+           and (int(alt.get("ok") or 0) == 1 or int(alt.get("plan_gehalten") or 0) == 1))
+    if gut:
+        neu = dict(alt)
+        neu["ok"] = 0
+        neu["plan_gehalten"] = 1
+    else:
+        neu = {"ok": 0, "datum": datetime.date.today().isoformat()}
+    neu["stoerung"] = str(grund)
+    neu["stoerung_ts"] = int(time.time())
+    if frisch is not None:
+        neu["online_ok"] = int(frisch.get("online_ok") or 0)
+        neu["online_fehler"] = str(frisch.get("online_fehler") or grund)
+    json_schreiben(DATEI_ABBILD, neu)
+    return neu
+
+
+def zustand_stoerung(text: str) -> None:
+    """zustand.json auf ok=0 - Meldezaehler und Tagesmarken bleiben."""
+    alt_stand = json_lesen(DATEI_ZUSTAND)
+    json_schreiben(DATEI_ZUSTAND, {
+        "ok": 0, "ts": int(time.time()), "fehler": str(text),
+        "meldezaehler": alt_stand.get("meldezaehler") or {},
+        "meldetag": alt_stand.get("meldetag") or "",
+        "stationstag": alt_stand.get("stationstag") or ""})
+
+
+_STOERUNG_GEMELDET = {"zeit": 0.0, "text": ""}
+
+
+def stoerung_melden(text: str) -> None:
+    """Hoechstens eine Zeile je Stunde - oder sofort, wenn sich der Grund
+    aendert. Der Dienst versucht es in jedem Takt erneut."""
+    if (text != _STOERUNG_GEMELDET["text"]
+            or time.time() - _STOERUNG_GEMELDET["zeit"] >= 3600):
+        _STOERUNG_GEMELDET["zeit"] = time.time()
+        _STOERUNG_GEMELDET["text"] = text
+        _LOG.error(text)
 
 
 def vorlagen() -> dict:
@@ -792,6 +1064,12 @@ ALTLAST_UDP_GLOBAL = ("ok", "sperrgrund", "giessen", "reicht", "gesperrt",
                       "plan_fest", "deckt", "durchlaeufe", "noetige_durchlaeufe")
 ALTLAST_UDP_ZONE = ("ok", "sekunden", "durchlaeufe")
 DATEI_RETAIN_ALTLAST = os.path.join(DATADIR, "retain_altlast")
+# M4 (Durchgang 30.09.2026): Zeitpunkt des letzten UDP-Rueckfalls.
+DATEI_RETAIN_UDP_AM = os.path.join(DATADIR, "retain_altlast_udp_am")
+# M6/M7 (Durchgang 30.09.2026): das zuletzt benutzte alte Praefix
+# (schreibt die Oberflaeche) und der Merker fuer "MQTT aus, geleert".
+DATEI_PRAEFIX_ALT = os.path.join(DATADIR, "mqtt_praefix_alt")
+DATEI_MQTT_AUS = os.path.join(DATADIR, "mqtt_aus_geleert")
 
 
 def mqtt_eigenes_thema(praefix: str, thema: str) -> tuple:
@@ -1027,8 +1305,12 @@ def mqtt_altlast_abraeumen(praefix: str, zonen_schluessel) -> set:
     (Regeln/07); deshalb gibt es auf diesem Weg KEINEN Merker - ein Merker
     auf den Sendeerfolg luegt (Regeln/07, Nachtrag 19.09.2026: am Geraet
     Merker gesetzt, Altwert stand weiter im Broker). Solange der Brokerweg
-    nicht geht, wird in JEDEM Lauf abgeraeumt; die Grenze steht in der
-    README. Ist paho spaeter da, wird am Broker nachgelesen und erst dann
+    nicht geht, wird HOECHSTENS EINMAL JE STUNDE ueber UDP abgeraeumt
+    (M4, Durchgang 30.09.2026; bis 0.9.34 in jedem Lauf - bei zehn Minuten
+    Takt 144 Loeschbefehle je Thema und Tag, jeder davon beim Miniserver ein
+    leerer Wert vor dem gueltigen). Der Zeitpunkt steht in
+    retain_altlast_udp_am; ein Merker "erledigt" entsteht auf diesem Weg
+    nie. Ist paho spaeter da, wird am Broker nachgelesen und erst dann
     der Merker gesetzt.
     """
     praefix = _mqtt_thema(praefix.strip("/"))
@@ -1053,9 +1335,28 @@ def mqtt_altlast_abraeumen(praefix: str, zonen_schluessel) -> set:
                         "(zum Beispiel %s) - es wird im naechsten Takt erneut versucht."
                         % (len(erg["rest"]), len(erg["geleert"]), erg["rest"][0]))
         return set()
-    _altlast_melden("MQTT: Altwerte am Broker nicht abraeumbar - %s. Sie gehen in jedem "
-                    "Lauf als leere retain-Nutzlast ueber den UDP-Eingang hinaus, unmittelbar "
-                    "vor dem gueltigen Wert; der UDP-Eingang bestaetigt nichts." % erg["grund"])
+    # M4: hoechstens ein UDP-Versuch je Stunde. Eine Uhr, die
+    # zurueckgesprungen ist (negativer Abstand), sperrt nicht.
+    zuletzt = _datei_text(DATEI_RETAIN_UDP_AM)
+    try:
+        abstand = time.time() - float(zuletzt)
+    except ValueError:
+        abstand = 3600.0
+    if 0 <= abstand < 3600:
+        return set()
+    try:
+        os.makedirs(DATADIR, exist_ok=True)
+        with open(DATEI_RETAIN_UDP_AM, "w", encoding="utf-8") as fh:
+            fh.write("%d\n" % int(time.time()))
+    except OSError as f:
+        # Ohne Zeitmerker lieber gar nicht als in jedem Lauf.
+        _altlast_melden("MQTT: Zeitmerker %s nicht schreibbar (%s) - kein "
+                        "UDP-Abraeumen." % (os.path.basename(DATEI_RETAIN_UDP_AM), f))
+        return set()
+    _altlast_melden("MQTT: Altwerte am Broker nicht abraeumbar - %s. Sie gehen hoechstens "
+                    "einmal je Stunde als leere retain-Nutzlast ueber den UDP-Eingang hinaus, "
+                    "unmittelbar vor dem gueltigen Wert (Regeln/07); der UDP-Eingang "
+                    "bestaetigt nichts." % erg["grund"])
     namen = set(ALTLAST_UDP_GLOBAL)
     for s in zonen_schluessel or ():
         for f in ALTLAST_UDP_ZONE:
@@ -1063,7 +1364,106 @@ def mqtt_altlast_abraeumen(praefix: str, zonen_schluessel) -> set:
     return namen
 
 
+_NEBENWEG_GEMELDET = {"zeit": 0.0}
+
+
+def _nebenweg_melden(text: str) -> None:
+    """Hoechstens eine Zeile je Stunde fuer das Abraeumen neben dem Versand."""
+    if time.time() - _NEBENWEG_GEMELDET["zeit"] >= 3600:
+        _NEBENWEG_GEMELDET["zeit"] = time.time()
+        _LOG.warning(text)
+
+
+def _datei_text(p: str) -> str:
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def mqtt_nebenwege_abraeumen(cfg: dict) -> None:
+    """M6/M7 (Durchgang 30.09.2026): Altwerte neben dem eigenen Versand.
+
+    M6, Praefixwechsel: die Oberflaeche merkt sich beim Speichern das
+    bisherige Praefix in data/plugins/<x>/mqtt_praefix_alt (bw_config_speichern).
+    Behaltene EIGENE Themen darunter werden am Broker geloescht und
+    nachgelesen; erst dann steht "geleert" in der Datei. Bis 0.9.34 blieben
+    sie fuer immer stehen - der Merker retain_altlast kennt nur das
+    aktuelle Praefix (Pruefbericht MQTT, M6).
+
+    M7, MQTT aus: veroeffentlichen() kehrte bis 0.9.34 sofort zurueck, und
+    ein behaltener Altwert frueherer Fassungen blieb im Broker, obwohl das
+    Plugin gar nicht mehr sendet (Pruefbericht MQTT, M7). Jetzt wird unter
+    dem eigenen Praefix jedes eigene, behaltene Thema am Broker geloescht
+    und nachgelesen; der Merker mqtt_aus_geleert haengt am Erfolg.
+
+    Beides nur am Broker: der UDP-Eingang bestaetigt nichts, und eine leere
+    retain-Nutzlast ohne nachfolgenden Wert kaeme beim Miniserver als leerer
+    Wert an (Regeln/07). Geht es nicht, eine Zeile je Stunde, und der
+    naechste Rechengang versucht es erneut.
+    """
+    praefix = _mqtt_thema(str(cfg.get("mqtt_topic") or "bewaesserung").strip("/"))
+    lage, alt = _json_lage(DATEI_PRAEFIX_ALT)
+    ap = _mqtt_thema(str(alt.get("praefix") or "").strip("/")) if lage == "ok" else ""
+    if ap and ap != praefix and not int(alt.get("geleert") or 0):
+        erg = _broker_leeren(ap, lambda t: bool(mqtt_eigenes_thema(ap, t)[0]))
+        if erg["rc"] == 0:
+            alt["geleert"] = 1
+            alt["geleert_ts"] = int(time.time())
+            json_schreiben(DATEI_PRAEFIX_ALT, alt)
+            _LOG.info("MQTT: altes Praefix '%s/' - %d behaltene Themen am Broker geloescht "
+                      "und nachgelesen.", ap, len(erg["geleert"]))
+        elif erg["rc"] == 1:
+            _nebenweg_melden("MQTT: unter dem alten Praefix '%s/' stehen nach dem Loeschen "
+                             "noch %d Themen im Broker (zum Beispiel %s) - neuer Versuch im "
+                             "naechsten Rechengang." % (ap, len(erg["rest"]), erg["rest"][0]))
+        else:
+            _nebenweg_melden("MQTT: Altwerte unter dem alten Praefix '%s/' am Broker nicht "
+                             "abraeumbar - %s. Neuer Versuch im naechsten Rechengang."
+                             % (ap, erg["grund"]))
+    if not int(cfg.get("mqtt_ein") or 0):
+        kennung = "aus|" + praefix
+        if _datei_text(DATEI_MQTT_AUS) != kennung:
+            erg = _broker_leeren(praefix, lambda t: bool(mqtt_eigenes_thema(praefix, t)[0]))
+            if erg["rc"] == 0:
+                try:
+                    os.makedirs(DATADIR, exist_ok=True)
+                    with open(DATEI_MQTT_AUS, "w", encoding="utf-8") as fh:
+                        fh.write(kennung + "\n")
+                except OSError as f:
+                    _LOG.warning("MQTT: Merker %s nicht geschrieben: %s",
+                                 os.path.basename(DATEI_MQTT_AUS), f)
+                if erg["geleert"]:
+                    _LOG.info("MQTT ist ausgeschaltet: %d behaltene Themen unter '%s/' am "
+                              "Broker geloescht und nachgelesen.", len(erg["geleert"]), praefix)
+            elif erg["rc"] == 1:
+                _nebenweg_melden("MQTT ist ausgeschaltet, unter '%s/' stehen nach dem Loeschen "
+                                 "noch %d Themen im Broker (zum Beispiel %s) - neuer Versuch im "
+                                 "naechsten Rechengang." % (praefix, len(erg["rest"]), erg["rest"][0]))
+            else:
+                _nebenweg_melden("MQTT ist ausgeschaltet, behaltene Altwerte unter '%s/' sind am "
+                                 "Broker nicht abraeumbar - %s. Neuer Versuch im naechsten "
+                                 "Rechengang." % (praefix, erg["grund"]))
+
+
 def mqtt_leeren(warten: float = 3.0) -> int:
+    """Fuer die Deinstallation (uninstall/uninstall): das eigene Praefix
+    leeren und - M6/M7 (Durchgang 30.09.2026) - auch das zuletzt benutzte
+    alte Praefix aus mqtt_praefix_alt. Bis 0.9.34 blieb es unberuehrt.
+    Rueckgabe: der schlechtere der beiden Rueckgabewerte (0, 1, 2)."""
+    cfg = config()
+    praefix = _mqtt_thema(str(cfg.get("mqtt_topic") or "bewaesserung").strip("/"))
+    rc = _mqtt_leeren_praefix(praefix, warten)
+    lage, alt = _json_lage(DATEI_PRAEFIX_ALT)
+    ap = _mqtt_thema(str(alt.get("praefix") or "").strip("/")) if lage == "ok" else ""
+    if ap and ap != praefix:
+        print("<INFO> MQTT: das zuletzt benutzte alte Praefix '%s/' wird ebenfalls geleert." % ap)
+        rc = max(rc, _mqtt_leeren_praefix(ap, warten))
+    return rc
+
+
+def _mqtt_leeren_praefix(praefix: str, warten: float = 3.0) -> int:
     """Fuer die Deinstallation (uninstall/uninstall): alle behaltenen EIGENEN
     Themen am Broker loeschen und nachmessen; ohne Broker ueber UDP.
 
@@ -1074,8 +1474,6 @@ def mqtt_leeren(warten: float = 3.0) -> int:
     moeglich (dann der UDP-Rueckfall).
     Bauart: LoxBerry-Plugin-BYD-Autos-0.9.17 (mqtt_leeren()).
     """
-    cfg = config()
-    praefix = _mqtt_thema(str(cfg.get("mqtt_topic") or "bewaesserung").strip("/"))
     erg = _broker_leeren(praefix, lambda t: bool(mqtt_eigenes_thema(praefix, t)[0]), warten)
     if erg["rc"] == 0:
         if erg["geleert"]:
@@ -1110,6 +1508,8 @@ def mqtt_leeren(warten: float = 3.0) -> int:
                 s.sendto(("retain %s/%s " % (praefix, th)).encode("utf-8"),
                          ("127.0.0.1", int(g["udpport"])))
                 geschickt += 1
+                # M2: 5 ms je Datagramm (Regeln/07, UDP-Verluste).
+                time.sleep(0.005)
             except OSError:
                 pass
     except OSError as f:
@@ -1154,12 +1554,16 @@ def mqtt_senden(paare: dict, praefix: str, retained: set | None = None,
             # UDP-Eingang des LoxBerry-Gateways erwartet und die auch die
             # uebrigen Plugins dieser Reihe benutzen. Bis 0.9.0 fehlte das
             # Verb hier als einzigem Plugin.
-            wert_text = mqtt_wert_saeubern(_mqtt_sauber(wert))
+            # M5 (Durchgang 30.09.2026): nie ein leerer Wert. Ein leerer
+            # Wert kommt beim Miniserver als leerer Eingang an; betroffen
+            # war 'sperrgrund' ohne Sperre. Jetzt steht dort "-".
+            wert_text = mqtt_wert_saeubern(_mqtt_sauber(wert)) or "-"
             thema = "%s/%s" % (_mqtt_thema(praefix.strip("/")), _mqtt_thema(name))
             if abraeumen and name in abraeumen:
                 s.sendto(("retain %s " % thema).encode("utf-8"),
                          ("127.0.0.1", int(g["udpport"])))
                 geraeumt.add(name)
+                time.sleep(0.005)
             # Ein leerer Wert geht nie retained hinaus: er wuerde das
             # zurueckbehaltene Thema im Broker loeschen (Hausstandard).
             verb = ("retain" if (retained and name in retained and wert_text)
@@ -1167,6 +1571,11 @@ def mqtt_senden(paare: dict, praefix: str, retained: set | None = None,
             zeile = "%s %s %s" % (verb, thema, wert_text)
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", int(g["udpport"])))
             gesendet += 1
+            # M2 (Durchgang 30.09.2026): 5 ms Pause je Datagramm. Der
+            # UDP-Eingang des Gateways verwirft unter Last Pakete
+            # (Regeln/07, am Geraet 17 bis 70 %); bis 0.9.34 gingen 13 + 10
+            # je Zone Datagramme ohne Pause hinaus.
+            time.sleep(0.005)
     except OSError as f:
         # Die schon gesendeten Themen werden GENANNT. Bis 0.9.21 gab die
         # Funktion hier 0 zurueck, und das Protokoll meldete "0 Themen
@@ -1216,6 +1625,8 @@ def stoerung_veroeffentlichen(cfg: dict) -> int:
     Die Altlast wird auch in diesem Weg abgeraeumt: scheitert jeder
     Rechengang, gaebe es sonst keinen anderen.
     """
+    # M6/M7: auch bei ausgeschaltetem MQTT (dann nur am Broker).
+    mqtt_nebenwege_abraeumen(cfg)
     if not int(cfg.get("mqtt_ein") or 0):
         return 0
     praefix = str(cfg.get("mqtt_topic") or "bewaesserung")
@@ -1433,6 +1844,9 @@ def zonenfeuchte(sammler, zone: dict, cfg: dict,
     if allgemein is not None:
         return allgemein, "allgemein"
     return None, ""
+
+
+_FENSTER_GEMELDET = {"zeit": 0.0}
 
 
 def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
@@ -1695,6 +2109,10 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         # "Open-Meteo", wo in Wahrheit ein Pfad fehlte.
         "herkunft_grund": zus.get("grund") or {},
         "online_ok": online.get("ok", 0), "online_fehler": online_fehler,
+        # M1: wie viele Tage NACH heute die Wetterquelle geliefert hat.
+        # Ohne sie fehlt die Regenvorhersage, und der Plan darf nicht
+        # gelten (quelle_ausgefallen()).
+        "online_zukunft": sum(1 for d in nach_datum if d > heute_s),
         "vorschau": vorschau,
         "zonen": ergebnisse,
         "plan": plan,
@@ -1707,7 +2125,25 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
     }
 
     # --- Nachtplan festhalten (neu in 0.9.7) ---
-    abbild["nachtplan"] = nachtplan_pflegen(abbild, cfg, jetzt_dt)
+    #
+    # M1 (Durchgang 30.09.2026): nicht in einem Rechengang, der wegen
+    # eines Quellenausfalls nicht gelten darf. Sonst fror ein Plan ohne
+    # Regenvorhersage um die Rechenzeit ein und galt die ganze Nacht.
+    if quelle_ausgefallen(abbild, cfg):
+        abbild["nachtplan"] = {}
+    else:
+        abbild["nachtplan"] = nachtplan_pflegen(abbild, cfg, jetzt_dt)
+    # C6 (Durchgang 30.09.2026): die Kuerzung auf das Giessfenster steht
+    # im Protokoll, hoechstens einmal je Stunde.
+    if plan.get("fenster_gekuerzt") and not sperre["aktiv"]:
+        if time.time() - _FENSTER_GEMELDET["zeit"] >= 3600:
+            _FENSTER_GEMELDET["zeit"] = time.time()
+            _LOG.warning("Giessfenster %s bis %s (%d min): der Plan passte nicht hinein. "
+                         "Die Ventilzeiten wurden anteilig auf %d %% gekuerzt; das "
+                         "fehlende Wasser bleibt als Defizit in der Bilanz.",
+                         cfg.get("fenster_von"), cfg.get("fenster_bis"),
+                         int(plan.get("fenster_minuten") or 0),
+                         int(round(100 * float(plan.get("fenster_anteil") or 0))))
     return abbild
 
 
@@ -1791,6 +2227,8 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     kommen zwei eindeutig benannte Themen daneben: 'bedarf_mm' (dasselbe wie
     bisher 'defizit_mm') und 'dr_mm' (das wirkliche Defizit).
     """
+    # M6/M7: auch bei ausgeschaltetem MQTT (dann nur am Broker).
+    mqtt_nebenwege_abraeumen(cfg)
     if not int(cfg.get("mqtt_ein") or 0):
         return 0
     p = {}
@@ -1839,7 +2277,8 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     p["ts"] = int(abbild.get("ts") or 0)
     p["zaehler"] = _lauf_zaehler()
     p["gesperrt"] = int(sperre.get("aktiv") or 0)
-    p["sperrgrund"] = str(sperre.get("grund") or "")
+    # M5: ohne Sperre "-", nie leer.
+    p["sperrgrund"] = str(sperre.get("grund") or "") or "-"
     p["plan_fest"] = 1 if fest else 0
     # 'deckt' fehlte auf dem MQTT-Weg, waehrend der HTTP-Weg es seit jeher
     # als DECKT fuehrt. Ein reiner MQTT-Anwender bekam ausgerechnet die
@@ -1894,8 +2333,9 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     praefix = str(cfg.get("mqtt_topic") or "bewaesserung")
     # 'behalten' ist seit 0.9.34 leer (RETAINED_GLOBAL, RETAINED_ZONE).
     # Die Altwerte frueherer Fassungen ('ok', '<zone>/ok', 'sperrgrund',
-    # seit 0.9.34 auch die Planwerte) einmal abraeumen - am Broker mit Nachlesen; geht das nicht, in jedem
-    # Lauf im selben Zug ueber den UDP-Eingang (siehe mqtt_altlast_abraeumen()).
+    # seit 0.9.34 auch die Planwerte) einmal abraeumen - am Broker mit Nachlesen; geht das nicht,
+    # hoechstens einmal je Stunde im selben Zug ueber den UDP-Eingang (M4, siehe
+    # mqtt_altlast_abraeumen()).
     abr = mqtt_altlast_abraeumen(praefix, list((abbild.get("zonen") or {}).keys()))
     bericht: dict = {}
     n = mqtt_senden(p, praefix, behalten, abr, bericht)
@@ -1960,7 +2400,13 @@ class Dienst:
         self.laeuft = False
 
     async def laufen(self) -> int:
-        cfg = config()
+        # C4/C5 (Durchgang 30.09.2026): die Konfiguration wird erst IM try
+        # gelesen. Bis 0.9.34 stand hier config() und weiter unten der Takt
+        # vor dem try - ein unlesbarer Takt beendete den Dienst beim Start,
+        # und der Waechter startete ihn jede Minute neu.
+        cfg = None
+        cfg_gut = None      # die letzte brauchbare - fuer ok=0 ueber MQTT
+        konfig_kaputt = False
         vor = vorlagen()
         zuordnung = json_lesen(DATEI_QUELLEN)
         sammler = quellen.Sammler(zuordnung, vor)
@@ -1987,10 +2433,33 @@ class Dienst:
 
         letzte_rechnung = 0.0
         stand = _stand_der_dateien()
-        takt = max(60, min(3600, int(cfg.get("takt") or 300)))
+        takt = 300          # bis eine Konfiguration gelesen ist
         while self.laeuft:
             try:
-                cfg = config()
+                try:
+                    cfg = config_streng()
+                except KonfigKaputt as k:
+                    text = ("Konfiguration unbrauchbar: %s. Es wird nicht gerechnet; "
+                            "der letzte gute Plan bleibt stehen, ok=0. Abhilfe: die "
+                            "Plugin-Oberflaeche oeffnen und speichern." % k)
+                    stoerung_melden(text)
+                    konfig_kaputt = True
+                    with Rechensperre(0.0) as frei:
+                        if frei:
+                            plan_halten("Konfiguration unbrauchbar: %s" % k)
+                            zustand_stoerung("Konfiguration unbrauchbar: %s" % k)
+                    if cfg_gut is not None:
+                        try:
+                            stoerung_veroeffentlichen(cfg_gut)
+                        except Exception as f2:  # noqa: BLE001
+                            _LOG.warning("Stoerungsmeldung nicht absetzbar: %s", f2)
+                    raise _Uebersprungen()
+                if konfig_kaputt:
+                    konfig_kaputt = False
+                    letzte_rechnung = 0.0
+                    _LOG.info("Die Konfiguration ist wieder brauchbar - es wird "
+                              "sofort gerechnet.")
+                cfg_gut = cfg
                 # Der Takt wird in JEDEM Durchgang neu gebildet.
                 #
                 # Bis 0.9.21 stand die Zeile vor der Schleife. 'cfg' wurde
@@ -2045,6 +2514,21 @@ class Dienst:
                             letzte_rechnung = jetzt
                             raise _Uebersprungen()
                         abbild = rechnen(cfg, sammler)
+                        ausfall = quelle_ausgefallen(abbild, cfg)
+                        if ausfall:
+                            # M1: nicht dieser Plan, sondern der letzte gute;
+                            # hinaus gehen nur ok=0, ts und zaehler.
+                            plan_halten(ausfall, abbild)
+                            zustand_stoerung(ausfall)
+                            try:
+                                stoerung_veroeffentlichen(cfg)
+                            except Exception as f2:  # noqa: BLE001
+                                _LOG.warning("Stoerungsmeldung nicht absetzbar: %s", f2)
+                            stationslage_protokollieren(abbild)
+                            stoerung_melden("%s - es gilt weiter der letzte gute "
+                                            "Plan, ok=0." % ausfall)
+                            letzte_rechnung = jetzt
+                            raise _Uebersprungen()
                         json_schreiben(DATEI_ABBILD, abbild)
                         alt_stand = json_lesen(DATEI_ZUSTAND)
                         json_schreiben(DATEI_ZUSTAND, {
@@ -2097,9 +2581,18 @@ class Dienst:
                     "meldezaehler": alt_stand.get("meldezaehler") or {},
                     "meldetag": alt_stand.get("meldetag") or "",
                     "stationstag": alt_stand.get("stationstag") or ""})
-                # ... und die Stoerung geht auch nach aussen.
+                # M1/C4: auch das Abbild sagt ok=0; der Plan darin bleibt.
                 try:
-                    stoerung_veroeffentlichen(cfg)
+                    with Rechensperre(0.0) as frei:
+                        if frei:
+                            plan_halten("Rechengang fehlgeschlagen: %s" % f)
+                except Exception as f3:  # noqa: BLE001
+                    _LOG.warning("Abbild nicht auf ok=0 gestellt: %s", f3)
+                # ... und die Stoerung geht auch nach aussen - mit der
+                # letzten brauchbaren Konfiguration (C5).
+                try:
+                    if cfg_gut is not None:
+                        stoerung_veroeffentlichen(cfg_gut)
                 except Exception as f2:
                     _LOG.warning("Stoerungsmeldung nicht absetzbar: %s", f2)
             for _ in range(takt * 2):
@@ -2240,7 +2733,16 @@ class Dienst:
 
 
 def einmal() -> int:
-    cfg = config()
+    # C4 (Durchgang 30.09.2026): nie mit Werksvorgaben rechnen.
+    try:
+        cfg = config_streng()
+    except KonfigKaputt as k:
+        with Rechensperre(20.0):
+            plan_halten("Konfiguration unbrauchbar: %s" % k)
+        print("Die Konfiguration taugt nicht zum Rechnen (%s). Es wurde nichts "
+              "gerechnet und nichts gesendet; der letzte gute Plan bleibt stehen, "
+              "ok=0. Bitte die Plugin-Oberflaeche oeffnen und speichern." % k)
+        return 1
     zuordnung = json_lesen(DATEI_QUELLEN)
     s = quellen.Sammler(zuordnung, vorlagen())
     # Den Tagesverlauf des laufenden Dienstes uebernehmen.
@@ -2270,6 +2772,16 @@ def einmal() -> int:
                   "trotzdem gerechnet - der Verlauf koennte dabei einen "
                   "Eintrag verlieren.")
         a = rechnen(cfg, s)
+        ausfall = quelle_ausgefallen(a, cfg)
+        if ausfall:
+            # M1: derselbe Weg wie in der Dienstschleife.
+            plan_halten(ausfall, a)
+            zustand_stoerung(ausfall)
+            stationslage_protokollieren(a)
+            n = stoerung_veroeffentlichen(cfg)
+            print("%s. Es gilt weiter der letzte gute Plan, ok=0; %d Themen "
+                  "(ok, ts, zaehler) ueber MQTT gesendet." % (ausfall, n))
+            return 1
         json_schreiben(DATEI_ABBILD, a)
         # Die drei Tagesmarken werden UEBERNOMMEN, nicht ersetzt. Bis 0.9.20
         # schrieb diese Zeile eine frische Zustandsdatei: ein Druck auf
@@ -2442,6 +2954,14 @@ def main() -> int:
     if "--einmal" in sys.argv:
         return einmal()
     os.makedirs(DATADIR, exist_ok=True)
+    # C1 (Durchgang 30.09.2026): die Sperre VOR der PID-Datei - ein
+    # zweiter Dienst schreibt nichts und endet mit Rueckgabe 3.
+    if not dienstsperre_nehmen():
+        satz = ("Ein anderer Dienst dieses Plugins haelt die Sperre %s - dieser "
+                "Start endet, ohne zu rechnen oder zu senden." % DATEI_DIENSTSPERRE)
+        _LOG.warning(satz)
+        print(satz, file=sys.stderr)
+        return 3
     with open(DATEI_PID, "w", encoding="utf-8") as fh:
         fh.write(str(os.getpid()))
     d = Dienst()
@@ -2452,8 +2972,14 @@ def main() -> int:
         return asyncio.run(d.laufen())
     finally:
         _LOG.info("Dienst beendet.")
+        # C1: die PID-Datei loescht nur der Dienst, dessen Nummer darin
+        # steht - sonst naehme ein endender zweiter Vorgang dem laufenden
+        # seine Buchfuehrung.
         try:
-            os.remove(DATEI_PID)
+            with open(DATEI_PID, "r", encoding="utf-8") as fh:
+                eigene = fh.read().strip() == str(os.getpid())
+            if eigene:
+                os.remove(DATEI_PID)
         except OSError:
             pass
 

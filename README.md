@@ -5,12 +5,63 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.34 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.35 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.35 — kein Gießen mehr bei Quellenausfall, das Fenster ist eine Grenze, nur noch ein Dienst
+
+Durchgang vom 30.09.2026 mit vier Prüfern (Code, Oberfläche, Installer, MQTT).
+Befunde mit Datei:Zeile:
+`Pruefung-Durchgang-2026-09-29/Bewaesserung_BEFUNDE_UND_VERBESSERUNGEN.md`.
+
+**Was sich am Gießen ändert**
+
+* **Wetterquelle fällt aus:** Es bleibt der letzte gute Plan stehen, `ok`
+  geht auf 0. Bis 0.9.34 fehlte dann die Regenvorhersage, und der Plan kippte
+  auf „gießen“ – gemessen: vorher „nicht gießen, 30 mm Regen kommen“, nach
+  einem 503 von Open-Meteo `giessen 1`, acht Durchläufe.
+* **Kaputte Konfiguration:** Der Dienst rechnet nicht mehr mit
+  Werksvorgaben (dabei fielen Sperren, Gießfenster und Deckel still weg),
+  sondern heilt aus der Zweitschrift oder hält den letzten Plan.
+* **Das Gießfenster ist eine harte Grenze** (Entscheidung des Hausherrn):
+  Passt der Bedarf nicht hinein, werden alle Zonen anteilig gekürzt; der Rest
+  bleibt als Defizit in der Bilanz und wird am nächsten Abend nachgeholt.
+  Bisher ergaben 30 Minuten Fenster bei drei Zonen 90 Minuten Ventilzeit.
+* **Unplausible Messwerte** der eigenen Station (etwa 85 °C) zählen als
+  fehlend statt die Verdunstung zu verfünffachen.
+
+**Dienst**
+
+* **Startsperre:** Beim Systemstart holt cron nach einem Uhrsprung verpasste
+  Minuten nach und startete den Wächter zweimal in derselben Sekunde – am Gerät
+  liefen so seit dem 28.09. zwei Dienste. Jetzt gibt es nur noch einen;
+  `status` nennt alle Prozesse, und der Wächter beendet einen überzähligen.
+* Ein Absturz beim Start führt nicht mehr zu einem Neustart jede Minute.
+
+**Endpunkt und MQTT**
+
+* `OK=0`, wenn der Plan älter als das Dreifache des Rechentakts ist; ohne
+  jeden Plan antwortet der Endpunkt mit 503.
+* 5 ms Pause je Datagramm; das Leeren über den UDP-Rückfall höchstens einmal
+  je Stunde statt in jedem Lauf.
+* Beim Präfixwechsel und beim Abschalten werden die alten Werte abgeräumt; die
+  Abodatei `mqtt_subscriptions.cfg` führt das Plugin selbst.
+
+**Oberfläche und Installation**
+
+* Jedes Absenden endet mit einer Umleitung; F5 erzeugt kein zweites Token.
+* Die Antwortadresse der Wetterquelle nimmt nur `http(s)://` – eine
+  zurückgespielte Sicherung konnte bis 0.9.34 `file://…` setzen und damit
+  jede lesbare Datei im Reiter anzeigen.
+* Eingaben der Zonen werden abgewiesen statt verbogen; Löschen braucht ein
+  Häkchen.
+* Eine Neuinstallation spielt keine alte Zweitschrift mehr ein
+  (`preinstall.sh`); eine abgeschnittene `zonen.json` überschreibt beim Update
+  nicht mehr die heile Zweitschrift.
 
 ## Neu in 0.9.34 — der Gießplan wird nicht mehr zurückbehalten
 

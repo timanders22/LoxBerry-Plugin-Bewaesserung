@@ -65,17 +65,31 @@ function bw_endpunkt_probe()
      *
      * Der Aufnehmer wird unmittelbar danach wieder abgehaengt - er darf
      * nichts anderes verschlucken als genau diesen einen Aufruf. */
+    /* C9/O10 (Durchgang 30.09.2026): die Kopfzeilen kommen aus
+     * stream_get_meta_data(), nicht mehr aus der Variablen, die
+     * file_get_contents() still in den Aufrufbereich legt. PHP 8.5 meldet
+     * deren Gebrauch schon beim Uebersetzen als veraltet (Bauart A und D
+     * der Pruefkette). ignore_errors bleibt: auch eine 403 liefert einen
+     * Datenstrom mit Kopf. */
     set_error_handler(function () { return true; });
-    $rumpf = file_get_contents($url, false, $ctx);
+    $rumpf = false;
+    $kopf = array();
+    $fh = fopen($url, 'rb', false, $ctx);
+    if ($fh !== false) {
+        $rumpf = stream_get_contents($fh);
+        $meta = stream_get_meta_data($fh);
+        if (isset($meta['wrapper_data']) && is_array($meta['wrapper_data'])) {
+            $kopf = $meta['wrapper_data'];
+        }
+        fclose($fh);
+    }
     restore_error_handler();
     if ($rumpf === false) {
         return array(-1, 'KEINE_ANTWORT', $url);
     }
     $code = 0;
-    if (isset($http_response_header) && is_array($http_response_header)) {
-        foreach ($http_response_header as $z) {
-            if (preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $m)) { $code = (int) $m[1]; }
-        }
+    foreach ($kopf as $z) {
+        if (is_string($z) && preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $m)) { $code = (int) $m[1]; }
     }
     if ($code === 200 && strpos($rumpf, 'SELFTEST;OK=1') !== false) {
         return array(1, (string) $code, $url);
@@ -225,6 +239,69 @@ function bw_reiterbereiche($text)
     return $aus;
 }
 
+/**
+ * O6 (Durchgang 30.09.2026): Formulare und Merkmale im Quelltext zaehlen -
+ * ohne Kommentare, je Formular.
+ *
+ * Ein Formularanfang ist die Zeichenfolge '<' 'form' in ausgegebenem HTML
+ * (T_INLINE_HTML) oder in einer Zeichenkette; ein Merkmal ist ein AUFRUF
+ * bw_fmt( - nicht die Definition, nicht ein Wort im Kommentar. Zwischen
+ * einem Formularanfang und seinem Ende (oder dem naechsten Anfang) muss
+ * ein Merkmal stehen. Das Suchwort wird hier zusammengesetzt, damit diese
+ * Datei sich nicht selbst mitzaehlt.
+ * Rueckgabe array(Formulare, Merkmale, Zeilen der Formulare ohne Merkmal).
+ */
+function bw_formulare_zaehlen($quelle)
+{
+    $auf = '<' . 'form';
+    $zu = '</' . 'form';
+    $ereignisse = array();
+    $t = token_get_all((string) $quelle);
+    $n = count($t);
+    for ($i = 0; $i < $n; $i++) {
+        if (!is_array($t[$i])) { continue; }
+        list($art, $text, $zeile) = $t[$i];
+        if (in_array($art, array(T_INLINE_HTML, T_CONSTANT_ENCAPSED_STRING,
+                                 T_ENCAPSED_AND_WHITESPACE), true)) {
+            $pos = 0;
+            while (preg_match('#(' . preg_quote($zu, '#') . '|' . preg_quote($auf, '#') . ')(?=[\s>])#i',
+                              $text, $m, PREG_OFFSET_CAPTURE, $pos)) {
+                $z = $zeile + substr_count(substr($text, 0, $m[0][1]), "\n");
+                $ereignisse[] = array(strtolower($m[1][0]) === $zu ? 'E' : 'F', $z);
+                $pos = $m[0][1] + strlen($m[0][0]);
+            }
+            continue;
+        }
+        if ($art === T_STRING && $text === 'bw_fmt') {
+            $j = $i + 1;
+            while ($j < $n && is_array($t[$j]) && $t[$j][0] === T_WHITESPACE) { $j++; }
+            $k = $i - 1;
+            while ($k >= 0 && is_array($t[$k]) && $t[$k][0] === T_WHITESPACE) { $k--; }
+            $ist_definition = ($k >= 0 && is_array($t[$k]) && $t[$k][0] === T_FUNCTION);
+            if ($j < $n && $t[$j] === '(' && !$ist_definition) {
+                $ereignisse[] = array('M', $zeile);
+            }
+        }
+    }
+    $formulare = 0; $merkmale = 0; $ohne = array();
+    $offen = false; $hat = false; $offen_zeile = 0;
+    foreach ($ereignisse as $e) {
+        if ($e[0] === 'F') {
+            if ($offen && !$hat) { $ohne[] = $offen_zeile; }
+            $offen = true; $hat = false; $offen_zeile = $e[1];
+            $formulare++;
+        } elseif ($e[0] === 'M') {
+            $merkmale++;
+            if ($offen) { $hat = true; }
+        } else {
+            if ($offen && !$hat) { $ohne[] = $offen_zeile; }
+            $offen = false;
+        }
+    }
+    if ($offen && !$hat) { $ohne[] = $offen_zeile; }
+    return array($formulare, $merkmale, $ohne);
+}
+
 function bw_pruefungen()
 {
     $zeilen = array();
@@ -273,7 +350,13 @@ function bw_pruefungen()
     }
 
     $pid = bw_dienst_pid();
-    if ($pid > 0) {
+    /* O8 (Durchgang 30.09.2026): mehr als ein Dienst ist ein Kreuz mit
+     * allen Nummern. Bis 0.9.34 stand nur eine da, gruen. */
+    $bw_pids = bw_dienst_pids();
+    if (count($bw_pids) > 1) {
+        $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_DIENST'),
+            bw_e(sprintf(bw_t('TEST.A_DIENST_MEHRERE'), count($bw_pids), implode(', ', $bw_pids))));
+    } elseif ($pid > 0) {
         $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_DIENST'),
             bw_e(bw_t('TEST.A_DIENST_LAEUFT')) . ' ' . (int) $pid);
     } elseif (bw_dienst_soll()) {
@@ -283,6 +366,31 @@ function bw_pruefungen()
          * hat. Die Unterscheidung stand schon da, nur das Zeichen folgte
          * ihr nicht. */
         $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_DIENST'), bw_t('TEST.A_DIENST_GESTOPPT'));
+    }
+
+    /* O7 (Durchgang 30.09.2026): Pflichtzeile "Steht der Cron-Eintrag?"
+     * nach Regeln/04 (Raumklima 0.11.8): an ALLEN Takten suchen. Ohne
+     * Eintrag laeuft ein abgestuerzter Dienst nie wieder an - das ist ein
+     * Kreuz (CRON_FEHLT), kein Strich. Ausserhalb einer Installation
+     * (Archiv) ein Punkt. */
+    $bw_pp = bw_paths();
+    if ($bw_pp['home'] === '') {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_CRON'), bw_t('TEST.A_CRON_ARCHIV'));
+    } else {
+        $bw_ct = glob($bw_pp['home'] . '/system/cron/cron.*min/' . $bw_pp['plugin']) ?: array();
+        $bw_cd = array_values(array_filter($bw_ct, 'is_file'));
+        if (!$bw_ct) {
+            $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_CRON'), bw_t('TEST.A_CRON_FEHLT'));
+        } elseif (!$bw_cd) {
+            $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_CRON'),
+                sprintf(bw_t('TEST.A_CRON_KEINE_DATEI'), bw_e(implode(', ', $bw_ct))));
+        } elseif (count($bw_ct) > 1) {
+            $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_CRON'),
+                sprintf(bw_t('TEST.A_CRON_MEHRERE'), bw_e(implode(', ', $bw_ct))));
+        } else {
+            $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_CRON'),
+                sprintf(bw_t('TEST.A_CRON_OK'), bw_e($bw_cd[0])));
+        }
     }
 
     /* Die Marke "Aktualisierung laeuft". Zu jeder Regel gehoert das
@@ -389,9 +497,11 @@ function bw_pruefungen()
     if ($alter < 0) {
         $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_ALTER'), bw_t('TEST.A_NIE_GERECHNET'));
     } else {
-        // Einmal am Tag reicht; nach 36 Stunden stimmt die Bilanz nicht mehr.
-        $zeilen[] = bw_pruefzeile($alter < 129600 ? 1 : 0, bw_t('TEST.F_ALTER'),
-            sprintf(bw_t('TEST.A_ALTER'), (int) round($alter / 3600)));
+        // O13 (Durchgang 30.09.2026): dieselbe Grenze wie OK am Endpunkt,
+        // 3 x max(600, takt) (Entscheidung Nr. 4). Bis 0.9.34 36 Stunden.
+        $bw_gr = bw_ok_grenze($cfg);
+        $zeilen[] = bw_pruefzeile($alter <= $bw_gr ? 1 : 0, bw_t('TEST.F_ALTER'),
+            sprintf(bw_t('TEST.A_ALTER'), (int) round($alter / 60), (int) round($bw_gr / 60)));
     }
 
     $v = bw_verlauf();
@@ -674,16 +784,33 @@ function bw_pruefungen()
      * Wachposten weist jeden POST ohne Merkmal ab - ein vergessenes
      * bw_fmt() macht einen Knopf dauerhaft funktionslos, und kein
      * Werkzeug der Hauskette findet es. */
-    $alles = implode("\n", bw_oberflaechendateien());
-    $formulare = substr_count($alles, '<form ');
-    $merkmale = substr_count($alles, 'bw_fmt()');
-    if ($formulare === 0) {
+    /* O6 (Durchgang 30.09.2026): gezaehlt wird am Quelltext OHNE
+     * Kommentare, und jedes Formular fuer sich. Bis 0.9.34 zaehlte
+     * substr_count() auch den eigenen Kommentar und das Suchliteral -
+     * in einer Mutante ohne Merkmal am Formular "Logdatei leeren" blieb
+     * die Zeile gruen (Pruefbericht Oberflaeche, Befund 6). Ohne
+     * Tokenizer (Erweiterung fehlt) ist die Zeile ein Punkt, kein Haken. */
+    if (!function_exists('token_get_all')) {
         $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_FORMULARE'),
-                                  bw_t('TEST.A_FORMULARE_KEINE'));
+                                  bw_t('TEST.A_FORMULARE_OHNE_TOKENIZER'));
     } else {
-        $zeilen[] = bw_pruefzeile($merkmale >= $formulare ? 1 : 0,
-            bw_t('TEST.F_FORMULARE'),
-            sprintf(bw_t('TEST.A_FORMULARE'), $formulare, $merkmale));
+        $formulare = 0; $merkmale = 0; $ohne = array();
+        foreach (bw_oberflaechendateien() as $bw_dn => $bw_quelle) {
+            list($f1, $m1, $o1) = bw_formulare_zaehlen($bw_quelle);
+            $formulare += $f1; $merkmale += $m1;
+            foreach ($o1 as $bw_zl) { $ohne[] = $bw_dn . ':' . $bw_zl; }
+        }
+        if ($formulare === 0) {
+            $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_FORMULARE'),
+                                      bw_t('TEST.A_FORMULARE_KEINE'));
+        } elseif ($ohne) {
+            $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_FORMULARE'),
+                sprintf(bw_t('TEST.A_FORMULARE_OHNE'), $formulare, count($ohne),
+                        bw_e(implode(', ', $ohne))));
+        } else {
+            $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_FORMULARE'),
+                sprintf(bw_t('TEST.A_FORMULARE'), $formulare, $merkmale));
+        }
     }
 
     /* Nennt jede Legende genau die Knopffarben ihres Reiters? Das misst
@@ -859,15 +986,25 @@ function bw_pruefungen()
      * Bis 0.9.21 nannte die Baustein-Liste "BEW_GIESSEN", waehrend die
      * Vorlage "Bewaesserung heute Nacht giessen" anlegt. Wer beides tat,
      * hatte zwei virtuelle Eingaenge auf derselben Adresse. */
-    $bw_paare = array('N01' => 'GIESSEN', 'N02' => 'DURCHLAEUFE',
-                      'N03' => 'ET0', 'N04' => 'REICHT');
-    $bw_felder = bw_status_felder();
+    /* O12 (Durchgang 30.09.2026): verglichen wird die Liste, die der
+     * Reiter zeigt (bw_baustein_liste()), mit der Vorlage, die der Knopf
+     * erzeugt (bw_vorlage()) - nicht zwei Sprachschluessel miteinander.
+     * Zeile 0 gegen den Titel des Eingangs, 1 bis 4 gegen die Titel der
+     * Befehle. */
+    list($bw_vn, $bw_vx) = bw_vorlage();
+    $bw_dek = function ($s) { return html_entity_decode($s, ENT_QUOTES | ENT_XML1, 'UTF-8'); };
+    preg_match_all('/<VirtualInHttpCmd Title="([^"]*)"/', $bw_vx, $bw_vt);
+    $bw_titel = array_map($bw_dek, $bw_vt[1]);
+    $bw_kopf = preg_match('/<VirtualInHttp [^>]*Title="([^"]*)"/', $bw_vx, $bw_vk)
+        ? $bw_dek($bw_vk[1]) : '';
+    $bw_paare = array();
     $bw_un = array();
-    foreach ($bw_paare as $bw_nk => $bw_fk) {
-        $bw_soll = isset($bw_felder[$bw_fk]) ? bw_t($bw_felder[$bw_fk][2]) : '';
-        if ($bw_soll === '' || bw_t('BAUSTEIN.' . $bw_nk) !== $bw_soll) {
-            $bw_un[] = $bw_nk;
-        }
+    foreach (bw_baustein_liste($cfg, bw_token()) as $bw_bz) {
+        if ($bw_bz[0] > 4) { continue; }
+        $bw_paare[] = $bw_bz[0];
+        $bw_ok = $bw_bz[0] === 0 ? ($bw_bz[2] === $bw_kopf)
+                                 : in_array($bw_bz[2], $bw_titel, true);
+        if (!$bw_ok) { $bw_un[] = '#' . $bw_bz[0]; }
     }
     $zeilen[] = bw_pruefzeile($bw_un ? 0 : 1, bw_t('TEST.F_NAMEN'),
         $bw_un ? sprintf(bw_t('TEST.A_NAMEN_FEHL'), bw_e(implode(', ', $bw_un)))
@@ -945,6 +1082,16 @@ function bw_pruefungen()
         }
     }
 
+    /* O9 (Durchgang 30.09.2026): der eigene Schalter zuerst. Bis 0.9.34
+     * sah die Seite bei "sendet" und "sendet nicht" gleich aus - die
+     * Gateway-Zeile war gruen, auch wenn das Plugin gar nicht sendet
+     * (Befund 9). Aus ist ein Punkt, kein Kreuz: das ist eine Wahl. */
+    if (empty($cfg['mqtt_ein'])) {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_MQTT_EIN'), bw_t('TEST.A_MQTT_EIN_AUS'));
+    } else {
+        $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_MQTT_EIN'),
+            sprintf(bw_t('TEST.A_MQTT_EIN_AN'), bw_e(trim((string) $cfg['mqtt_topic'], '/'))));
+    }
     $g = bw_mqtt_zustand();
     if (empty($g['gefunden'])) {
         $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_MQTT'), bw_t('TEST.A_MQTT_NICHT_GEFUNDEN'));

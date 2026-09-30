@@ -98,12 +98,20 @@ $bw_muster = '/^tab-(settings|sources|zones|history|mqtt|loxone|test|log)$/';
 $bw_tab = 'tab-settings';
 if (isset($_POST['activetab']) && preg_match($bw_muster, (string) $_POST['activetab'])) {
     $bw_tab = (string) $_POST['activetab'];
-} elseif (isset($_GET['form']) && preg_match($bw_muster, 'tab-' . (string) $_GET['form'])) {
+} elseif (isset($_GET['form']) && is_string($_GET['form'])
+          && preg_match($bw_muster, 'tab-' . $_GET['form'])) {
     $bw_tab = 'tab-' . (string) $_GET['form'];
 }
 
 $bw_meldungen = array();
 $bw_fehler = array();
+/* O4 (Durchgang 30.09.2026): was nicht gelungen ist, steht in einer
+ * eigenen Liste mit eigener Ueberschrift - nicht unter "Bitte pruefen:",
+ * das eine Eingabe beanstandet (Regeln/04). */
+$bw_misserfolg = array();
+$bw_erk = null;
+$bw_erk_fehler = '';
+$bw_bro = null;
 
 /* ---------------------------------------------------------------- *
  * Der Wachposten - EIN Posten, vor allen Handlern.
@@ -403,13 +411,18 @@ if ($bw_post && isset($_POST['vorlage_waehlen'])) {
  * seinem Pfad, und vorgeschlagen wird nur, was die gemessene
  * Kennungstabelle hergibt. Uebernommen wird nichts ohne den zweiten Klick.
  */
-$bw_erk = null;
-$bw_erk_fehler = '';
 if ($bw_post && (isset($_POST['quellen_erkennen']) || isset($_POST['quellen_uebernehmen']))) {
     $bw_q = bw_quellen();
     $bw_url = trim((string) (isset($bw_q['http_url']) ? $bw_q['http_url'] : ''));
     if ($bw_url === '') {
         $bw_erk_fehler = bw_t('QUELL.ERK_KEINE_ADRESSE');
+    } elseif (!preg_match('#^https?://\S{3,200}\z#i', $bw_url)) {
+        /* O5 (Durchgang 30.09.2026): der Abruf prueft das Schema SELBST.
+         * Bis 0.9.34 las file_get_contents() jede Adresse aus der Datei -
+         * eine zurueckgespielte oder von Hand geaenderte
+         * quellen_zuordnung.json mit file:///... zeigte hier den Anfang
+         * einer beliebigen lesbaren Datei an. */
+        $bw_erk_fehler = bw_t('QUELL.FEHLER_URL');
     } else {
         // Eigener Fehler-Aufnehmer statt @: ein eingehaengter Behandler wird
         // vom @-Zeichen nicht aufgehalten (gemessen mit rendern.py).
@@ -480,7 +493,6 @@ if ($bw_post && isset($_POST['weg_speichern'])) {
 }
 
 /* ---------------- Aus dem Broker vorschlagen ---------------- */
-$bw_bro = null;
 if ($bw_post && (isset($_POST['broker_erkennen']) || isset($_POST['broker_uebernehmen']))) {
     $bw_bro = bw_broker_erkennen();
     if ($bw_bro['themen'] === 0) {
@@ -580,13 +592,39 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
     $bw_neu = array();
     $bw_schluessel = array();
     $bw_n = isset($_POST['z_name']) ? (array) $_POST['z_name'] : array();
+    $bw_geloescht = array();
     foreach ($bw_n as $bw_i => $bw_name) {
         $bw_name = trim(preg_replace('/[\x00-\x1F\x7F"]/', '', (string) $bw_name));
-        if ($bw_name === '') { continue; }
-        $bw_s = trim(preg_replace('/[^a-z0-9_-]/', '',
-            strtolower((string) (isset($_POST['z_schluessel'][$bw_i]) ? $_POST['z_schluessel'][$bw_i] : ''))));
+        /* O2 (Durchgang 30.09.2026): der Schluessel wird GEPRUEFT, nicht
+         * umgeschrieben. Bis 0.9.34 wurde aus "Beet 1" still "beet1", und
+         * ein Schluessel mit 60 Zeichen wurde angenommen - danach wies der
+         * Endpunkt die Zone mit ZONE_UNGUELTIG ab, und die eigene Sicherung
+         * liess sich nicht mehr zurueckspielen (Pruefbericht Oberflaeche,
+         * Befund 2). */
+        $bw_s = (isset($_POST['z_schluessel'][$bw_i]) && is_string($_POST['z_schluessel'][$bw_i]))
+            ? trim($_POST['z_schluessel'][$bw_i]) : '';
+        /* O3 (Durchgang 30.09.2026): geloescht wird nur mit Haken. Bis
+         * 0.9.34 genuegte ein geleerter Name - die Zone verschwand samt
+         * Becherprobe, ohne Rueckfrage (Befund 3; Regeln/05: "geloescht
+         * wird ueber einen Haken, nie durch Leeren"). */
+        if (!empty($_POST['z_loeschen'][$bw_i])) {
+            if ($bw_s !== '' || $bw_name !== '') {
+                $bw_geloescht[] = $bw_name !== '' ? $bw_name : $bw_s;
+            }
+            continue;
+        }
+        if ($bw_name === '') {
+            if ($bw_s !== '') {
+                $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_NAME_LEER'), bw_e($bw_s));
+            }
+            continue;
+        }
         if ($bw_s === '') {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_SCHLUESSEL'), bw_e($bw_name));
+            continue;
+        }
+        if (!preg_match('/^[a-z0-9_-]{1,40}$/', $bw_s)) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_SCHLUESSEL_MUSTER'), bw_e($bw_name), bw_e($bw_s));
             continue;
         }
         if (isset($bw_schluessel[$bw_s])) {
@@ -625,38 +663,56 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
         }
         $bw_alt = bw_zone($bw_s);
 
-        /* ---- neu in 0.9.7 ----
+        /* ---- neu in 0.9.7; O2 (Durchgang 30.09.2026): ABWEISEN ----
          *
-         * Diese Felder werden ZURECHTGERUECKT und nicht abgewiesen: eine
-         * unlesbare Pflanzenhoehe darf nicht dazu fuehren, dass die ganze
-         * Zonentabelle ungespeichert bleibt. Was nicht als Zahl lesbar ist,
-         * gilt als 'nichts eingetragen' - und das heisst bei jedem dieser
-         * Felder 'verhaelt sich wie bis 0.9.6'.
+         * Bis 0.9.34 wurden diese Felder ZURECHTGERUECKT: "abc" als Dauer
+         * wurde 0, eine Pflanzenhoehe -3 wurde 0, ein Abfluss 7 wurde 0, ein
+         * Sensorgewicht 5 blieb beim alten Wert, eine unbekannte Giessart
+         * wurde 'minuten', θFC 0,9 wurde leer - gespeichert mit "Die Zonen
+         * wurden gespeichert" und ohne eine Beanstandung (Pruefbericht
+         * Oberflaeche, Befund 2). Jetzt wird jedes unlesbare oder zu grosse
+         * Feld mit Namen beanstandet, und die Zonentabelle bleibt, wie sie
+         * war. Leer (bei Dauer, Pflanzenhoehe und den Bodenwerten auch 0)
+         * heisst weiter 'nichts eingetragen'. Die Grenzen stehen EINMAL in
+         * bw_zonen_grenzen() - dieselben prueft das Zurueckspielen (O5).
          */
-        $bw_zahl_oder_leer = function ($roh, $min, $max) {
-            if ($roh === '' || !is_numeric($roh)) { return null; }
-            $w = (float) $roh;
-            if ($w < $min || $w > $max) { return null; }
-            return $w;
+        $bw_fein_fehler = array();
+        $bw_fein = function ($k, $roh, $titel) use (&$bw_fein_fehler) {
+            if ($roh === '') { return null; }
+            if (!bw_zonen_zahl_taugt($k, $roh)) {
+                $bw_fein_fehler[] = $titel;
+                return null;
+            }
+            $g = bw_zonen_grenzen();
+            if ($g[$k][2] && (float) $roh == 0.0) { return null; }
+            return (float) $roh;
         };
-        $bw_dauer = $bw_zahl_oder_leer($bw_hol('z_dauer'), 30, 3600);
-        $bw_hpf   = $bw_zahl_oder_leer($bw_hol('z_hoehe_pflanze'), 0.05, 10);
-        $bw_abf   = $bw_zahl_oder_leer($bw_hol('z_abfluss'), 0, 1);
-        $bw_sgw   = $bw_zahl_oder_leer($bw_hol('z_sensor_gewicht'), 0, 1);
+        $bw_klar = function ($schl) {
+            return trim(strip_tags(html_entity_decode(bw_t($schl), ENT_QUOTES, 'UTF-8')));
+        };
+        $bw_dauer = $bw_fein('dauer_s', $bw_hol('z_dauer'), $bw_klar('ZONE.T_DAUER'));
+        $bw_hpf   = $bw_fein('hoehe_pflanze', $bw_hol('z_hoehe_pflanze'), $bw_klar('ZONE.T_HOEHE_PFLANZE'));
+        $bw_abf   = $bw_fein('abfluss', $bw_hol('z_abfluss'), $bw_klar('ZONE.T_ABFLUSS'));
+        $bw_sgw   = $bw_fein('sensor_gewicht', $bw_hol('z_sensor_gewicht'), $bw_klar('ZONE.T_SENSOR_GEWICHT'));
         // Eigene Bodenwerte aus einer Bodenprobe. pflanzen.json sagt seit
         // jeher zu: "wer es genau will, laesst eine Bodenprobe untersuchen
         // und traegt die Werte von Hand ein - das Feld dafuer gibt es". Es
         // gab es nicht. Jetzt gibt es zwei, und sie schlagen die Bodenart.
-        $bw_tfc = $bw_zahl_oder_leer($bw_hol('z_theta_fc'), 0.05, 0.60);
-        $bw_twp = $bw_zahl_oder_leer($bw_hol('z_theta_wp'), 0.01, 0.45);
+        $bw_tfc = $bw_fein('theta_fc_eigen', $bw_hol('z_theta_fc'), $bw_klar('ZONE.T_THETA_FC'));
+        $bw_twp = $bw_fein('theta_wp_eigen', $bw_hol('z_theta_wp'), $bw_klar('ZONE.T_THETA_WP'));
+        $bw_gart  = (isset($_POST['z_giess_art'][$bw_i]) && is_string($_POST['z_giess_art'][$bw_i]))
+            ? $_POST['z_giess_art'][$bw_i] : 'minuten';
+        if (!in_array($bw_gart, array('minuten', 'durchlaeufe', 'mm'), true)) {
+            $bw_fein_fehler[] = $bw_klar('ZONE.T_GIESS_ART');
+        }
+        if ($bw_fein_fehler) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_FEIN'), bw_e($bw_name),
+                                   bw_e(implode(', ', $bw_fein_fehler)));
+            continue;
+        }
         if ($bw_tfc !== null && $bw_twp !== null && $bw_twp >= $bw_tfc) {
             $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_THETA'), bw_e($bw_name));
             $bw_tfc = null; $bw_twp = null;
-        }
-        $bw_gart  = (string) (isset($_POST['z_giess_art'][$bw_i])
-            ? $_POST['z_giess_art'][$bw_i] : 'minuten');
-        if (!in_array($bw_gart, array('minuten', 'durchlaeufe', 'mm'), true)) {
-            $bw_gart = 'minuten';
         }
         $bw_gth = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
             (string) (isset($_POST['z_giess_thema'][$bw_i]) ? $_POST['z_giess_thema'][$bw_i] : '')));
@@ -730,6 +786,9 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
         );
     }
     if (!$bw_fehler) {
+        if ($bw_geloescht) {
+            $bw_meldungen[] = sprintf(bw_t('ZONE.GELOESCHT'), bw_e(implode(', ', $bw_geloescht)));
+        }
         if (bw_zonen_speichern($bw_neu)) { $bw_meldungen[] = bw_t('ZONE.GESPEICHERT'); }
         else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['zonen'])); }
     }
@@ -781,10 +840,21 @@ if ($bw_post && isset($_POST['token_neu'])) {
     $bw_tab = 'tab-loxone';
 }
 if ($bw_post && isset($_POST['log_leeren'])) {
-    @mkdir(dirname($bw_p['log']), 0775, true);
-    $bw_klar = trim(strip_tags(html_entity_decode(bw_t('LOG.GELEERT'), ENT_QUOTES, 'UTF-8')));
-    @file_put_contents($bw_p['log'], '[' . date('Y-m-d H:i:s') . '] ' . $bw_klar . "\n");
-    $bw_meldungen[] = bw_t('LOG.GELEERT');
+    /* O3 (Durchgang 30.09.2026): nur mit Bestaetigungshaken (Regeln/04).
+     * O4: "geleert" nur, wenn geschrieben wurde - bis 0.9.34 kam die
+     * Meldung auch, wenn an der Stelle der Logdatei ein Ordner stand
+     * (Pruefbericht Oberflaeche, Befunde 3 und 4). */
+    if (empty($_POST['log_bestaetigt'])) {
+        $bw_fehler[] = bw_t('LOG.FEHLER_HAKEN');
+    } else {
+        @mkdir(dirname($bw_p['log']), 0775, true);
+        $bw_klar = trim(strip_tags(html_entity_decode(bw_t('LOG.GELEERT'), ENT_QUOTES, 'UTF-8')));
+        if (@file_put_contents($bw_p['log'], '[' . date('Y-m-d H:i:s') . '] ' . $bw_klar . "\n") === false) {
+            $bw_misserfolg[] = sprintf(bw_t('LOG.NICHT_GELEERT'), bw_e($bw_p['log']));
+        } else {
+            $bw_meldungen[] = bw_t('LOG.GELEERT');
+        }
+    }
     $bw_tab = 'tab-log';
 }
 if ($bw_post && isset($_POST['test'])) {
@@ -893,6 +963,43 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
     $bw_tab = 'tab-settings';
 }
 
+/* ---------------- O1: Post/Redirect/Get ----------------
+ *
+ * Jeder POST endet hier mit 303 und einer Einmalmeldung (bw_lib.php,
+ * bw_einmalmeldung_*). Die Downloads (Vorlage, Sicherung) sind schon
+ * vorher mit exit fertig. Laesst sich die Einmalmeldung nicht schreiben
+ * (Datenordner nicht beschreibbar), bleibt es beim Verhalten bis 0.9.34:
+ * die Seite antwortet direkt - lieber eine Meldung mit F5-Risiko als eine
+ * stumme Umleitung. Auch eine Abweisung durch den Wachposten geht diesen
+ * Weg. */
+if ($bw_post) {
+    $bw_merk = array('meldungen' => $bw_meldungen, 'fehler' => $bw_fehler,
+                     'misserfolg' => $bw_misserfolg, 'ausgabe' => $bw_ausgabe,
+                     'erk' => $bw_erk, 'erk_fehler' => $bw_erk_fehler,
+                     'bro' => $bw_bro, 'tab' => $bw_tab);
+    if (bw_einmalmeldung_schreiben($bw_merk)) {
+        header('Location: index.php?form=' . substr($bw_tab, 4), true, 303);
+        exit;
+    }
+} elseif ((isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'GET') {
+    $bw_em = bw_einmalmeldung_holen();
+    if ($bw_em) {
+        $bw_liste_oder_leer = function ($d, $k) {
+            return (isset($d[$k]) && is_array($d[$k])) ? array_values(array_filter($d[$k], 'is_string')) : array();
+        };
+        $bw_meldungen = $bw_liste_oder_leer($bw_em, 'meldungen');
+        $bw_fehler = $bw_liste_oder_leer($bw_em, 'fehler');
+        $bw_misserfolg = $bw_liste_oder_leer($bw_em, 'misserfolg');
+        $bw_ausgabe = isset($bw_em['ausgabe']) && is_string($bw_em['ausgabe']) ? $bw_em['ausgabe'] : '';
+        $bw_erk = isset($bw_em['erk']) && is_array($bw_em['erk']) ? $bw_em['erk'] : null;
+        $bw_erk_fehler = isset($bw_em['erk_fehler']) && is_string($bw_em['erk_fehler']) ? $bw_em['erk_fehler'] : '';
+        $bw_bro = isset($bw_em['bro']) && is_array($bw_em['bro']) ? $bw_em['bro'] : null;
+        if (isset($bw_em['tab']) && is_string($bw_em['tab']) && preg_match($bw_muster, $bw_em['tab'])) {
+            $bw_tab = $bw_em['tab'];
+        }
+    }
+}
+
 /* ---------------- Laden ---------------- */
 $bw_cfg = bw_config();
 $bw_token = bw_token();
@@ -991,12 +1098,24 @@ if ($bw_rahmen) {
 <?php foreach ($bw_fehler as $bw_f) { ?><li><?= $bw_f ?></li><?php } ?>
 </ul></div>
 <?php } ?>
+<?php if ($bw_misserfolg) { ?>
+<div class="sm-fehler"><b><?= bw_e(bw_t('ALLG.NICHT_GELUNGEN')) ?></b>
+<ul style="margin:6px 0 0;padding-left:20px">
+<?php foreach ($bw_misserfolg as $bw_f) { ?><li><?= $bw_f ?></li><?php } ?>
+</ul></div>
+<?php } ?>
 
 <table class="sm-tabelle" style="max-width:640px">
 <tr><th><?= bw_e(bw_t('ALLG.EIGENSCHAFT')) ?></th><th><?= bw_e(bw_t('ALLG.WERT')) ?></th></tr>
+<?php /* O8 (Durchgang 30.09.2026): laufen mehrere Dienste, steht jede
+         Nummer da, rot, mit dem Weg hinaus. Bis 0.9.34 zeigte die Zeile
+         nur eine - am Geraet liefen seit 28.09. zwei (Befund 8). */
+      $bw_pids = bw_dienst_pids(); ?>
 <tr><td><?= bw_e(bw_t('ALLG.DIENST')) ?></td>
-    <td class="<?= $bw_pid ? 'sm-an' : 'sm-aus' ?>"><?= $bw_pid
-        ? bw_e(bw_t('ALLG.LAEUFT')) . ' (PID ' . (int) $bw_pid . ')' : bw_e(bw_t('ALLG.GESTOPPT')) ?></td></tr>
+    <td class="<?= ($bw_pid && count($bw_pids) <= 1) ? 'sm-an' : 'sm-aus' ?>"><?= count($bw_pids) > 1
+        ? bw_e(sprintf(bw_t('ALLG.MEHRERE_DIENSTE'), count($bw_pids), implode(', ', $bw_pids)))
+        : ($bw_pid
+        ? bw_e(bw_t('ALLG.LAEUFT')) . ' (PID ' . (int) $bw_pid . ')' : bw_e(bw_t('ALLG.GESTOPPT'))) ?></td></tr>
 <tr><td><?= bw_e(bw_t('ALLG.ET0')) ?></td>
     <td><?= isset($bw_a['et0']) && $bw_a['et0'] !== null
         ? '<b>' . number_format((float) $bw_a['et0'], 2, ',', '.') . '</b> mm &mdash; '
@@ -1012,8 +1131,13 @@ if ($bw_rahmen) {
     } else { echo bw_e(bw_t('ALLG.KEIN_PLAN')); } ?></td></tr>
 <tr><td><?= bw_e(bw_t('ALLG.ZONEN')) ?></td><td><?= count($bw_zonen) ?></td></tr>
 <tr><td><?= bw_e(bw_t('ALLG.GERECHNET')) ?></td>
-    <td class="<?= ($bw_alter >= 0 && $bw_alter < 129600) ? 'sm-an' : 'sm-aus' ?>"><?= $bw_alter < 0
-        ? bw_e(bw_t('ALLG.NIE')) : sprintf(bw_e(bw_t('ALLG.VOR_STUNDEN')), (int) round($bw_alter / 3600)) ?></td></tr>
+    <?php /* O13 (Durchgang 30.09.2026): gruen nur bis 3 x max(600, takt)
+             Sekunden (bw_ok_grenze(), Entscheidung Nr. 4) - bis 0.9.34
+             bis 36 Stunden. Unter zwei Stunden in Minuten. */ ?>
+    <td class="<?= ($bw_alter >= 0 && $bw_alter <= bw_ok_grenze($bw_cfg)) ? 'sm-an' : 'sm-aus' ?>"><?= $bw_alter < 0
+        ? bw_e(bw_t('ALLG.NIE')) : ($bw_alter < 7200
+            ? sprintf(bw_e(bw_t('ALLG.VOR_MINUTEN')), (int) round($bw_alter / 60))
+            : sprintf(bw_e(bw_t('ALLG.VOR_STUNDEN')), (int) round($bw_alter / 3600))) ?></td></tr>
 </table>
 
 <div class="sm-tabs">
@@ -1491,7 +1615,8 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
     <th><?= bw_e(bw_t('ZONE.T_FLAECHE')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEPFLANZUNG')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_BODEN')) ?></th><th><?= bw_e(bw_t('ZONE.T_RATE')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_MIKRO')) ?></th>
-    <th><?= bw_e(bw_t('ZONE.T_FEUCHTE')) ?></th></tr>
+    <th><?= bw_e(bw_t('ZONE.T_FEUCHTE')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_LOESCHEN')) ?></th></tr>
 <?php /* Acht Zeilen sind die Vorgabe, aber NIE weniger, als es Zonen
          gibt: der Speichern-Handler baut die Liste aus dem Formular
          neu auf. Stuenden in zonen.json neun Zonen und die Tabelle
@@ -1537,6 +1662,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
   <td><input data-role="none" type="text" name="z_feuchte[<?= $bw_i ?>]" size="16"
              value="<?= bw_e(isset($bw_z['feuchte_thema']) ? $bw_z['feuchte_thema'] : '') ?>"
              placeholder="<?= bw_e(bw_t('ZONE.P_FEUCHTE')) ?>"></td>
+  <td style="text-align:center"><?php if (!empty($bw_z['schluessel'])) { ?><input data-role="none" type="checkbox" name="z_loeschen[<?= $bw_i ?>]" value="1"><?php } ?></td>
 </tr>
 <?php } ?>
 </table>
@@ -1772,7 +1898,8 @@ if (!$bw_vt) { ?>
 <!-- ============ MQTT ============ --><!-- ============ MQTT ============ -->
 <div class="sm-seite<?= $bw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
 
-<h2>MQTT</h2>
+<?php /* O17 (Durchgang 30.09.2026): hier stand eine zweite, feste
+         Ueberschrift "MQTT" (Regeln/04). */ ?>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="save_mqtt" value="1">
@@ -1913,32 +2040,14 @@ $bw_ret_zone = $bw_rt['zone'];
 <tr><th>#</th><th><?= bw_e(bw_t('LOX.T_BAUSTEIN')) ?></th><th><?= bw_e(bw_t('LOX.T_NAMENSVORSCHLAG')) ?></th>
     <th><?= bw_e(bw_t('LOX.T_PARAMETER')) ?></th><th><?= bw_e(bw_t('LOX.T_EINGAENGE')) ?></th></tr>
 <?php
-$bw_liste = array(
-    array(1,  'BAUSTEIN.T_VE',      'BAUSTEIN.N01', array('text' => sprintf(bw_t('BAUSTEIN.P01'),
-              '<span class="sm-mono">' . bw_e(bw_check('GIESSEN')) . '</span>')), '&mdash;'),
-    array(2,  'BAUSTEIN.T_VE',      'BAUSTEIN.N02', array('text' => sprintf(bw_t('BAUSTEIN.P02'),
-              '<span class="sm-mono">' . bw_e(bw_check('DURCHLAEUFE')) . '</span>')), '&mdash;'),
-    array(3,  'BAUSTEIN.T_VE',      'BAUSTEIN.N03', array('text' => sprintf(bw_t('BAUSTEIN.P03'),
-              '<span class="sm-mono">' . bw_e(bw_check('ET0')) . '</span>')), '&mdash;'),
-    array(4,  'BAUSTEIN.T_VE',      'BAUSTEIN.N04', array('text' => sprintf(bw_t('BAUSTEIN.P04'),
-              '<span class="sm-mono">' . bw_e(bw_check('REICHT')) . '</span>')), '&mdash;'),
-    array(5,  'BAUSTEIN.T_SWS',     'BAUSTEIN.N05', 'BAUSTEIN.P05', 'I &larr; #1'),
-    array(6,  'BAUSTEIN.T_NICHT',   'BAUSTEIN.N06', '',             'I &larr; #5'),
-    array(7,  'BAUSTEIN.T_ZAEHLER', 'BAUSTEIN.N07', 'BAUSTEIN.P07', 'I &larr; ' . bw_t('BAUSTEIN.E_DURCHLAUF')),
-    array(8,  'BAUSTEIN.T_VERGL',   'BAUSTEIN.N08', 'BAUSTEIN.P08', 'AI1 &larr; #7, AI2 &larr; #2'),
-    array(9,  'BAUSTEIN.T_ODER',    'BAUSTEIN.N09', '',             'I1 &larr; #6, I2 &larr; #8'),
-    array(10, 'BAUSTEIN.T_BEW',     'BAUSTEIN.N10', 'BAUSTEIN.P10', 'Off &larr; #9'),
-    array(11, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N11', 'BAUSTEIN.P11', 'I &larr; #4'),
-    array(12, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N12', 'BAUSTEIN.P12', 'I &larr; #11'),
-);
-foreach ($bw_liste as $bw_z2) { ?>
-<tr><td><?= (int) $bw_z2[0] ?></td><td><?= bw_t($bw_z2[1]) ?></td>
-    <td class="sm-mono"><?= bw_t($bw_z2[2]) ?></td>
-    <?php /* Ein Feld, das als array('text' => ...) kommt, ist FERTIG und
-             geht nicht noch einmal durch bw_t() - sonst suchte die
-             Uebersetzung nach einem Schluessel, der der halbe Satz ist. */ ?>
-    <td><?= is_array($bw_z2[3]) ? $bw_z2[3]['text']
-            : ($bw_z2[3] !== '' ? bw_t($bw_z2[3]) : '&mdash;') ?></td>
+/* O12 (Durchgang 30.09.2026): die Liste kommt aus bw_baustein_liste()
+ * (bw_lib.php) - dieselbe, die der Reiter Test mit der erzeugten Vorlage
+ * vergleicht. Namen 1 bis 4 sind die Titel der Vorlage (BW_TITEL), Zeile 0
+ * ist der virtuelle HTTP-Eingang selbst, P07 nennt fenster_von. */
+foreach (bw_baustein_liste($bw_cfg, $bw_token) as $bw_z2) { ?>
+<tr><td><?= (int) $bw_z2[0] ?></td><td><?= $bw_z2[1] ?></td>
+    <td class="sm-mono"><?= bw_e($bw_z2[2]) ?></td>
+    <td><?= $bw_z2[3] !== '' ? $bw_z2[3] : '&mdash;' ?></td>
     <td class="sm-mono"><?= $bw_z2[4] ?></td></tr>
 <?php } ?>
 </table>
@@ -1963,7 +2072,10 @@ foreach ($bw_liste as $bw_z2) { ?>
          wie man daraus in Loxone eine Meldung baut) und die GEGENPROBE. */ ?>
 <div class="sm-step">
 <h3><?= bw_e(bw_t('LOX.S5_TITEL')) ?></h3>
-<p class="sm-hilfe"><?= bw_t('LOX.S5_TEXT') ?></p>
+<?php /* O13 (Durchgang 30.09.2026): die Verzoegerung aus 3 x max(600,
+         takt) - bis 0.9.34 fest 30 Minuten, bei einem Takt ueber 1800 s
+         ein Fehlalarm in jedem Takt (Befund 13). */ ?>
+<p class="sm-hilfe"><?= sprintf(bw_t('LOX.S5_TEXT'), (int) ceil(bw_ok_grenze($bw_cfg) / 60)) ?></p>
 </div>
 
 <div class="sm-step">
@@ -2044,6 +2156,7 @@ if (!$bw_zeilen) { ?>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-log">
+  <label><input data-role="none" type="checkbox" name="log_bestaetigt" value="1"> <?= bw_e(bw_t('LOG.L_BESTAETIGEN')) ?></label><br>
   <button data-role="none" class="sm-b sm-b-aktion" name="log_leeren" value="1"><?= bw_e(bw_t('LOG.K_LEEREN')) ?></button>
 </form>
 </div>

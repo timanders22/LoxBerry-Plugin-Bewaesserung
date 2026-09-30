@@ -154,6 +154,11 @@ PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/dienst.pid"
 SOLL="$PDATA/soll_laufen"
+# C5 (Durchgang 30.09.2026): Zeitpunkt des letzten Neustarts durch den
+# Waechter. Stuerzt der Dienst wiederholt ab, startet der Waechter ihn
+# hoechstens alle 600 s neu statt jede Minute. Bauart: BatterieBMS
+# 0.9.27 (NEUSTARTMERKER).
+NEUSTARTMERKER="$PDATA/waechter_neustart"
 # Die Marke "Aktualisierung laeuft". Sie liegt NEBEN dem Datenordner, weil
 # purge_installation data/plugins/<ordner>/ zwischen preupgrade.sh und
 # postinstall.sh restlos abraeumt (Regeln/06) - im Ordner waere sie genau
@@ -350,7 +355,99 @@ marke_sperrt() {
     [ "$ALTER" -le 3600 ]
 }
 
+# C1 (Durchgang 30.09.2026): Startsperre.
+#
+# Am Geraet liefen seit 28.09.2026 ZWEI Dienste. Laut Journal sprang beim
+# Systemstart die Uhr, und cron startete cron.01min zweimal in derselben
+# Sekunde (CRON[3038] und CRON[3170], 23:36:35). Beide Waechter fanden
+# "laeuft nicht" und starteten je einen Dienst - dazwischen lag nichts,
+# was den zweiten haette aufhalten koennen (in WSL gemessen, 5 von 5
+# Doppelaufrufen ergaben zwei Dienste; bew_bau_skripte/proben).
+#
+# Gesperrt wird auf dieses Skript selbst (flock auf Deskriptor 8), mit
+# Warten bis 15 s: der zweite Aufrufer wartet, bis der erste seinen Start
+# samt Nachsehen (sleep 3) hinter sich hat, und fragt DANACH, ob schon
+# einer laeuft. Ein zweites "exec 8<" im selben Lauf wuerde den
+# Deskriptor neu oeffnen und die Sperre dabei freigeben - daher der
+# Merker BW_SPERRE_GEHALTEN (der Waechter sperrt und ruft starten()).
+# Der Dienst erbt den Deskriptor NICHT (8<&- beim Start), sonst hielte er
+# die Sperre, solange er laeuft. Ohne flock (kein util-linux) bleibt es
+# beim Verhalten bis 0.9.34; der Dienst sperrt ausserdem selbst
+# (dienst.lock, bewaesserung_dienst.py). Bauart: BatterieBMS 0.9.27,
+# AudiConnect 0.9.22; Hausstandard Regeln/03.
+BW_SPERRE_GEHALTEN=0
+startsperre_nehmen() {
+    [ "$BW_SPERRE_GEHALTEN" = "1" ] && return 0
+    command -v flock >/dev/null 2>&1 || return 0
+    [ -r "$0" ] || return 0
+    exec 8<"$0"
+    if flock -w 15 8; then
+        BW_SPERRE_GEHALTEN=1
+        return 0
+    fi
+    return 1
+}
+
+# Startzeit eines Vorgangs in Takten seit dem Systemstart (Feld 22 von
+# /proc/<n>/stat; gezaehlt ab dem Feld hinter dem Namen in Klammern, weil
+# der Name selbst Leerzeichen tragen kann).
+bw_startzeit() {
+    sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20
+}
+
+# C1: Laufen mehr als ein eigener Dienst, bleibt genau einer stehen - der
+# aus der PID-Datei (den traegt seit 0.9.35 nur ein Dienst ein, der die
+# Sperre dienst.lock haelt), sonst der aelteste. Die uebrigen werden
+# beendet: erst SIGTERM, nach bis zu zehn Sekunden SIGKILL, vor JEDEM
+# Signal erneut argumentweise geprueft (wie anhalten()).
+ueberzaehlige_beenden() {
+    local alle anzahl behalten p x t bt rest i
+    alle=$(bw_dienste_suchen)
+    anzahl=$(printf '%s\n' "$alle" | grep -c .)
+    [ "$anzahl" -gt 1 ] || return 0
+    behalten=""
+    p=$(cat "$PID" 2>/dev/null)
+    for x in $alle; do
+        [ "$x" = "$p" ] && behalten="$x"
+    done
+    if [ -z "$behalten" ]; then
+        bt=""
+        for x in $alle; do
+            t=$(bw_startzeit "$x")
+            case "$t" in ''|*[!0-9]*) continue ;; esac
+            if [ -z "$bt" ] || [ "$t" -lt "$bt" ]; then
+                bt="$t"
+                behalten="$x"
+            fi
+        done
+    fi
+    [ -n "$behalten" ] || behalten=$(printf '%s\n' "$alle" | head -n 1)
+    ordner_anlegen
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: $anzahl Dienste liefen gleichzeitig (PID $(echo $alle)) - PID $behalten bleibt, die uebrigen werden beendet." >> "$LOGDATEI"
+    for x in $alle; do
+        [ "$x" = "$behalten" ] && continue
+        bw_ist_dienst "$x" "$DIENST_UID" && kill "$x" 2>/dev/null
+    done
+    i=0
+    while [ $i -lt 10 ]; do
+        rest=$(bw_dienste_suchen | grep -vx "$behalten")
+        [ -n "$rest" ] || break
+        sleep 1
+        i=$((i + 1))
+    done
+    rest=$(bw_dienste_suchen | grep -vx "$behalten")
+    for x in $rest; do
+        bw_ist_dienst "$x" "$DIENST_UID" && kill -9 "$x" 2>/dev/null
+    done
+    bw_ist_dienst "$behalten" "$DIENST_UID" && echo "$behalten" > "$PID" 2>/dev/null
+    return 0
+}
+
 starten() {
+    if ! startsperre_nehmen; then
+        echo "Ein anderer Start dieses Plugins laeuft seit ueber 15 Sekunden - jetzt wird nichts gestartet."
+        return 0
+    fi
     if laeuft; then
         # Trug die PID-Datei ihn nicht, wird die Nummer nachgetragen - und
         # zwar hier, nicht in laeuft(). In die eigene PID-Datei kommt nur
@@ -402,10 +499,21 @@ starten() {
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
     # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
     : > "$STARTLOG"
-    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 &
+    # 8<&-: der Dienst erbt die Startsperre nicht (C1).
+    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 8<&- &
     echo $! > "$PID"
-    sleep 1
+    # C11 (Durchgang 30.09.2026): drei Sekunden, nicht eine (Regeln/03).
+    # Der Dienst laedt beim Start drei Module und liest seine Dateien;
+    # nach einer Sekunde ist ein Absturz im Importpfad noch nicht zu sehen,
+    # und "gestartet" stuende da, waehrend der Vorgang gleich endet.
+    sleep 3
     if laeuft; then
+        # Endete der eben gestartete Vorgang, weil ein anderer Dienst die
+        # Sperre dienst.lock haelt (Rueckgabe 3), steht in der PID-Datei
+        # eine tote Nummer - dann die des laufenden eintragen.
+        if [ "$(cat "$PID" 2>/dev/null)" != "$BW_PID" ]; then
+            echo "$BW_PID" > "$PID" 2>/dev/null
+        fi
         echo "gestartet (PID $BW_PID)"
         return 0
     fi
@@ -472,8 +580,15 @@ case "$1" in
     stop)    anhalten ;;
     restart) anhalten; sleep 1; starten ;;
     status)
+        # C1: alle gefundenen Nummern, durch Leerzeichen getrennt. Laufen
+        # zwei, stehen beide da - die Oberflaeche zeigt dann ein Kreuz (O8).
+        # Die erste Nummer ist die aus laeuft() (PID-Datei zuerst).
         if laeuft; then
-            echo "laeuft $BW_PID"
+            BW_ALLE="$BW_PID"
+            for x in $(bw_dienste_suchen); do
+                [ "$x" = "$BW_PID" ] || BW_ALLE="$BW_ALLE $x"
+            done
+            echo "laeuft $BW_ALLE"
             exit 0
         fi
         echo "gestoppt"
@@ -511,12 +626,36 @@ case "$1" in
         # angehaltener Dienst bleibt angehalten. Bei liegender Marke nicht
         # einmal die Protokollzeile: starten() wiese ohnehin ab, und die
         # Zeile "wird neu gestartet" stimmte dann nicht (Fall C7).
+        #
+        # C1 (Durchgang 30.09.2026): die ganze Frage "laeuft er? sonst
+        # starten" steht unter der Startsperre. Zwei Waechter derselben
+        # Sekunde laufen damit nacheinander, und der zweite findet den
+        # Dienst des ersten. Bekommt ein Waechter die Sperre in 15 s nicht,
+        # tut er nichts - der naechste kommt in einer Minute.
+        startsperre_nehmen || exit 0
+        if ! marke_sperrt; then
+            ueberzaehlige_beenden
+        fi
         if [ -f "$SOLL" ] && ! marke_sperrt && ! laeuft; then
+            # C5 (Durchgang 30.09.2026): Neustartbremse. Stuerzt der Dienst
+            # gleich nach dem Start wieder ab (bis 0.9.34 etwa bei einem
+            # unlesbaren Takt), startete ihn der Waechter jede Minute neu -
+            # jede Minute ein Python-Anlauf und eine Zeile im Protokoll.
+            # Innerhalb von 600 s nach dem letzten Neustart durch den
+            # Waechter geschieht jetzt nichts. Bauart: BatterieBMS 0.9.27.
+            if [ -f "$NEUSTARTMERKER" ]; then
+                M=$(stat -c %Y "$NEUSTARTMERKER" 2>/dev/null)
+                case "$M" in ''|*[!0-9]*) M=0 ;; esac
+                if [ $(( $(date +%s) - M )) -lt 600 ] && [ $(( $(date +%s) - M )) -ge 0 ]; then
+                    exit 0
+                fi
+            fi
             # Der Protokollordner kann fehlen (log/ liegt auf einer
             # RAM-Platte, Regeln/06); ohne ihn ginge die Zeile verloren
             # (F11a). Der Datenordner ist hier ohnehin da: soll_laufen
             # liegt darin.
             ordner_anlegen
+            touch "$NEUSTARTMERKER"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
             starten >> "$STARTLOG" 2>&1
         fi
