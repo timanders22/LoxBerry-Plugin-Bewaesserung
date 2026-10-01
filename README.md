@@ -5,12 +5,36 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.36 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.37 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.37
+
+Gardena-1 aus der Verbesserungsliste (`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Abschnitt D, Entscheidungen 16 und 19).
+Gemessen mit einer Attrappe der GARDENA-Schnittstelle unter PHP 7.4, 8.3 und 8.5 und mit dem echten Dienst; nicht an echten Ventilen.
+
+* **GARDENA-Ventile direkt (ab Werk aus):** Je Zone lässt sich als Ausgabe
+  „GARDENA-Ventil“ statt „Loxone“ wählen. Die Bewässerung öffnet das Ventil dann
+  über das Plugin GardenaSmartSystem (ab 1.2.13, dort die Schnittstelle für die
+  Bewässerung einschalten und das Ventil-Token übernehmen) – immer mit Dauer, so
+  dass die GARDENA-Wolke selbst schließt, auch wenn der LoxBerry ausfällt. Bei
+  Abbruch, Sperre, Fensterende oder Dienstende wird aktiv geschlossen.
+* **Gezählt wird nur, was GARDENA angenommen hat.** Abweisungen (Plugin aus,
+  Schnittstelle aus, Mehrventil-Gerät, Token, Abrufsperre) und
+  Zeitüberschreitungen gelten als nicht gegossen; Protokoll und Reiter Test
+  nennen Code und Grund.
+* Eine GARDENA-Zone sollte vom Loxone-Baustein getrennt werden, sonst gießen
+  beide. Zonen an einem Wasseranschluss am besten auf dieselbe Ausgabe stellen.
+* Reiter Test: zwei neue Zeilen („GARDENA-Ventil erreichbar, Token passt“ und
+  „GARDENA-Lauf“); der Test öffnet nie ein Ventil.
+* Das Ventil-Token wird wie ein Kennwort behandelt und steht nie in „Einstellungen
+  sichern“. Für Zonen mit Ausgabe Loxone ändert sich nichts.
+* Hinweis: Eine mit dieser Fassung erstellte Sicherung lässt sich in 0.9.36 und
+  älter nicht zurückspielen (unbekannte Felder).
 
 ## Neu in 0.9.36
 
@@ -504,6 +528,61 @@ dem Update wie vorher.
   Bilanz rechnet tageweise, und eine Kennung dafür ist an keinem Gerät dieses
   Hauses belegt.
 
+## GARDENA-Ventile direkt (Einstellung, ab Werk aus)
+
+Wer seine GARDENA-Ventile über das Plugin **GardenaSmartSystem** (ab 1.2.13)
+betreibt, kann sie von der Bewässerung direkt öffnen und schließen lassen,
+statt über den Bewässerungsbaustein in Loxone. Ab Werk ist das aus, und jede
+Zone steht auf „über Loxone“; eine eingerichtete Anlage verhält sich nach dem
+Update wie vorher.
+
+* **Einrichten:** in GARDENA die „Schnittstelle für die Bewässerung“
+  einschalten und das Ventil-Token abschreiben. Hier im Reiter Einstellungen
+  „GARDENA-Ventile direkt“ anhaken, Ordner (ab Werk `gardenasmartsystem`),
+  Ventil-Token und Höchstdauer je Öffnen (wie in GARDENA, ab Werk 60 min)
+  eintragen. Im Reiter Zonen je Zone die Ausgabe „GARDENA-Ventil“ und den
+  Gerätenamen aus der GARDENA-App wählen. Eine solche Zone gehört nicht mehr
+  an den Loxone-Baustein, sonst gießen beide.
+* **Aufruf:** `POST http://127.0.0.1:<Webserver-Port>/plugins/<Ordner>/index.php`
+  mit `action=ventil`, `befehl=oeffnen` (Pflichtfeld `minuten`), `schliessen`
+  oder `zustand` und `quelle=bewaesserung` — die Schnittstelle von GARDENA,
+  nie dessen Dateien.
+* **Ablauf:** zu Beginn des Gießfensters entsteht aus dem Plan der Nacht
+  (eingefrorener Nachtplan, sonst der laufende) ein Fahrplan: die
+  GARDENA-Zonen nacheinander mit ihrer Ventilzeit (`<zone>/sekunden`), so oft
+  wie `durchlaeufe`, dazwischen die Pause. Nichts ragt über das Fensterende.
+  Geöffnet wird nur, wenn der Plan gilt (`ok=1`, nicht älter als das
+  Dreifache des Rechentakts) und keine Sperre greift — bei einem Ausfall der
+  Wetterquelle wird nicht gegossen.
+* **Nie ohne Dauer:** jedes Öffnen trägt `minuten` (aufgerundete Ventilzeit,
+  höchstens die Höchstdauer; längere Ventilzeiten werden geteilt). Die
+  GARDENA-Wolke schließt das Ventil danach selbst — auch wenn LoxBerry,
+  GARDENA oder das Netz mitten im Lauf ausfallen. Zusätzlich geht
+  `schliessen` hinaus: am Ende jeder Zone, bei einer Sperre, am Fensterende,
+  beim Ausschalten und beim Beenden des Dienstes.
+* **Gezählt wird nur, was angenommen ist:** HTTP 200 mit `OK=1` und
+  `GESENDET=1` oder `UNVERAENDERT=1` (derselbe Befehl lief binnen 60 s schon,
+  etwa aus Loxone), und nur die Zeit bis zum Schließen — mit gemessener
+  Becherprobe als Millimeter in der Bilanz. Jede andere Antwort (409 etwa für
+  „Schnittstelle aus“, „Plugin aus“ oder ein Gerät mit mehreren Ventilen,
+  403 für das Token, 404, 429, 503, keine Antwort binnen 45 s) steht mit
+  Code und Grund im Protokoll und im Reiter Test, und die Zone gilt als
+  **nicht** gegossen; ihr Defizit bleibt für die nächste Nacht. Nach einer
+  Zeitüberschreitung fragt der Dienst `zustand` und schließt vorsorglich,
+  statt blind zu wiederholen.
+* **Reiter Test:** je GARDENA-Zone „GARDENA-Ventil erreichbar, Token passt“
+  (fragt nur `zustand`, öffnet nie) und „GARDENA-Lauf“ mit dem Ergebnis der
+  letzten Nacht.
+* **Ventil-Token** wie ein Kennwort: Kennwortfeld, leer lassen heißt
+  unverändert, ein Haken löscht es; nie in einer Adresse, nie im Protokoll,
+  nie in „Einstellungen sichern“. Beim Zurückspielen gilt das gespeicherte
+  weiter; eine Datei, die eines trägt, wird abgewiesen.
+* **Grenzen:** GARDENA nimmt höchstens 30 schaltende Befehle je Stunde an
+  (gemeinsam mit Loxone); jede Zone kostet zwei. Laufen Zonen gemischt über
+  Loxone und über GARDENA, beginnt der GARDENA-Fahrplan ebenfalls mit dem
+  Fenster — beide können dann gleichzeitig Wasser ziehen. Nicht gemessen an
+  der echten Wolke und an echten Ventilen.
+
 ## Reiter Test: Wetterquelle und letzter guter Plan
 
 Die Zeile „Wetterquelle“ sagt, ob Open-Meteo liefert und **von wann der letzte
@@ -517,7 +596,8 @@ und `ok` steht auf 0.
   auch die übrigen Werte des Formulars nicht. Die eingetippten Werte stehen
   danach wieder im Formular, das beanstandete Feld ist rot umrandet
   (Einstellungen, MQTT, Quellen, Zonen, Becherprobe). Das Token der
-  Ecowitt-Weiche kommt nie ins Formular zurück.
+  Ecowitt-Weiche und das Ventil-Token für GARDENA kommen nie ins Formular
+  zurück; das Ventil-Token steht auch nie in der Sicherung.
 * „Einstellungen sichern“ prüft die eigene Sicherung mit derselben Prüfung
   wie das Zurückspielen. Würde ein gespeicherter Wert abgewiesen, steht am
   Knopf eine gelbe Warnung mit den Namen der Werte; die Datei wird trotzdem
@@ -566,6 +646,7 @@ also 7,85 ml.
     bin/giessplan.py          Bedarf, Vorschau, Plan unter den Anlagengrenzen
     bin/quellen.py            Messwertbezug: MQTT, HTTP-JSON, Open-Meteo
     bin/bewaesserung_dienst.py  Dienst
+    bin/ventil.py             GARDENA-Ventile direkt (Einstellung, ab Werk aus)
     templates/quellen.json    Messgrößen, Vorlagen, Einheiten — EINE Datei
     templates/pflanzen.json   Kc, Zr, p, Bodenkennwerte, Regnertypen
     webfrontend/htmlauth/     Oberfläche (acht Reiter)
@@ -577,7 +658,9 @@ Kein Pflichtpaket. `paho-mqtt` ist freiwillig und nur für MQTT-Quellen nötig.
 
 Er liefert Werte und sonst nichts. Ein Endpunkt im unangemeldeten Bereich, der
 Wasser aufdrehen kann, wäre eine Angriffsfläche ohne Gegenwert — geschaltet
-wird vom Bewässerungsbaustein im Miniserver.
+wird vom Bewässerungsbaustein im Miniserver. Daran ändert auch
+„GARDENA-Ventile direkt“ nichts: dort schaltet der Dienst selbst, über die
+Schnittstelle des Plugins GardenaSmartSystem; der Endpunkt bleibt lesend.
 
 ## Neu in 0.9.23 — zwei Punkte aus einer Messung an der Anlage
 

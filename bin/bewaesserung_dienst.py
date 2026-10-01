@@ -14,6 +14,14 @@ Bewaesserungsbaustein im Miniserver, der das seit Jahren kann. Das Plugin
 liefert die Zahl, Loxone entscheidet - dieselbe Aufgabenteilung wie bei den
 uebrigen Plugins dieser Reihe.
 
+Die eine Ausnahme ist eine Einstellung und ab Werk AUS (Gardena-1,
+Verbesserungsbau 01.10.2026): "GARDENA-Ventile direkt". Zonen mit der
+Ausgabeart GARDENA oeffnet und schliesst dann ein eigener Faden
+(VentilFaden, bin/ventil.py) ueber die Schnittstelle des Plugins
+GardenaSmartSystem - immer mit Dauer, sodass die Wolke das Ventil auch dann
+schliesst, wenn danach niemand mehr antwortet. Alle anderen Zonen bleiben
+beim Weg ueber Loxone.
+
 Seit 0.9.7 hoert er zusaetzlich zu, WAS Loxone ausgebracht hat. Das ist
 keine Umkehrung der Aufgabenteilung, sondern ihre Voraussetzung: eine
 Wasserbilanz, die den Zufluss nicht kennt, laeuft weg. Gemessen an einer
@@ -42,6 +50,7 @@ import re
 import signal
 import socket
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -54,6 +63,7 @@ sys.path.insert(0, str(HIER))
 import fao56                                        # noqa: E402
 import giessplan                                    # noqa: E402
 import quellen                                      # noqa: E402
+import ventil                                       # noqa: E402
 
 
 def lb_wurzel_ermitteln():
@@ -182,6 +192,9 @@ DATEI_VERLAUF = os.path.join(DATADIR, "verlauf.json")
 DATEI_ROH = os.path.join(DATADIR, "roh.json")
 DATEI_EXTREME = os.path.join(DATADIR, "tagesextreme.json")
 DATEI_NACHTPLAN = os.path.join(DATADIR, "nachtplan.json")
+# Gardena-1: der Laufstand der GARDENA-Ventile (Fahrplan der Nacht, je Schritt
+# Antwort, Laufzeit, verbuchtes Wasser). Ohne die Einstellung entsteht sie nie.
+DATEI_VENTIL = os.path.join(DATADIR, "ventil_lauf.json")
 DATEI_PID = os.path.join(DATADIR, "dienst.pid")
 # C1 (Durchgang 30.09.2026): die Sperre des Dienstes selbst.
 DATEI_DIENSTSPERRE = os.path.join(DATADIR, "dienst.lock")
@@ -246,6 +259,15 @@ VORGABEN = {
     # Ordner und Token sind die der Ecowitt-Weiche; das Token nur, wenn dort
     # eines hinterlegt ist.
     "ecowitt_regen": 0, "ecowitt_ordner": "ecowittweiche", "ecowitt_token": "",
+    #
+    # Gardena-1 (Verbesserungsbau 01.10.2026): GARDENA-Ventile direkt ueber
+    # die Schnittstelle des Plugins GardenaSmartSystem (bin/ventil.py). AUS
+    # ab Werk; dazu je Zone die Ausgabeart (zonen.json 'ausgabe', fehlt =
+    # ueber Loxone). Das Ventil-Token ist ein Geheimnis: nie im Protokoll,
+    # nie in der Sicherung. gardena_max_min muss zur Hoechstdauer in GARDENA
+    # passen (1..180); laengere Ventilzeiten werden geteilt.
+    "gardena_ein": 0, "gardena_ordner": "gardenasmartsystem", "gardena_token": "",
+    "gardena_max_min": 60,
 }
 
 _LOG = logging.getLogger("bewaesserung")
@@ -1964,6 +1986,101 @@ def _ecowitt_melden(e: dict) -> None:
     _ECOWITT_GEMELDET["grund"] = grund
 
 
+# ------------------------------------------ Gardena-1: GARDENA-Ventile direkt
+def ventil_buchen(datum: str, schluessel: str, mm: float) -> bool:
+    """Das Wasser eines GARDENA-Schritts in den Verlauf schreiben.
+
+    Dieselbe Stelle wie die Giess-Rueckmeldung aus Loxone: 'bewaesserung'
+    je Zone im Tageseintrag. Addiert wird nur hier, einmal je Schritt (der
+    Laufstand merkt 'gebucht'). rechnen() uebernimmt den Wert (Maximum mit
+    einer Rueckmeldung, sonst unveraendert). Unter der Rechensperre - sonst
+    ginge ein Schreiben verloren (siehe Rechensperre). Bekommt der Faden die
+    Sperre nicht binnen 2 s, versucht er es im naechsten Takt wieder.
+    """
+    if not mm or float(mm) <= 0:
+        return True
+    with Rechensperre(2.0) as frei:
+        if not frei:
+            return False
+        v = verlauf_lesen()
+        e = dict(v["tage"].get(datum) or {})
+        b = dict(e["bewaesserung"]) if isinstance(e.get("bewaesserung"), dict) else {}
+        try:
+            alt = float(b.get(schluessel) or 0.0)
+        except (TypeError, ValueError):
+            alt = 0.0
+        b[schluessel] = round(alt + float(mm), 2)
+        e["bewaesserung"] = b
+        v["tage"][datum] = e
+        return json_schreiben(DATEI_VERLAUF, v)
+
+
+def _still_lesen(p: str) -> dict:
+    """Lesen ohne Nebenwirkung: der Faden legt nichts beiseite und heilt
+    nichts - das bleibt der Rechenschleife und der Oberflaeche."""
+    lage, d = _json_lage(p)
+    return d if lage in ("ok", "neu") and isinstance(d, dict) else {}
+
+
+def ventil_lesen() -> tuple:
+    """(Konfiguration oder None, Zonen, Abbild) fuer den GARDENA-Lauf.
+    None, wenn die Konfiguration nicht zum Rechnen taugt (wie
+    config_streng(), aber ohne Heilen): dann oeffnet der Lauf nichts und
+    schliesst ein offenes Ventil."""
+    lage, d = _json_lage(DATEI_CONFIG)
+    cfg = None
+    if lage == "ok" and _hat_token(d):
+        try:
+            c = dict(VORGABEN)
+            c.update(d)
+            cfg = _pflichtzahlen(c)
+        except KonfigKaputt:
+            cfg = None
+    z = _still_lesen(DATEI_ZONEN).get("zonen")
+    return cfg, (z if isinstance(z, list) else []), _still_lesen(DATEI_ABBILD)
+
+
+class VentilFaden(threading.Thread):
+    """Der GARDENA-Lauf neben der Rechenschleife (bin/ventil.py).
+
+    Ein eigener Faden, weil ein Ventil zur Sekunde schliessen soll, waehrend
+    die Rechenschleife nur alle max(600, Takt) Sekunden rechnet und dabei bis
+    zu 20 s auf Open-Meteo wartet. Solange die Einstellung aus ist, liest er
+    jede Sekunde drei Dateien und tut sonst nichts.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(name="gardena-lauf", daemon=True)
+        self.halt = threading.Event()
+
+    def run(self) -> None:
+        try:
+            lauf = ventil.Lauf(
+                jetzt=time.time, lesen=ventil_lesen, port=lb_webport,
+                rufen=ventil.aufrufen, buchen=ventil_buchen,
+                laden=lambda: _still_lesen(DATEI_VENTIL),
+                speichern=lambda d: json_schreiben(DATEI_VENTIL, d),
+                melden=lambda stufe, text: _LOG.log(stufe, text))
+        except Exception as f:                  # noqa: BLE001
+            _LOG.error("GARDENA-Lauf nicht gestartet: %s", f, exc_info=True)
+            return
+        while not self.halt.is_set():
+            try:
+                if lauf.schritt():
+                    continue
+            except Exception as f:              # noqa: BLE001
+                _LOG.error("GARDENA-Lauf: %s", f, exc_info=True)
+                self.halt.wait(30.0)
+                continue
+            self.halt.wait(1.0)
+        # Der Dienst endet: ein offenes Ventil wird geschlossen.
+        try:
+            while lauf.schritt(halt=True):
+                pass
+        except Exception as f:                  # noqa: BLE001
+            _LOG.error("GARDENA-Lauf beim Beenden: %s", f, exc_info=True)
+
+
 def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
     """Einmal alles rechnen: Messwerte, ET0, Bilanz je Zone, Plan."""
     heute = datetime.date.today()
@@ -2549,6 +2666,8 @@ class Dienst:
         # Auffangzweig ihn auch dann lesen kann, wenn schon das Anlegen des
         # Klienten scheitert.
         self.abgewiesen = False
+        # Gardena-1: der GARDENA-Lauf (VentilFaden), gestartet in laufen().
+        self.faden = None
 
     def anhalten(self, *_a) -> None:
         self.laeuft = False
@@ -2584,6 +2703,9 @@ class Dienst:
         # Themen, statt sie vorauszusetzen.
         _LOG.info("MQTT-Themen beim Start: %d", len(self.themen))
         asyncio.ensure_future(self.mqtt_horchen(sammler))
+        # Gardena-1: der GARDENA-Lauf. Ohne die Einstellung tut er nichts.
+        self.faden = VentilFaden()
+        self.faden.start()
 
         letzte_rechnung = 0.0
         stand = _stand_der_dateien()
@@ -3125,6 +3247,11 @@ def main() -> int:
     try:
         return asyncio.run(d.laufen())
     finally:
+        # Gardena-1: ein offenes GARDENA-Ventil wird vor dem Ende
+        # geschlossen (Zeitgrenze 8 s; dienst.sh wartet 10 s).
+        if d.faden is not None:
+            d.faden.halt.set()
+            d.faden.join(9.0)
         _LOG.info("Dienst beendet.")
         # C1: die PID-Datei loescht nur der Dienst, dessen Nummer darin
         # steht - sonst naehme ein endender zweiter Vorgang dem laufenden

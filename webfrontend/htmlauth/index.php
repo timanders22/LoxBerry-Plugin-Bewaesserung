@@ -324,6 +324,53 @@ if ($bw_post && isset($_POST['speichern'])) {
         }
     }
     $bw_merke('ecowitt_token');
+
+    /* Gardena-1 (Verbesserungsbau 01.10.2026): GARDENA-Ventile direkt. Der
+     * Haken ist ab Werk aus. Ordner und Hoechstdauer werden ROH geprueft -
+     * nichts wird still zurechtgebogen (Nr. 16/19). Das Ventil-Token wie ein
+     * Kennwort: leeres Feld = unveraendert, es reist nie ins Formular
+     * zurueck, der Haken "loeschen" leert es. */
+    $bw_cfg['gardena_ein'] = isset($_POST['gardena_ein']) ? 1 : 0;
+    $bw_go = (isset($_POST['gardena_ordner']) && is_string($_POST['gardena_ordner']))
+        ? trim($_POST['gardena_ordner']) : '';
+    if (!bw_wert_pruefen('gardena_ordner', $bw_go)) {
+        $bw_fehler[] = bw_t('EINST.FEHLER_GARDENA_ORDNER');
+    } else {
+        $bw_cfg['gardena_ordner'] = $bw_go;
+    }
+    $bw_merke('gardena_ordner');
+    $bw_gm = (isset($_POST['gardena_max_min']) && is_string($_POST['gardena_max_min']))
+        ? trim($_POST['gardena_max_min']) : '';
+    if (!preg_match('/^[0-9]{1,3}$/', $bw_gm) || !bw_wert_pruefen('gardena_max_min', $bw_gm)) {
+        $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_BEREICH'), bw_t('EINST.L_GARDENA_MAX_MIN'),
+                               $bw_gr['gardena_max_min'][0], $bw_gr['gardena_max_min'][1]);
+    } else {
+        $bw_cfg['gardena_max_min'] = (int) $bw_gm;
+    }
+    $bw_merke('gardena_max_min');
+    $bw_gt = (isset($_POST['gardena_token']) && is_string($_POST['gardena_token']))
+        ? trim($_POST['gardena_token']) : '';
+    $bw_gl = !empty($_POST['gardena_token_loeschen']);
+    if ($bw_gl && $bw_gt !== '') {
+        $bw_fehler[] = bw_t('EINST.FEHLER_GARDENA_TOKEN_BEIDES');
+    } elseif ($bw_gl) {
+        $bw_cfg['gardena_token'] = '';
+    } elseif ($bw_gt !== '') {
+        if (!bw_wert_pruefen('gardena_token', $bw_gt)) {
+            $bw_fehler[] = bw_t('EINST.FEHLER_GARDENA_TOKEN');
+        } else {
+            $bw_cfg['gardena_token'] = $bw_gt;
+        }
+    }
+    $bw_merke('gardena_token');
+    /* Eingeschaltet ohne Token kann nichts schalten - beanstandet, nicht
+     * still gespeichert. Das gilt auch fuer den Loeschhaken: wer das Token
+     * loescht, schaltet die Kopplung im selben Zug aus. */
+    if ($bw_cfg['gardena_ein'] && trim((string) $bw_cfg['gardena_token']) === ''
+        && $bw_gt === '') {
+        $bw_fehler[] = bw_t('EINST.FEHLER_GARDENA_OHNE_TOKEN');
+    }
+    $bw_merke('gardena_token');
     if ($bw_beanstandet) {
         $bw_eingaben_form = 'settings';
     }
@@ -819,6 +866,31 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             // Reihenfolge geht. REGELN_2: melden, nicht blockieren.
             $bw_meldungen[] = sprintf(bw_t('ZONE.HINWEIS_GIESS_OHNE_RATE'), bw_e($bw_name));
         }
+        /* Gardena-1 (Verbesserungsbau 01.10.2026): die Ausgabeart der Zone.
+         * Ab Werk "loxone"; "gardena" braucht den Geraetenamen. Geprueft
+         * wird der rohe Wert (Nr. 19), nur Leerraum am Rand faellt weg. */
+        $bw_aus = (isset($_POST['z_ausgabe'][$bw_i]) && is_string($_POST['z_ausgabe'][$bw_i]))
+            ? $_POST['z_ausgabe'][$bw_i] : 'loxone';
+        $bw_gv = (isset($_POST['z_gardena_ventil'][$bw_i]) && is_string($_POST['z_gardena_ventil'][$bw_i]))
+            ? trim($_POST['z_gardena_ventil'][$bw_i]) : '';
+        if (!in_array($bw_aus, array('loxone', 'gardena'), true)) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_AUSGABE'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_ausgabe[' . $bw_i . ']';
+            continue;
+        }
+        if ($bw_aus === 'gardena' && $bw_gv === '') {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_GARDENA_OHNE_VENTIL'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_gardena_ventil[' . $bw_i . ']';
+            continue;
+        }
+        if (!bw_gardena_ventil_taugt($bw_gv, true)) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_GARDENA_VENTIL'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_gardena_ventil[' . $bw_i . ']';
+            continue;
+        }
         $bw_regner = preg_replace('/[^a-z_]/', '', strtolower($bw_hol('z_regner')));
         // Regnertyp: nur ein STARTWERT, und nur wenn noch keine Rate dasteht.
         // Er ueberschreibt niemals eine Becherprobe - der Katalogwert weicht
@@ -873,6 +945,10 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
                 : (string) (isset($bw_alt['rate_gemessen_am'])
                     ? $bw_alt['rate_gemessen_am'] : ''),
         );
+        /* Gardena-1: nur, was vom Werk abweicht - eine Zone ueber Loxone
+         * steht in zonen.json wie bisher. */
+        if ($bw_aus === 'gardena') { $bw_neu[count($bw_neu) - 1]['ausgabe'] = 'gardena'; }
+        if ($bw_gv !== '') { $bw_neu[count($bw_neu) - 1]['gardena_ventil'] = $bw_gv; }
     }
     if (!$bw_fehler) {
         if ($bw_geloescht) {
@@ -1030,6 +1106,10 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
                 $bw_neu['aktionstoken'] = $bw_altcfg['aktionstoken'];
                 $bw_meldungen[] = bw_t('EINST.SICH_TOKEN_BEHALTEN');
             }
+            /* Gardena-1: das Ventil-Token steht nie in einer Sicherung, eine
+             * Datei mit Token ist oben abgewiesen. Es gilt das gespeicherte. */
+            $bw_neu['gardena_token'] = isset($bw_altcfg['gardena_token'])
+                ? (string) $bw_altcfg['gardena_token'] : '';
             if (bw_config_speichern($bw_neu)) {
                 $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
                 /* Die beiden anderen Teile, jeder mit gelesenem
@@ -1400,6 +1480,31 @@ if ($bw_rahmen) {
   <input data-role="none" type="password" name="ecowitt_token" id="ecowitt_token" value="" autocomplete="off"<?= bw_markierung('ecowitt_token') ?>
          placeholder="<?= bw_e(trim((string) $bw_cfg['ecowitt_token']) !== '' ? bw_t('EINST.P_ECOWITT_TOKEN_DA') : bw_t('EINST.P_ECOWITT_TOKEN_LEER')) ?>">
   <p class="sm-hilfe"><?= bw_t('EINST.H_ECOWITT_TOKEN') ?></p>
+</div>
+
+<?php /* Gardena-1 (Verbesserungsbau 01.10.2026): GARDENA-Ventile direkt.
+         Ab Werk aus; das Ventil-Token reist nie ins Formular. */ ?>
+<h2><?= bw_e(bw_t('EINST.H_GARDENA')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('EINST.GARDENA_ERKLAERUNG') ?></p>
+<label><input data-role="none" type="checkbox" name="gardena_ein" value="1"<?= bw_eingabe_an('settings', 'gardena_ein', !empty($bw_cfg['gardena_ein'])) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_GARDENA_EIN')) ?></label>
+<div class="sm-feld">
+  <label for="gardena_ordner"><?= bw_t('EINST.L_GARDENA_ORDNER') ?></label>
+  <input data-role="none" type="text" name="gardena_ordner" id="gardena_ordner" value="<?= bw_e(bw_eingabe('settings', 'gardena_ordner', $bw_cfg['gardena_ordner'])) ?>"<?= bw_markierung('gardena_ordner') ?>>
+  <p class="sm-hilfe"><?= bw_t('EINST.H_GARDENA_ORDNER') ?></p>
+</div>
+<div class="sm-feld">
+  <label for="gardena_token"><?= bw_t('EINST.L_GARDENA_TOKEN') ?></label>
+  <input data-role="none" type="password" name="gardena_token" id="gardena_token" value="" autocomplete="off"<?= bw_markierung('gardena_token') ?>
+         placeholder="<?= bw_e(trim((string) $bw_cfg['gardena_token']) !== '' ? bw_t('EINST.P_GARDENA_TOKEN_DA') : bw_t('EINST.P_GARDENA_TOKEN_LEER')) ?>">
+  <label><input data-role="none" type="checkbox" name="gardena_token_loeschen" value="1"<?= bw_eingabe_an('settings', 'gardena_token_loeschen', false) ? ' checked' : '' ?>>
+    <?= bw_e(bw_t('EINST.L_GARDENA_TOKEN_LOESCHEN')) ?></label>
+  <p class="sm-hilfe"><?= bw_t('EINST.H_GARDENA_TOKEN') ?></p>
+</div>
+<div class="sm-feld">
+  <label for="gardena_max_min"><?= bw_t('EINST.L_GARDENA_MAX_MIN') ?></label>
+  <input data-role="none" type="text" name="gardena_max_min" id="gardena_max_min" value="<?= bw_e(bw_eingabe('settings', 'gardena_max_min', $bw_cfg['gardena_max_min'])) ?>"<?= bw_markierung('gardena_max_min') ?>>
+  <p class="sm-hilfe"><?= bw_t('EINST.H_GARDENA_MAX_MIN') ?></p>
 </div>
 
 <?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
@@ -1865,6 +1970,34 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 </table>
 </div>
 <p class="sm-hilfe"><?= bw_t('ZONE.FEIN_FUSSNOTE') ?></p>
+
+<?php /* Gardena-1 (Verbesserungsbau 01.10.2026): Ausgabe je Zone - ab Werk
+         ueber Loxone. Der Geraetename kommt aus der GARDENA-App; die
+         Schnittstelle hat keinen Listenbefehl, und die Dateien des Plugins
+         GardenaSmartSystem liest die Bewaesserung nicht (vb_RAHMEN). */ ?>
+<h3><?= bw_e(bw_t('ZONE.H_AUSGABE')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('ZONE.AUSGABE_ERKLAERUNG') ?></p>
+<div class="sm-breit">
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_AUSGABE')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_GARDENA_VENTIL')) ?></th></tr>
+<?php for ($bw_j = 0; $bw_j < $bw_zeilen_n; $bw_j++) {
+    $bw_z = isset($bw_zonen[$bw_j]) ? $bw_zonen[$bw_j] : array(); ?>
+<tr>
+  <td class="sm-hilfe"><?= !empty($bw_z['name']) ? bw_e($bw_z['name']) : '&mdash;' ?></td>
+  <td><select data-role="none" name="z_ausgabe[<?= $bw_j ?>]"<?= bw_markierung('z_ausgabe[' . $bw_j . ']') ?>>
+      <?php foreach (array('loxone' => bw_t('ZONE.AUSGABE_LOXONE'),
+                           'gardena' => bw_t('ZONE.AUSGABE_GARDENA')) as $bw_ak => $bw_av) { ?>
+      <option value="<?= bw_e($bw_ak) ?>"<?= bw_eingabe('zonen', 'z_ausgabe[' . $bw_j . ']', isset($bw_z['ausgabe']) ? $bw_z['ausgabe'] : 'loxone') === $bw_ak ? ' selected' : '' ?>><?= bw_e($bw_av) ?></option>
+      <?php } ?></select></td>
+  <td><input data-role="none" type="text" name="z_gardena_ventil[<?= $bw_j ?>]" size="22"
+             value="<?= bw_e(bw_eingabe('zonen', 'z_gardena_ventil[' . $bw_j . ']', isset($bw_z['gardena_ventil']) ? $bw_z['gardena_ventil'] : '')) ?>"
+             placeholder="<?= bw_e(bw_t('ZONE.P_GARDENA_VENTIL')) ?>"<?= bw_markierung('z_gardena_ventil[' . $bw_j . ']') ?>></td>
+</tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= bw_t('ZONE.AUSGABE_FUSSNOTE') ?></p>
 <button data-role="none" class="sm-b sm-b-aktion" name="zonen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 

@@ -375,6 +375,167 @@ function bw_ecowitt_zeile($cfg, $a)
         bw_e((string) (isset($e['grund']) ? $e['grund'] : '')), bw_e($bt)));
 }
 
+/** Gardena-1: Port des LoxBerry-Webservers (general.json Webserver.Port),
+ *  sonst 80 - dieselbe Regel wie lb_webport() im Dienst. */
+function bw_webport()
+{
+    $h = bw_paths()['home'];
+    $g = ($h !== '') ? bw_json_lesen($h . '/config/system/general.json') : array();
+    $p = (isset($g['Webserver']) && is_array($g['Webserver']) && isset($g['Webserver']['Port']))
+        ? trim((string) $g['Webserver']['Port']) : '';
+    return (preg_match('/^[0-9]{1,5}$/', $p) && (int) $p > 0 && (int) $p <= 65535) ? (int) $p : 80;
+}
+
+/**
+ * Gardena-1 (Verbesserungsbau 01.10.2026): den Zustand EINES GARDENA-Ventils
+ * ueber die Schnittstelle des Plugins GardenaSmartSystem fragen. Gesendet
+ * wird nur befehl=zustand - diese Seite oeffnet und schliesst nie ein Ventil.
+ * POST an 127.0.0.1 (das Token steht im Rumpf, nie in einer Adresse), ohne
+ * Proxy, ohne Umleitung, hoechstens 10 s.
+ * Rueckgabe: array(HTTP-Code oder 0, Felder der Antwortzeile, Grund).
+ */
+function bw_gardena_zustand($cfg, $ventil)
+{
+    $ordner = trim((string) (isset($cfg['gardena_ordner']) ? $cfg['gardena_ordner'] : ''));
+    $token = trim((string) (isset($cfg['gardena_token']) ? $cfg['gardena_token'] : ''));
+    if (!bw_wert_pruefen('gardena_ordner', $ordner)) { return array(0, array(), 'ORDNER_UNGUELTIG'); }
+    if ($token === '' || !bw_wert_pruefen('gardena_token', $token)) { return array(0, array(), 'TOKEN_FEHLT'); }
+    if (!bw_gardena_ventil_taugt($ventil, false)) { return array(0, array(), 'VENTIL_UNGUELTIG'); }
+    if (!function_exists('curl_init')) { return array(0, array(), 'KEIN_CURL'); }
+    $ch = curl_init('http://127.0.0.1:' . bw_webport() . '/plugins/' . rawurlencode($ordner) . '/index.php');
+    curl_setopt_array($ch, array(
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => http_build_query(array('action' => 'ventil', 'token' => $token,
+            'ventil' => trim((string) $ventil), 'befehl' => 'zustand', 'quelle' => 'bewaesserung')),
+        CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_PROXY => '', CURLOPT_NOPROXY => '*',
+        CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 10,
+    ));
+    $text = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $zeit = curl_errno($ch) === 28;
+    if (PHP_VERSION_ID < 80000) { curl_close($ch); }
+    if (!is_string($text)) {
+        return array(0, array(), $zeit ? 'ZEITUEBERSCHREITUNG' : 'KEINE_VERBINDUNG');
+    }
+    $felder = array();
+    foreach (explode("\n", $text) as $z) {
+        if (strpos($z, 'GARDENA_VENTIL;') !== 0) { continue; }
+        foreach (array_slice(explode(';', trim($z)), 1) as $t) {
+            $kv = explode('=', $t, 2);
+            if (count($kv) === 2 && preg_match('/^[A-Z_]{1,40}$/', $kv[0])) {
+                $felder[$kv[0]] = substr(preg_replace('/[^A-Za-z0-9_.:,|\-]/', '_', $kv[1]), 0, 80);
+            }
+        }
+        break;
+    }
+    if (!$felder) { return array($code, array(), 'KEINE_GARDENA_ANTWORT'); }
+    return array($code, $felder, isset($felder['GRUND']) ? $felder['GRUND'] : '');
+}
+
+/**
+ * Gardena-1: je Zone mit Ausgabeart GARDENA die Zeile "GARDENA-Ventil
+ * erreichbar, Token passt" (nur befehl=zustand) und die Zeile
+ * "GARDENA-Lauf" aus dem Laufstand des Dienstes (ventil_lauf.json).
+ */
+function bw_gardena_zeilen($cfg)
+{
+    $zeilen = array();
+    $f = bw_t('TEST.F_GARDENA');
+    $gz = array();
+    foreach (bw_zonen() as $z) {
+        if (is_array($z) && isset($z['ausgabe']) && $z['ausgabe'] === 'gardena') { $gz[] = $z; }
+    }
+    if (empty($cfg['gardena_ein'])) {
+        $zeilen[] = bw_pruefzeile(-1, $f, $gz ? sprintf(bw_t('TEST.A_GV_AUS_ZONEN'), count($gz))
+                                              : bw_t('TEST.A_GV_AUS'));
+        return $zeilen;
+    }
+    if (!$gz) {
+        $zeilen[] = bw_pruefzeile(-1, $f, bw_t('TEST.A_GV_KEINE_ZONE'));
+    }
+    foreach ($gz as $z) {
+        $ventil = isset($z['gardena_ventil']) ? (string) $z['gardena_ventil'] : '';
+        $wer = sprintf(bw_t('TEST.F_GV_ZONE'), bw_e(isset($z['name']) ? $z['name'] : ''), bw_e($ventil));
+        list($code, $fe, $grund) = bw_gardena_zustand($cfg, $ventil);
+        $alt = isset($fe['ALTER']) ? $fe['ALTER'] : '-';
+        if ($code === 200 && isset($fe['OK']) && ($fe['OK'] === '1' || $grund === 'VERALTET')) {
+            $text = sprintf(bw_t('TEST.A_GV_OK'), bw_e(isset($fe['OFFEN']) ? $fe['OFFEN'] : '-'),
+                bw_e($alt), bw_e(isset($fe['LETZTER_BEFEHL']) ? $fe['LETZTER_BEFEHL'] : '-'));
+            if ($grund === 'VERALTET') { $text .= ' ' . bw_t('TEST.A_GV_VERALTET'); }
+            $zeilen[] = bw_pruefzeile(1, $f . ' &ndash; ' . $wer, $text);
+            continue;
+        }
+        if ($grund === 'KEIN_CURL') {
+            $zeilen[] = bw_pruefzeile(-1, $f . ' &ndash; ' . $wer, bw_t('TEST.A_GV_KEIN_CURL'));
+            continue;
+        }
+        if ($grund === 'TOKEN_FEHLT') {
+            $text = bw_t('TEST.A_GV_KEIN_TOKEN');
+        } elseif ($grund === 'ORDNER_UNGUELTIG' || $grund === 'VENTIL_UNGUELTIG') {
+            $text = sprintf(bw_t('TEST.A_GV_EINGABE'), bw_e($grund));
+        } elseif ($code === 0) {
+            $text = sprintf(bw_t('TEST.A_GV_KEINE_ANTWORT'), bw_e($grund));
+        } elseif ($grund === 'KEINE_GARDENA_ANTWORT') {
+            $text = sprintf(bw_t('TEST.A_GV_KEIN_PLUGIN'), (int) $code);
+        } else {
+            $zusatz = '';
+            foreach (array('ANZAHL', 'BIS', 'GRENZE') as $k) {
+                if (isset($fe[$k])) { $zusatz .= ';' . $k . '=' . $fe[$k]; }
+            }
+            $text = sprintf(bw_t('TEST.A_GV_FEHLER'), (int) $code, bw_e($grund . $zusatz));
+        }
+        $zeilen[] = bw_pruefzeile(0, $f . ' &ndash; ' . $wer, $text . ' ' . bw_t('TEST.A_GV_RUECKFALL'));
+    }
+    $zeilen[] = bw_gardena_lauf_zeile();
+    return $zeilen;
+}
+
+/** Gardena-1: was der Dienst in der letzten Nacht mit den GARDENA-Ventilen
+ *  getan hat (ventil_lauf.json) - nie gegossen gilt nie als erledigt. */
+function bw_gardena_lauf_zeile()
+{
+    $f = bw_t('TEST.F_GV_LAUF');
+    $d = bw_json_lesen(bw_paths()['datadir'] . '/ventil_lauf.json');
+    $w = (isset($d['wartet']) && is_array($d['wartet']) && isset($d['wartet']['nacht'])) ? $d['wartet'] : null;
+    if ($w !== null && (!isset($d['nacht']) || strcmp((string) $w['nacht'], (string) $d['nacht']) > 0)) {
+        /* Die Nacht laeuft, aber der Plan galt bisher nicht: nichts geoeffnet. */
+        return bw_pruefzeile(0, $f, sprintf(bw_t('TEST.A_GV_LAUF_WARTET'),
+            bw_e(str_replace('T', ' ', (string) $w['nacht'])),
+            bw_e(isset($w['grund']) ? (string) $w['grund'] : '')));
+    }
+    if (!isset($d['nacht']) || !is_string($d['nacht'])) {
+        return bw_pruefzeile(-1, $f, bw_t('TEST.A_GV_LAUF_NIE'));
+    }
+    $n = array('geplant' => 0, 'offen' => 0, 'fertig' => 0, 'fehler' => 0, 'verpasst' => 0,
+               'ausgelassen' => 0, 'abgebrochen' => 0);
+    $mm = 0.0;
+    $letzt = '';
+    $sperre = 0;
+    foreach ((isset($d['schritte']) && is_array($d['schritte'])) ? $d['schritte'] : array() as $s) {
+        if (!is_array($s) || !empty($s['alt']) || !isset($s['stand']) || !isset($n[$s['stand']])) { continue; }
+        $n[$s['stand']]++;
+        if (isset($s['gebucht']) && (int) $s['gebucht'] === 1 && isset($s['mm'])) { $mm += (float) $s['mm']; }
+        $g = isset($s['grund']) ? (string) $s['grund'] : '';
+        if (in_array($s['stand'], array('fehler', 'verpasst', 'ausgelassen', 'abgebrochen'), true)) {
+            if (strpos($g, 'Sperre') === 0) { $sperre++; continue; }
+            $t = (isset($s['oeffnen']['text']) && $s['stand'] === 'fehler') ? (string) $s['oeffnen']['text'] : $g;
+            $letzt = sprintf('%s: %s', isset($s['name']) ? (string) $s['name'] : '?', $t);
+        }
+    }
+    $wann = str_replace('T', ' ', $d['nacht']);
+    $schlecht = $n['fehler'] + $n['verpasst'] + $n['ausgelassen'] + $n['abgebrochen'] - $sperre;
+    if ($schlecht > 0) {
+        return bw_pruefzeile(0, $f, sprintf(bw_t('TEST.A_GV_LAUF_FEHLER'), bw_e($wann), $n['fertig'],
+            $schlecht, bw_e($letzt), $mm));
+    }
+    if ($n['geplant'] + $n['offen'] > 0) {
+        return bw_pruefzeile(-1, $f, sprintf(bw_t('TEST.A_GV_LAUF_PLAN'), bw_e($wann), $n['fertig'],
+            $n['offen'], $n['geplant']));
+    }
+    return bw_pruefzeile(1, $f, sprintf(bw_t('TEST.A_GV_LAUF_OK'), bw_e($wann), $n['fertig'], $mm, $sperre));
+}
+
 function bw_pruefungen()
 {
     $zeilen = array();
@@ -580,6 +741,8 @@ function bw_pruefungen()
     $zeilen[] = bw_wetterquelle_zeile($cfg, $a);
     /* Wetter-1: Regen aus der Ecowitt-Weiche. */
     $zeilen[] = bw_ecowitt_zeile($cfg, $a);
+    /* Gardena-1: GARDENA-Ventile direkt (nur befehl=zustand). */
+    $zeilen = array_merge($zeilen, bw_gardena_zeilen($cfg));
 
     $v = bw_verlauf();
     $tage = isset($v['tage']) && is_array($v['tage']) ? count($v['tage']) : 0;

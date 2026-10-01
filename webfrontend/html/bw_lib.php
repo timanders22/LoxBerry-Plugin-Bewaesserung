@@ -201,6 +201,10 @@ function bw_vorgaben()
         // Wetter-1 (Verbesserungsbau 30.09.2026): Regen aus der
         // Ecowitt-Weiche, ab Werk aus.
         'ecowitt_regen' => 0, 'ecowitt_ordner' => 'ecowittweiche', 'ecowitt_token' => '',
+        // Gardena-1 (Verbesserungsbau 01.10.2026): GARDENA-Ventile direkt,
+        // ab Werk aus. Das Ventil-Token geht nie in eine Sicherung.
+        'gardena_ein' => 0, 'gardena_ordner' => 'gardenasmartsystem', 'gardena_token' => '',
+        'gardena_max_min' => 60,
     );
 }
 
@@ -1690,9 +1694,11 @@ function bw_eingabe_felder($form)
                              'pause_min', 'fenster_von', 'fenster_bis', 'max_durchlaeufe',
                              'zonendauer_max_s', 'rechenzeit', 'frost_c', 'wind_kmh_max',
                              'regen_mmh_max', 'hoechstalter', 'melden_limit_tage',
-                             'melden_station_tage', 'ecowitt_ordner'),
+                             'melden_station_tage', 'ecowitt_ordner',
+                             'gardena_ordner', 'gardena_max_min'),
             'haken' => array('kuestennah', 'luecken_fuellen', 'plan_festhalten', 'frost_ein',
-                             'wind_ein', 'regen_ein', 'melden_ein', 'ecowitt_regen'),
+                             'wind_ein', 'regen_ein', 'melden_ein', 'ecowitt_regen',
+                             'gardena_ein', 'gardena_token_loeschen'),
         ),
         'mqtt' => array('text' => array('mqtt_topic'), 'haken' => array('mqtt_ein')),
         'quellen_weg' => array('text' => array('http_url', 'mqtt_thema'), 'haken' => array()),
@@ -1701,7 +1707,8 @@ function bw_eingabe_felder($form)
             'text'  => array('z_name', 'z_schluessel', 'z_flaeche', 'z_bepflanzung', 'z_boden',
                              'z_rate', 'z_regner', 'z_mikroklima', 'z_feuchte', 'z_dauer',
                              'z_hoehe_pflanze', 'z_abfluss', 'z_sensor_gewicht', 'z_theta_fc',
-                             'z_theta_wp', 'z_giess_thema', 'z_giess_art'),
+                             'z_theta_wp', 'z_giess_thema', 'z_giess_art',
+                             'z_ausgabe', 'z_gardena_ventil'),
             'haken' => array('z_zyklus', 'z_loeschen'),
         ),
         'becher' => array('text' => array('becher', 'becher_min', 'becher_mm'), 'haken' => array()),
@@ -1712,7 +1719,7 @@ function bw_eingabe_felder($form)
 /** Nur markiert, nie mitgenommen. */
 function bw_eingabe_geheim()
 {
-    return array('ecowitt_token');
+    return array('ecowitt_token', 'gardena_token');
 }
 
 /** Der Grundname eines Feldes ('z_name[3]' -> 'z_name'). */
@@ -2034,8 +2041,29 @@ function bw_zonen_text_taugt($k, $w)
         case 'feuchte_thema':
         case 'giess_thema':
             return strpos($w, "'") === false;
+        /* Gardena-1: Ausgabeart und Geraetename (wie bin/ventil.py). */
+        case 'ausgabe':
+            return in_array($w, array('loxone', 'gardena'), true);
+        case 'gardena_ventil':
+            return bw_gardena_ventil_taugt($w, true);
     }
     return true;
+}
+
+/**
+ * Gardena-1 (Verbesserungsbau 01.10.2026): taugt der Geraetename eines
+ * GARDENA-Ventils? 1 bis 100 Zeichen (Leerraum am Rand zaehlt nicht), keine
+ * Steuerzeichen, kein Anfuehrungszeichen - dieselbe Regel wie
+ * ventil_name_taugt() in bin/ventil.py. GARDENA selbst nimmt bis 200
+ * Zeichen. $leer_ok: ein leerer Name ist erlaubt (Zone ueber Loxone).
+ */
+function bw_gardena_ventil_taugt($w, $leer_ok)
+{
+    if (!is_string($w) && !is_numeric($w)) { return false; }
+    $w = (string) $w;
+    if (trim($w) === '') { return (bool) $leer_ok; }
+    if (preg_match('/[\x00-\x1F\x7F"]/', $w)) { return false; }
+    return preg_match('/^.{1,100}$/us', trim($w)) === 1;
 }
 
 function bw_x($s)
@@ -2223,6 +2251,9 @@ function bw_grenzen()
         'wind_kmh_max'        => array(5.0, 150.0),
         'regen_mmh_max'       => array(0.1, 50.0),
         'ecowitt_regen'       => array(0, 1),
+        'gardena_ein'         => array(0, 1),
+        /* Hoechstdauer je Oeffnen, wie in GARDENA (1-180 min, Entscheidung 10). */
+        'gardena_max_min'     => array(1, 180),
     );
 }
 
@@ -2266,6 +2297,12 @@ function bw_wert_pruefen($k, $w)
             return preg_match('/^[A-Za-z0-9_-]{1,64}$/', $s) === 1;
         case 'ecowitt_token':
             return preg_match('/^[A-Za-z0-9_.\-]{0,64}$/', $s) === 1;
+        /* Gardena-1: Ordner des Plugins GardenaSmartSystem und Ventil-Token
+         * (32 Hex-Zeichen, GARDENA1_SCHNITTSTELLE.md; leer = keines). */
+        case 'gardena_ordner':
+            return preg_match('/^[A-Za-z0-9_-]{1,64}$/', $s) === 1;
+        case 'gardena_token':
+            return preg_match('/^([0-9A-Fa-f]{32})?$/', $s) === 1;
     }
     return is_string($w);
 }
@@ -2307,6 +2344,8 @@ function bw_zonen_schluessel()
         'hoehe_pflanze' => 'zahl', 'abfluss' => 'zahl',
         'giess_thema' => 'text', 'giess_art' => 'text',
         'rate_gemessen_am' => 'text',
+        /* Gardena-1: Ausgabeart (fehlt = ueber Loxone) und Geraetename. */
+        'ausgabe' => 'text', 'gardena_ventil' => 'text',
     );
 }
 
@@ -2410,6 +2449,14 @@ function bw_zonen_pruefen($liste, &$namen = null)
                                     htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
                 $namen[] = 'zonen[' . (int) $i . '].' . $pk;
             }
+        }
+        /* Gardena-1: eine Zone mit Ausgabeart GARDENA braucht den
+         * Geraetenamen - sonst haette sie weder Loxone noch ein Ventil. */
+        if (isset($neu['ausgabe']) && $neu['ausgabe'] === 'gardena'
+            && (!isset($neu['gardena_ventil']) || trim($neu['gardena_ventil']) === '')) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_GARDENA'),
+                                htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'zonen[' . (int) $i . '].gardena_ventil';
         }
         $aus[] = $neu;
     }
@@ -2585,13 +2632,19 @@ function bw_plugin_fassung()
 
 function bw_sicherung_bauen()
 {
+    /* Gardena-1 (Verbesserungsbau 01.10.2026): das Ventil-Token geht NIE in
+     * eine Sicherung (Auftrag: wie ein Kennwort). Beim Zurueckspielen gilt
+     * das gespeicherte weiter; eine Datei, die eines traegt, wird abgewiesen
+     * (bw_sicherung_lesen()). */
+    $bw_sc = bw_config();
+    unset($bw_sc['gardena_token']);
     return array(
         /* Die Fassung kommt aus plugin.cfg, nicht aus einer zweiten
          * Konstante im Quelltext: eine Fassungsnummer hat EINE Quelle. */
         '_stand'   => sprintf(bw_t('EINST.SICH_STAND'), bw_t('ALLG.TITEL'),
                               bw_plugin_fassung(), date('Y-m-d H:i:s')),
         '_fassung' => 2,
-        'config'   => bw_config(),
+        'config'   => $bw_sc,
         'zonen'    => bw_zonen(),
         'quellen'  => bw_quellen(),
     );
@@ -2641,6 +2694,16 @@ function bw_sicherung_lesen($roh, &$namen = null)
     $bekannt = array_keys($neu);
     $anzahl = 0;
     foreach ($daten as $k => $w) {
+        /* Gardena-1: eine Sicherung traegt nie ein Ventil-Token - eine Datei,
+         * die eines traegt, wird abgewiesen (Name, nie der Wert). Ein leeres
+         * Feld ist keines und wird uebergangen. */
+        if ($k === 'gardena_token') {
+            if (!(is_string($w) && $w === '')) {
+                $mangel[] = bw_t('EINST.SICH_GARDENA_TOKEN');
+                $namen[] = 'config.gardena_token';
+            }
+            continue;
+        }
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(bw_t('EINST.SICH_FREMD'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
@@ -2708,7 +2771,8 @@ function bw_sicherung_lesen($roh, &$namen = null)
      * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
     $fehlend = array();
     foreach (array_keys(bw_vorgaben()) as $fk) {
-        if (!array_key_exists($fk, $daten)) {
+        /* Gardena-1: das Ventil-Token fehlt in jeder Sicherung mit Absicht. */
+        if ($fk !== 'gardena_token' && !array_key_exists($fk, $daten)) {
             $fehlend[] = $fk;
         }
     }
