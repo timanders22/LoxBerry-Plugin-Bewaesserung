@@ -536,6 +536,45 @@ function bw_gardena_lauf_zeile()
     return bw_pruefzeile(1, $f, sprintf(bw_t('TEST.A_GV_LAUF_OK'), bw_e($wann), $n['fertig'], $mm, $sperre));
 }
 
+/**
+ * Nr. 36 b (Stufe 2): die Zeile "Sprachausgabe" - eingestellte Ausgabeart und
+ * letzte Ansage (ansage_pruefzeile(); Alexa-NG und Chromecast werden mit
+ * selftest=1 gefragt, dort wird nichts gesprochen; der Music Server nie), dazu
+ * die eingeschalteten Anlaesse und ob der Dienst die Bruecke rufen kann.
+ * Laeuft nur bei offenem Reiter Test (bw_pruefungen()).
+ */
+function bw_ansage_zeile($cfg)
+{
+    $tts = bw_tts($cfg);
+    list($st, $text) = ansage_pruefzeile($tts, true, bw_ansage_k());
+    if ($tts['mode'] !== 'aus') {
+        $an = array();
+        foreach (bw_ansage_anlaesse() as $bw_ak => $bw_as) {
+            if (!empty($cfg[$bw_ak])) { $an[] = bw_t('TEST.A_ANSAGE_' . $bw_as); }
+        }
+        if ($an) {
+            $text .= ' ' . sprintf(bw_t('TEST.A_ANSAGE_ANLAESSE'), bw_e(implode(', ', $an)));
+        } else {
+            $text .= ' ' . bw_t('TEST.A_ANSAGE_KEIN_ANLASS');
+            if ($st === 1) { $st = -1; }
+        }
+        if (!is_file(bw_paths()['bindir'] . '/bw_ansage.php')) {
+            $text .= ' ' . bw_t('TEST.A_ANSAGE_KEINE_BRUECKE');
+            $st = 0;
+        } else {
+            $php_da = false;
+            foreach (array('/usr/bin/php', '/usr/local/bin/php') as $pk) {
+                if (is_file($pk)) { $php_da = true; break; }
+            }
+            if (!$php_da) {
+                $text .= ' ' . bw_t('TEST.A_ANSAGE_KEIN_PHP');
+                if ($st === 1) { $st = -1; }
+            }
+        }
+    }
+    return bw_pruefzeile($st === 1 ? 1 : ($st === 0 ? 0 : -1), bw_t('TEST.F_ANSAGE'), $text);
+}
+
 function bw_pruefungen()
 {
     $zeilen = array();
@@ -743,6 +782,7 @@ function bw_pruefungen()
     $zeilen[] = bw_ecowitt_zeile($cfg, $a);
     /* Gardena-1: GARDENA-Ventile direkt (nur befehl=zustand). */
     $zeilen = array_merge($zeilen, bw_gardena_zeilen($cfg));
+    $zeilen[] = bw_ansage_zeile($cfg);               // Nr. 36 b
 
     $v = bw_verlauf();
     $tage = isset($v['tage']) && is_array($v['tage']) ? count($v['tage']) : 0;
@@ -896,6 +936,10 @@ function bw_pruefungen()
         $wert_ab = array();
         foreach (bw_vorgaben() as $vk => $vv) {
             if (!array_key_exists($vk, $vp_werte)) { continue; }
+            /* Nr. 36 b: der Block tts (Sprachausgabe) ist ein Verzeichnis; seine Vorgaben
+             * stehen nur in ansage_vorgaben(), der Dienst fuehrt nur den Namen. Verglichen
+             * wird hier der Name (oben), nicht der Wert. */
+            if (is_array($vv)) { continue; }
             $py = $vp_werte[$vk];
             $gleich = (is_int($vv) || is_float($vv))
                 ? (is_numeric($py) && abs((float) $py - (float) $vv) < 1e-9)

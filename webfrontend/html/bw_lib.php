@@ -37,6 +37,11 @@ if (!function_exists('bw_e')) {
     function bw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 }
 
+/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, Nr. 36 b).
+ * Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden und weist einen
+ * direkten Aufruf ueber den Webserver mit 403 ab. */
+require_once __DIR__ . '/sprachausgabe.php';
+
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
@@ -205,6 +210,12 @@ function bw_vorgaben()
         // ab Werk aus. Das Ventil-Token geht nie in eine Sicherung.
         'gardena_ein' => 0, 'gardena_ordner' => 'gardenasmartsystem', 'gardena_token' => '',
         'gardena_max_min' => 60,
+        // Nr. 36 b (Stufe 2, seit 0.9.38): Sprachausgabe ueber die gemeinsame Sprachausgabe.
+        // Die Ausgabe ist ab Werk aus (tts.mode 'aus'); die beiden Haken waehlen die Anlaesse
+        // einzeln ab und stehen ab Werk an - wer die Ausgabe einschaltet, hoert sofort etwas.
+        // Der Dienst fuehrt 'tts' nur als Namen (seine Vorgaben stehen nur hier).
+        'ansage_ende' => 1, 'ansage_ventil' => 1,
+        'tts' => ansage_vorgaben('aus'),
     );
 }
 
@@ -1713,13 +1724,22 @@ function bw_eingabe_felder($form)
         ),
         'becher' => array('text' => array('becher', 'becher_min', 'becher_mm'), 'haken' => array()),
     );
+    /* Nr. 36 b: die Felder der Sprachausgabe (ansage_x2_felder(), nie die Sprechtoken) und
+     * die beiden Anlass-Haken gehoeren zum Formular Einstellungen. */
+    foreach (ansage_x2_felder(bw_ansage_opt()) as $bw_xf) {
+        $felder['settings'][substr($bw_xf, -9) === '_loeschen' ? 'haken' : 'text'][] = $bw_xf;
+    }
+    foreach (array_keys(bw_ansage_anlaesse()) as $bw_xf) {
+        $felder['settings']['haken'][] = $bw_xf;
+    }
     return isset($felder[$form]) ? $felder[$form] : null;
 }
 
 /** Nur markiert, nie mitgenommen. */
 function bw_eingabe_geheim()
 {
-    return array('ecowitt_token', 'gardena_token');
+    $bw_n = ansage_feldnamen(bw_ansage_opt());
+    return array('ecowitt_token', 'gardena_token', $bw_n['alexa_token'], $bw_n['google_token']);
 }
 
 /** Der Grundname eines Feldes ('z_name[3]' -> 'z_name'). */
@@ -1917,17 +1937,17 @@ function bw_baustein_liste($cfg, $token)
               sprintf(bw_t('BAUSTEIN.P03'), $mono(bw_check('ET0'))), '&mdash;'),
         array(4,  bw_t('BAUSTEIN.T_VE'), bw_t($f['REICHT'][2]),
               sprintf(bw_t('BAUSTEIN.P04'), $mono(bw_check('REICHT'))), '&mdash;'),
-        array(5,  bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N05'), bw_t('BAUSTEIN.P05'), 'I &larr; #1'),
-        array(6,  bw_t('BAUSTEIN.T_NICHT'),   bw_t('BAUSTEIN.N06'), '',                   'I &larr; #5'),
+        array(5,  bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N05'), bw_t('BAUSTEIN.P05'), '#1'),
+        array(6,  bw_t('BAUSTEIN.T_NICHT'),   bw_t('BAUSTEIN.N06'), '',                   '#5'),
         array(7,  bw_t('BAUSTEIN.T_ZAEHLER'), bw_t('BAUSTEIN.N07'),
               sprintf(bw_t('BAUSTEIN.P07'), bw_e($von)), 'I &larr; ' . bw_t('BAUSTEIN.E_DURCHLAUF')),
         array(8,  bw_t('BAUSTEIN.T_VERGL'),   bw_t('BAUSTEIN.N08'),
               sprintf(bw_t('BAUSTEIN.P08'), bw_e(bw_t($f['DURCHLAEUFE'][2]))),
               'AI1 &larr; #7, AI2 &larr; #2'),
-        array(9,  bw_t('BAUSTEIN.T_ODER'),    bw_t('BAUSTEIN.N09'), '',                   'I1 &larr; #6, I2 &larr; #8'),
+        array(9,  bw_t('BAUSTEIN.T_ODER'),    bw_t('BAUSTEIN.N09'), '',                   'I1 = #6, I2 = #8'),
         array(10, bw_t('BAUSTEIN.T_BEW'),     bw_t('BAUSTEIN.N10'), bw_t('BAUSTEIN.P10'), 'Off &larr; #9'),
-        array(11, bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N11'), bw_t('BAUSTEIN.P11'), 'I &larr; #4'),
-        array(12, bw_t('BAUSTEIN.T_BENACHR'), bw_t('BAUSTEIN.N12'), bw_t('BAUSTEIN.P12'), 'I &larr; #11'),
+        array(11, bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N11'), bw_t('BAUSTEIN.P11'), '#4'),
+        array(12, bw_t('BAUSTEIN.T_BENACHR'), bw_t('BAUSTEIN.N12'), bw_t('BAUSTEIN.P12'), '#11'),
     );
 }
 
@@ -2254,6 +2274,9 @@ function bw_grenzen()
         'gardena_ein'         => array(0, 1),
         /* Hoechstdauer je Oeffnen, wie in GARDENA (1-180 min, Entscheidung 10). */
         'gardena_max_min'     => array(1, 180),
+        /* Nr. 36 b: die beiden Anlass-Haken der Sprachausgabe. */
+        'ansage_ende'         => array(0, 1),
+        'ansage_ventil'       => array(0, 1),
     );
 }
 
@@ -2575,6 +2598,96 @@ function bw_quellen_pruefen($q, &$namen = null)
  * bleibt das Feld leer - der Kopf der Sicherungsdatei ist Lesehilfe, kein
  * Pruefmerkmal.
  */
+/* ------------------------------------------------------------------
+ * Sprachausgabe (Nr. 36 b, Stufe 2, seit 0.9.38)
+ * ------------------------------------------------------------------
+ * Die Bewaesserung spricht ueber die gemeinsame Sprachausgabe der Plugins
+ * dieses Hauses (sprachausgabe.php). Angesagt wird nur, was der Dienst selbst
+ * erlebt: das Ende des GARDENA-Laufs einer Nacht und eine Stoerung an einem
+ * GARDENA-Ventil, das er direkt schaltet (bin/ventil.py). Der Dienst (Python)
+ * spricht ueber die Bruecke bin/bw_ansage.php; Haken und Wiederholsperre
+ * entscheidet er selbst (ansage_ereignis() in bin/bewaesserung_dienst.py).
+ */
+
+/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' - die Linie hat
+ *  keinen Antwortweg, auf dem Loxone einen Ansagetext abholt. */
+function bw_ansage_modi()
+{
+    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox');
+}
+
+/** Optionen fuer Formular-Baustein und Formular-Lesen. */
+function bw_ansage_opt()
+{
+    return array('modi' => bw_ansage_modi());
+}
+
+/** Die Anlaesse: Haken in der Konfiguration => Kennung der Texte (EINST.L_ANSAGE_<K>, TEST.A_ANSAGE_<K>). */
+function bw_ansage_anlaesse()
+{
+    return array('ansage_ende' => 'ENDE', 'ansage_ventil' => 'VENTIL');
+}
+
+/** Der Block tts, vervollstaendigt (ab Werk 'aus'). Fehlt er (Aktualisierungsfall),
+ *  gelten die Vorgaben des Moduls. */
+function bw_tts($cfg = null)
+{
+    if (!is_array($cfg)) { $cfg = bw_config(false); }
+    list($t) = ansage_vervollstaendigen(isset($cfg['tts']) && is_array($cfg['tts']) ? $cfg['tts'] : array(), 'aus');
+    return $t;
+}
+
+/** Der Kontext des Moduls: Webport, Kopfzeile, Ordner fuer <art>_letzte.json, Texte. */
+function bw_ansage_k()
+{
+    $p = bw_paths();
+    return array(
+        'port'   => ansage_webport($p['home'] !== '' ? $p['home'] . '/config/system/general.json' : ''),
+        'kopf'   => array('User-Agent: LoxBerry Bewaesserung'),
+        'ordner' => @is_dir($p['datadir']) ? $p['datadir'] : '',
+        't'      => function ($s) { return bw_t($s); },
+        /* Zu diesen Kennungen hat das Modul (1.0.2) keinen Satz in [ANSAGE]; ohne die
+         * linieneigenen Schluessel stuende die Kennung roh in der Sicherungsmeldung. */
+        'schluessel' => array('K_TTS_EINTRAG' => 'EINST.SICH_TTS_EINTRAG',
+                              'K_KEIN_FELD' => 'EINST.SICH_TTS_KEIN_FELD'),
+    );
+}
+
+/** Ein Name (Zone, Ventil) fuer den Ansagesatz: ohne Steuerzeichen, ohne < > und ",
+ *  die Alexa-NG/Chromecast abweisen; '' wenn nichts bleibt. */
+function bw_ansage_name($w)
+{
+    if (!is_string($w) || preg_match('//u', $w) !== 1) { return ''; }
+    $w = trim((string) preg_replace('/[\x00-\x1F\x7F<>"\s]+/u', ' ', $w));
+    return strlen($w) <= 200 ? $w : '';
+}
+
+/**
+ * Der Satz zu einem Auftrag des Dienstes (bin/bw_ansage.php), aus der Sprachdatei
+ * (Abschnitt SPRECHEN). '' fuer einen unbekannten oder unvollstaendigen Auftrag.
+ *   ende:   zonen (Zahl der fertig gegossenen Zonen), vollstaendig (0/1)
+ *   ventil: zone, ventil (Ersatz, wenn die Zone keinen Namen hat), befehl oeffnen|schliessen
+ */
+function bw_ansage_text($d)
+{
+    if (!is_array($d) || !isset($d['anlass']) || !is_string($d['anlass'])) { return ''; }
+    if ($d['anlass'] === 'ende') {
+        $n = (isset($d['zonen']) && is_int($d['zonen'])) ? $d['zonen'] : -1;
+        if ($n < 0 || $n > 1000) { return ''; }
+        $voll = isset($d['vollstaendig']) && $d['vollstaendig'] === 1;
+        if (!$voll || $n === 0) { return bw_t('SPRECHEN.ENDE_TEIL'); }
+        return $n === 1 ? bw_t('SPRECHEN.ENDE_1') : sprintf(bw_t('SPRECHEN.ENDE_N'), $n);
+    }
+    if ($d['anlass'] === 'ventil') {
+        $z = bw_ansage_name(isset($d['zone']) ? $d['zone'] : null);
+        if ($z === '') { $z = bw_ansage_name(isset($d['ventil']) ? $d['ventil'] : null); }
+        $b = isset($d['befehl']) ? $d['befehl'] : '';
+        if ($z === '' || !in_array($b, array('oeffnen', 'schliessen'), true)) { return ''; }
+        return sprintf(bw_t($b === 'oeffnen' ? 'SPRECHEN.VENTIL_AUF' : 'SPRECHEN.VENTIL_ZU'), $z);
+    }
+    return '';
+}
+
 function bw_plugin_fassung()
 {
     /* NEU: zuerst LoxBerry selbst fragen.
@@ -2638,6 +2751,10 @@ function bw_sicherung_bauen()
      * (bw_sicherung_lesen()). */
     $bw_sc = bw_config();
     unset($bw_sc['gardena_token']);
+    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung. */
+    if (isset($bw_sc['tts']) && is_array($bw_sc['tts'])) {
+        $bw_sc['tts'] = ansage_sicherung_bereinigen($bw_sc['tts']);
+    }
     return array(
         /* Die Fassung kommt aus plugin.cfg, nicht aus einer zweiten
          * Konstante im Quelltext: eine Fassungsnummer hat EINE Quelle. */
@@ -2697,6 +2814,31 @@ function bw_sicherung_lesen($roh, &$namen = null)
         /* Gardena-1: eine Sicherung traegt nie ein Ventil-Token - eine Datei,
          * die eines traegt, wird abgewiesen (Name, nie der Wert). Ein leeres
          * Feld ist keines und wird uebergangen. */
+        /* Nr. 36 b (Stufe 2): der Block der Sprachausgabe. Eine Sicherung dieses Plugins
+         * traegt nie ein Sprechtoken - traegt die Datei eines (auch als Liste, Zahl, null),
+         * stammt sie nicht aus "Einstellungen sichern" und wird abgewiesen; die geltenden
+         * bleiben (index.php). Ausgabeart, Adresse und Vorlage werden wie im Formular
+         * geprueft (Heimnetz, Entwurf F1). */
+        if ($k === 'tts') {
+            $bw_tm = ansage_sicherung_mangel($w);
+            if ($bw_tm) {
+                $mangel[] = sprintf(bw_t('EINST.SICH_TTS_TOKEN'),
+                                    htmlspecialchars(implode(', ', $bw_tm), ENT_QUOTES, 'UTF-8'));
+                $namen = array_merge($namen, $bw_tm);
+                continue;
+            }
+            $bw_tg = '';
+            $bw_tp = ansage_wert_pruefen($w, $bw_tg, bw_ansage_modi());
+            if ($bw_tp === null) {
+                $mangel[] = sprintf(bw_t('EINST.SICH_TTS'),
+                    htmlspecialchars(ansage_kennung_text($bw_tg, bw_ansage_k()), ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'config.tts';
+                continue;
+            }
+            list($neu['tts']) = ansage_vervollstaendigen($bw_tp, 'aus');
+            $anzahl++;
+            continue;
+        }
         if ($k === 'gardena_token') {
             if (!(is_string($w) && $w === '')) {
                 $mangel[] = bw_t('EINST.SICH_GARDENA_TOKEN');

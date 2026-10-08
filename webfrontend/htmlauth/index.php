@@ -371,6 +371,20 @@ if ($bw_post && isset($_POST['speichern'])) {
         $bw_fehler[] = bw_t('EINST.FEHLER_GARDENA_OHNE_TOKEN');
     }
     $bw_merke('gardena_token');
+    /* Nr. 36 b (Stufe 2): die Sprachausgabe. Die Anlass-Haken stehen im selben Formular;
+     * den Block liest der Baustein des Moduls. Jede Beanstandung verhindert das Speichern
+     * (Nr. 16); kein Sprechtoken steht in einer Meldung, ein leeres Tokenfeld heisst
+     * "behalten", der Haken loescht, beides zugleich ist ein Widerspruch. */
+    foreach (array_keys(bw_ansage_anlaesse()) as $bw_f) {
+        $bw_cfg[$bw_f] = isset($_POST[$bw_f]) ? 1 : 0;
+    }
+    $bw_tmangel = array();
+    $bw_tbean = array();
+    $bw_cfg['tts'] = ansage_formular_lesen($_POST, bw_tts($bw_cfg), $bw_tmangel, $bw_tbean,
+                                           bw_ansage_opt(), bw_ansage_k());
+    foreach ($bw_tmangel as $bw_tm) { $bw_fehler[] = bw_e($bw_tm['text']); }
+    foreach ($bw_tbean as $bw_tb) { $bw_beanstandet[] = $bw_tb; }
+    $bw_n0 = count($bw_fehler);
     if ($bw_beanstandet) {
         $bw_eingaben_form = 'settings';
     }
@@ -1037,6 +1051,23 @@ if ($bw_post && isset($_POST['selbsttest'])) {
     $bw_ausgabe = bw_selbsttest_ausgabe();
     $bw_tab = 'tab-test';
 }
+/* Nr. 36 b: die Testansage. Ins Protokoll nur die Kurzform ohne Text und Token;
+ * die Meldung reist mit der Einmalmeldung, F5 spricht nicht erneut (PRG). */
+if ($bw_post && isset($_POST['ansage_test'])) {
+    $bw_ak = bw_ansage_k();
+    $bw_ar = ansage_testansage(bw_tts(bw_config()), $bw_ak);
+    bw_log('Testansage: ' . ansage_kurz($bw_ar));
+    if ($bw_ar['stand'] === 1) {
+        $bw_meldungen[] = bw_e(bw_t('TEST.M_ANSAGE_TEST_OK'));
+    } elseif ($bw_ar['stand'] === -1) {
+        $bw_meldungen[] = sprintf(bw_e(bw_t('TEST.M_ANSAGE_TEST_NICHTS')),
+                                  bw_e(ansage_kennung_text($bw_ar['kennung'], $bw_ak)));
+    } else {
+        $bw_misserfolg[] = sprintf(bw_e(bw_t('TEST.M_ANSAGE_TEST_FEHL')),
+                                   bw_e(ansage_kennung_text($bw_ar['kennung'], $bw_ak)));
+    }
+    $bw_tab = 'tab-test';
+}
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -1110,6 +1141,12 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
              * Datei mit Token ist oben abgewiesen. Es gilt das gespeicherte. */
             $bw_neu['gardena_token'] = isset($bw_altcfg['gardena_token'])
                 ? (string) $bw_altcfg['gardena_token'] : '';
+            /* Nr. 36 b: die Sprechtoken stehen nie in einer Sicherung, eine Datei mit Token
+             * ist oben abgewiesen. Es gelten die gespeicherten - auch bei einer Sicherung
+             * aus einer Fassung ohne Sprachausgabe (dort gilt fuer den Rest die Vorgabe). */
+            $bw_neu['tts'] = ansage_sicherung_tokens_behalten(
+                (isset($bw_neu['tts']) && is_array($bw_neu['tts'])) ? $bw_neu['tts'] : ansage_vorgaben('aus'),
+                (isset($bw_altcfg['tts']) && is_array($bw_altcfg['tts'])) ? $bw_altcfg['tts'] : array());
             if (bw_config_speichern($bw_neu)) {
                 $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
                 /* Die beiden anderen Teile, jeder mit gelesenem
@@ -1228,7 +1265,8 @@ if ($bw_rahmen) {
 .sm-seite.sm-active { display: block; }
 .sm-feld { margin: 14px 0; }
 .sm-feld > label { display: block; font-weight: 600; font-size: 0.9em; color: #555; margin: 0 0 4px; }
-.sm-feld input[type=text], .sm-feld input[type=password], .sm-feld select, .sm-feld textarea {
+.sm-feld input[type=text], .sm-feld input[type=password], .sm-feld input[type=number],
+.sm-feld select, .sm-feld textarea {
     width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px;
     box-sizing: border-box; font-size: 0.95em; background: #fff; color: #333; }
 .sm-hilfe { font-size: 0.84em; color: #777; margin: 3px 0 0; line-height: 1.45; }
@@ -1282,7 +1320,7 @@ if ($bw_rahmen) {
 .sm-schaetz { color: #d97706; font-weight: 600; }
 /* X-2 (Verbesserungsbau 30.09.2026): rot umrandetes Feld nach einer
  * Beanstandung - eigene Zutat dieser Linie. */
-.sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
+.sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet, .sm-wrap textarea.sm-beanstandet {
     border: 2px solid #c62828 !important; background-color: #fff5f5; }
 </style>
 
@@ -1506,6 +1544,22 @@ if ($bw_rahmen) {
   <input data-role="none" type="text" name="gardena_max_min" id="gardena_max_min" value="<?= bw_e(bw_eingabe('settings', 'gardena_max_min', $bw_cfg['gardena_max_min'])) ?>"<?= bw_markierung('gardena_max_min') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_GARDENA_MAX_MIN') ?></p>
 </div>
+
+<?php /* Nr. 36 b (Stufe 2): Sprachausgabe ueber die gemeinsame Sprachausgabe. Die Ausgabe
+         ist ab Werk aus; die Sprechtoken reisen nie ins Formular (Baustein des Moduls). */ ?>
+<h2><?= bw_e(bw_t('EINST.H_ANSAGE')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('EINST.ANSAGE_ERKLAERUNG') ?></p>
+<?= ansage_formular_html(bw_tts($bw_cfg), array(
+    'w' => function ($n, $g) { return bw_eingabe('settings', $n, $g); },
+    'm' => function ($n) { return bw_markierung($n); },
+    'c' => function ($n, $g) { return bw_eingabe_an('settings', $n, $g); },
+    'modi' => bw_ansage_modi()), bw_ansage_k()) ?>
+<?php foreach (bw_ansage_anlaesse() as $bw_ak => $bw_as) { ?>
+<label><input data-role="none" type="checkbox" name="<?= bw_e($bw_ak) ?>" value="1"<?= bw_eingabe_an('settings', $bw_ak, !empty($bw_cfg[$bw_ak])) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('EINST.L_ANSAGE_' . $bw_as)) ?></label><br>
+<?php } ?>
+<p class="sm-hilfe"><?= bw_t('EINST.H_ANSAGE_ANLAESSE') ?></p>
+<p class="sm-hilfe"><?= bw_t('EINST.ANSAGE_TEST_HINWEIS') ?></p>
 
 <?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
          vollstaendig im Reiter MQTT - eine Sache, eine Stelle. */ ?>
@@ -2329,6 +2383,7 @@ foreach (bw_baustein_liste($bw_cfg, $bw_token) as $bw_z2) { ?>
 <?php } ?>
 </table>
 <div class="sm-hinweis"><?= bw_t('LOX.S3_ERLAEUTERUNG') ?></div>
+<p class="sm-hilfe"><?= bw_t('LOX.S3_ANSAGE') ?></p>
 </div>
 
 <div class="sm-step">
@@ -2405,6 +2460,13 @@ foreach (bw_baustein_liste($bw_cfg, $bw_token) as $bw_z2) { ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-test">
   <button data-role="none" class="sm-b sm-b-aktion" name="test" value="rechnen"><?= bw_e(bw_t('TEST.K_RECHNEN')) ?></button>
 </form>
+<?php /* Nr. 36 b: Testansage per POST, danach 303 - F5 spricht nicht erneut. */ ?>
+<form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-test">
+  <button data-role="none" class="sm-b sm-b-aktion" name="ansage_test" value="1"><?= bw_e(bw_t('TEST.K_ANSAGE_TEST')) ?></button>
+</form>
+<p class="sm-hilfe"><?= bw_t('TEST.ANSAGE_TEST_HILFE') ?></p>
 <?php if ($bw_ausgabe !== '') { ?>
 <div class="sm-log"><?= bw_e($bw_ausgabe) ?></div>
 <?php } ?>

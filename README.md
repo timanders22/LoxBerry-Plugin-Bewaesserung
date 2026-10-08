@@ -5,12 +5,33 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.37 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.38 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.38
+
+Eigene Sprachausgabe für die GARDENA-Ventile, ab Werk aus (Entscheidungen 36/40, Sprachmodul Stufe 2).
+Gemessen unter PHP 7.4 und 8.5 gegen Attrappen (Music Server, Alexa-NG, GARDENA-Schnittstelle) und mit dem echten
+Dienst unter gestellter Uhr; nicht am Gerät, nicht an einem echten Lautsprecher.
+
+* **Neu: Sprachausgabe (ab Werk aus).** Reiter Einstellungen, Abschnitt „Sprachausgabe“: Loxone Music Server,
+  MusicServer4Home, eine eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (Chromecast 4 Lox NG).
+* **Zwei Anlässe, je ein Haken:** der GARDENA-Lauf einer Nacht ist beendet (einmal je Nacht), und ein GARDENA-Ventil
+  öffnet oder schließt nicht (einmal je Störung; erst wenn das Ventil wieder öffnet bzw. schließt, wird die nächste
+  angesagt). Angesagt wird nur, was der Dienst selbst schaltet.
+* Der Satz kommt aus der Sprachdatei (deutsch/englisch); ins Protokoll kommt nur das Ergebnis, nie der Satz.
+* Adresse des Music Servers und Adressvorlage müssen im Heimnetz liegen.
+* Testansage per Knopf im Reiter Test; neue Zeile „Sprachausgabe“ im Reiter Test.
+* Die Sprechtoken stehen nie in der Seite, im Protokoll oder in „Einstellungen sichern“; eine Datei, die eines trägt,
+  wird abgewiesen.
+* Baustein-Liste: kein neuer Baustein nötig; Logikbausteine heißen NICHT und ODER wie in Loxone Config.
+* Eine mit 0.9.38 erstellte Sicherung lässt sich in 0.9.37 nicht zurückspielen.
+
+**In Loxone:** nichts zu tun; wer die Ansage will, schaltet sie im Reiter Einstellungen ein.
 
 ## Neu in 0.9.37
 
@@ -582,6 +603,24 @@ Update wie vorher.
   Loxone und über GARDENA, beginnt der GARDENA-Fahrplan ebenfalls mit dem
   Fenster — beide können dann gleichzeitig Wasser ziehen. Nicht gemessen an
   der echten Wolke und an echten Ventilen.
+
+## Sprachausgabe (Einstellung, ab Werk aus)
+
+Seit 0.9.38 kann die Bewässerung über die gemeinsame Sprachausgabe der Plugins
+dieses Hauses ansagen – über den Loxone Music Server, MusicServer4Home, eine eigene
+Adressvorlage, Alexa-NG oder Google-Lautsprecher (Chromecast 4 Lox NG). Ab Werk ist
+die Ausgabe aus (Reiter Einstellungen, Abschnitt „Sprachausgabe“).
+
+* **Anlässe**, je ein Haken: der GARDENA-Lauf einer Nacht ist beendet (einmal je
+  Nacht), und ein GARDENA-Ventil öffnet oder schließt nicht (einmal je Störung und
+  Ventil; erst wenn das Ventil wieder öffnet bzw. schließt, wird die nächste
+  Störung dieser Art angesagt). Angesagt wird nur, was der Dienst selbst schaltet;
+  Zonen über Loxone kennt er nur als Plan.
+* Der Satz kommt aus der Sprachdatei (deutsch/englisch). Ins Protokoll kommt nur das
+  Ergebnis, nie der Satz. Adresse und Vorlage müssen im Heimnetz liegen.
+* Testansage und Prüfzeile im Reiter Test. Die Sprechtoken für Alexa-NG und
+  Chromecast 4 Lox NG stehen nie in der Seite, im Protokoll oder in „Einstellungen
+  sichern“; eine Datei, die eines trägt, wird abgewiesen.
 
 ## Reiter Test: Wetterquelle und letzter guter Plan
 

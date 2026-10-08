@@ -380,10 +380,13 @@ class Lauf:
       buchen(datum, zone, mm) -> bool   Wasser in den Verlauf schreiben
       laden() -> dict, speichern(dict) -> bool   Laufstand (ventil_lauf.json)
       melden(stufe, text)            Protokoll (logging-Stufe)
+      ansagen(art, daten, cfg)       Nr. 36 b: Anlass fuer die Sprachausgabe ('ende', 'ventil',
+                                     'ventil_ok'); wahlfrei, None = keine Ansagen
     """
 
-    def __init__(self, jetzt, lesen, port, rufen, buchen, laden, speichern, melden):
+    def __init__(self, jetzt, lesen, port, rufen, buchen, laden, speichern, melden, ansagen=None):
         self.jetzt = jetzt
+        self.ansagen = ansagen
         self.lesen = lesen
         self.port = port
         self.rufen = rufen
@@ -450,6 +453,32 @@ class Lauf:
                     "dort angeschlossen ist.")
         return ""
 
+    def _ansage(self, art, daten, cfg) -> None:
+        """Nr. 36 b: einen Anlass weitergeben. Eine Ansage haelt den Lauf nie auf;
+        ob und wann gesprochen wird, entscheidet der Empfaenger (Haken, Sperre)."""
+        if self.ansagen is None:
+            return
+        try:
+            self.ansagen(art, daten, cfg)
+        except Exception as f:                  # noqa: BLE001
+            self.melden(30, "Ansage (%s) nicht moeglich: %s" % (art, type(f).__name__))
+
+    def _ende_pruefen(self, cfg, halt) -> None:
+        """Nr. 36 b: ist der GARDENA-Lauf dieser Nacht zu Ende? Dann der Anlass 'ende' -
+        nur, wenn in dieser Nacht ein Ventil offen war, und nie beim Beenden des Dienstes
+        (ein unterbrochener Lauf ist nicht zu Ende). Schritte frueherer Naechte zaehlen nicht."""
+        if halt or self.ansagen is None:
+            return
+        schritte = [s for s in self._schritte() if isinstance(s, dict) and not s.get("alt")]
+        if not schritte or any(s.get("stand") in ("geplant", "offen") for s in schritte):
+            return
+        if not any(s.get("geoeffnet") for s in schritte):
+            return
+        zonen = set(str(s.get("zone")) for s in schritte if s.get("stand") == "fertig")
+        voll = all(s.get("stand") == "fertig" for s in schritte)
+        self._ansage("ende", {"nacht": str(self.z.get("nacht") or ""), "zonen": len(zonen),
+                              "vollstaendig": 1 if voll else 0}, cfg)
+
     # ------------------------------------------------------------ Ablauf
     def schritt(self, halt: bool = False) -> bool:
         """Einen faelligen Vorgang erledigen. True = es geschah etwas (der
@@ -465,6 +494,7 @@ class Lauf:
             if grund is None and jetzt < float(s.get("ende") or 0):
                 continue
             self._schliessen(s, cfg, zonen, grund or "", halt)
+            self._ende_pruefen(cfg, halt)
             self._sichern()
             return True
         self.frisch = False
@@ -503,6 +533,7 @@ class Lauf:
             if jetzt < float(s.get("beginn") or 0):
                 return False
             self._oeffnen(s, cfg, zonen, abbild, jetzt)
+            self._ende_pruefen(cfg, False)
             self._sichern()
             return True
         return False
@@ -569,6 +600,7 @@ class Lauf:
             s["geoeffnet"] = int(t)
             # Bis dahin laeuft das Ventil spaetestens - die Wolke schliesst selbst.
             s["bis"] = int(t - seit + minuten * 60)
+            self._ansage("ventil_ok", {"ventil": s.get("ventil"), "befehl": "oeffnen"}, cfg)
             self.melden(20, "GARDENA: %s geoeffnet fuer %d min (%s); geschlossen wird um %s, die "
                             "Wolke schliesst spaetestens um %s."
                         % (wer, minuten, beschreiben(r),
@@ -577,6 +609,8 @@ class Lauf:
             return
         s["stand"] = "fehler"
         s["grund"] = str(r.get("grund") or "")
+        self._ansage("ventil", {"zone": s.get("name"), "ventil": s.get("ventil"),
+                                "befehl": "oeffnen"}, cfg)
         self.melden(30, "GARDENA: %s NICHT geoeffnet: %s - gilt als nicht gegossen.%s"
                     % (wer, beschreiben(r), self._hinweis(r)))
         if r.get("grund") == "ZEITUEBERSCHREITUNG":
@@ -632,9 +666,13 @@ class Lauf:
                 warum = "weniger als 0,01 mm"
             buchung = "nichts verbucht: %s" % warum
         if r.get("erfolg"):
+            self._ansage("ventil_ok", {"ventil": s.get("ventil"), "befehl": "schliessen"}, cfg)
             self.melden(20, "GARDENA: %s geschlossen nach %d s%s (%s); %s."
                         % (wer, lief, (" - Abbruch: " + grund) if grund else "", beschreiben(r), buchung))
         else:
+            if not halt:
+                self._ansage("ventil", {"zone": s.get("name"), "ventil": s.get("ventil"),
+                                        "befehl": "schliessen"}, cfg)
             self.melden(30, "GARDENA: %s Schliessen gescheitert%s: %s.%s Die Wolke schliesst das Ventil "
                             "spaetestens um %s (Dauer beim Oeffnen). Gezaehlt sind %d s; %s."
                         % (wer, (" (" + grund + ")") if grund else "", beschreiben(r), self._hinweis(r),

@@ -195,6 +195,8 @@ DATEI_NACHTPLAN = os.path.join(DATADIR, "nachtplan.json")
 # Gardena-1: der Laufstand der GARDENA-Ventile (Fahrplan der Nacht, je Schritt
 # Antwort, Laufzeit, verbuchtes Wasser). Ohne die Einstellung entsteht sie nie.
 DATEI_VENTIL = os.path.join(DATADIR, "ventil_lauf.json")
+# Nr. 36 b: die Wiederholsperre der Ansagen (Anlass und Ventilname mit Zeit, nie ein Text).
+DATEI_ANSAGE_SPERRE = os.path.join(DATADIR, "ansage_sperre.json")
 DATEI_PID = os.path.join(DATADIR, "dienst.pid")
 # C1 (Durchgang 30.09.2026): die Sperre des Dienstes selbst.
 DATEI_DIENSTSPERRE = os.path.join(DATADIR, "dienst.lock")
@@ -268,6 +270,14 @@ VORGABEN = {
     # passen (1..180); laengere Ventilzeiten werden geteilt.
     "gardena_ein": 0, "gardena_ordner": "gardenasmartsystem", "gardena_token": "",
     "gardena_max_min": 60,
+    #
+    # Nr. 36 b (Stufe 2, seit 0.9.38): Sprachausgabe ueber die gemeinsame Sprachausgabe der
+    # Plugins (PHP, Bruecke bin/bw_ansage.php). Die Ausgabe selbst ist ab Werk AUS (Block
+    # tts, Ausgabeart "aus"); seine Vorgaben stehen nur in PHP (ansage_vorgaben()), der
+    # Dienst liest ihn nie und fuehrt hier nur den Namen. Die beiden Haken waehlen die
+    # Anlaesse einzeln ab und stehen ab Werk an - wer die Ausgabe einschaltet, hoert sofort.
+    "ansage_ende": 1, "ansage_ventil": 1,
+    "tts": None,
 }
 
 _LOG = logging.getLogger("bewaesserung")
@@ -2040,6 +2050,198 @@ def ventil_lesen() -> tuple:
     return cfg, (z if isinstance(z, list) else []), _still_lesen(DATEI_ABBILD)
 
 
+# ------------------------------------------ Nr. 36 b: Sprachausgabe (Stufe 2)
+#
+# Der Dienst spricht nur ueber die Bruecke bin/bw_ansage.php (gemeinsame
+# Sprachausgabe sprachausgabe.php, ansage_cli()). Der Auftrag geht als JSON ueber
+# die STANDARDEINGABE - nie ueber die Kommandozeile, dort saehe ihn jeder in der
+# Prozessliste; er traegt Anlass und Namen, nie ein Token. Den Satz baut die
+# Bruecke aus der Sprachdatei (deutsch/englisch wie die Oberflaeche). Ins
+# Protokoll kommt nur die Kurzzeile der Bruecke
+# (ANSAGE;STAND=..;ART=..;KENNUNG=..;HTTP=..;ZEICHEN=..), nie der Satz.
+#
+# Anlaesse, erkannt in bin/ventil.py (Lauf), je ein Haken (ab Werk an; die
+# Ausgabe selbst ist ab Werk aus):
+#   ende    der GARDENA-Lauf einer Nacht ist zu Ende - einmal je Nacht.
+#   ventil  ein GARDENA-Ventil oeffnet oder schliesst nicht - Flanke je Ventil
+#           und Befehl: eine anhaltende Stoerung spricht einmal; erst wenn
+#           dasselbe Ventil denselben Befehl wieder angenommen hat (Ende der
+#           Stoerung), spricht die naechste wieder.
+# Die Bruecke laeuft in einem eigenen Faden mit Zeitgrenze, damit ein haengendes
+# Alexa-NG den GARDENA-Lauf nicht aufhaelt; es laeuft hoechstens eine zugleich.
+ANSAGE_ZEITGRENZE_S = 20.0      # die Sprachausgabe selbst gibt nach 10 s auf
+ANSAGE_HOECHSTENS_WARTEND = 4
+ANSAGE_HAKEN = {"ende": "ansage_ende", "ventil": "ansage_ventil"}
+_ANSAGE_SCHLOSS = threading.Lock()
+_ANSAGE_REIHE = threading.Lock()
+_ANSAGE_STAND: dict = {}
+_ANSAGE_FAEDEN: list = []
+
+
+def _ansage_stand() -> dict:
+    """Die Wiederholsperre: einmal aus der Datei gelesen, danach im Speicher
+    gefuehrt und nach jeder Aenderung geschrieben (unter _ANSAGE_SCHLOSS)."""
+    if not _ANSAGE_STAND:
+        d = _still_lesen(DATEI_ANSAGE_SPERRE)
+        _ANSAGE_STAND["ende"] = d.get("ende") if isinstance(d.get("ende"), dict) else {}
+        _ANSAGE_STAND["ventil"] = d.get("ventil") if isinstance(d.get("ventil"), dict) else {}
+    return _ANSAGE_STAND
+
+
+def _ansage_stand_sichern() -> None:
+    if not json_schreiben(DATEI_ANSAGE_SPERRE, {"ende": _ANSAGE_STAND.get("ende") or {},
+                                                "ventil": _ANSAGE_STAND.get("ventil") or {}}):
+        _LOG.warning("Ansage: die Wiederholsperre liess sich nicht schreiben - sie gilt bis "
+                     "zum Neustart des Dienstes.")
+
+
+def ansage_ereignis(art: str, daten: dict, cfg) -> str:
+    """Ein Anlass aus dem GARDENA-Lauf (bin/ventil.py, Lauf._ansage()).
+
+    art 'ende' / 'ventil': ansagen, wenn der Haken an ist und die
+    Wiederholsperre es zulaesst; 'ventil_ok': derselbe Befehl an dieses Ventil
+    ist gelungen - diese Stoerung ist vorbei. Rueckgabe: 'gestartet', 'aus' (Haken
+    aus), 'gesperrt' (Wiederholsperre), 'quittiert', 'verworfen' oder ''.
+    """
+    daten = daten if isinstance(daten, dict) else {}
+    if art == "ventil_ok":
+        name = str(daten.get("ventil") or "")
+        befehl = str(daten.get("befehl") or "")
+        with _ANSAGE_SCHLOSS:
+            st = _ansage_stand()
+            je = st["ventil"].get(name)
+            if not isinstance(je, dict) or befehl not in je:
+                return ""
+            del je[befehl]
+            if not je:
+                del st["ventil"][name]
+            _ansage_stand_sichern()
+        _LOG.info("Ansage: die Stoerung am GARDENA-Ventil '%s' (%s) ist vorbei - eine neue wird "
+                  "wieder angesagt.", name, befehl)
+        return "quittiert"
+    haken = ANSAGE_HAKEN.get(art)
+    if haken is None:
+        return ""
+    try:
+        an = int((cfg or {}).get(haken) or 0) == 1
+    except (TypeError, ValueError):
+        an = False
+    if not an:
+        return "aus"
+    with _ANSAGE_SCHLOSS:
+        st = _ansage_stand()
+        if art == "ende":
+            nacht = str(daten.get("nacht") or "")
+            if st["ende"].get("nacht") == nacht:
+                return "gesperrt"
+            st["ende"] = {"nacht": nacht, "ts": int(time.time())}
+            try:
+                zahl = max(0, int(daten.get("zonen") or 0))
+            except (TypeError, ValueError):
+                zahl = 0
+            auftrag = {"anlass": "ende", "zonen": zahl,
+                       "vollstaendig": 1 if daten.get("vollstaendig") == 1 else 0}
+        else:
+            name = str(daten.get("ventil") or "")
+            befehl = str(daten.get("befehl") or "")
+            je = st["ventil"].get(name)
+            if not isinstance(je, dict):
+                je = st["ventil"][name] = {}
+            if befehl in je:
+                _LOG.info("Ansage (ventil) unterdrueckt: die Stoerung am GARDENA-Ventil '%s' (%s) haelt "
+                          "an - angesagt wird sie einmal, wieder erst nach ihrem Ende.", name, befehl)
+                return "gesperrt"
+            je[befehl] = int(time.time())
+            auftrag = {"anlass": "ventil", "zone": str(daten.get("zone") or ""), "ventil": name,
+                       "befehl": befehl}
+        _ansage_stand_sichern()
+    return _ansage_starten(art, auftrag)
+
+
+def _ansage_starten(art: str, auftrag: dict) -> str:
+    with _ANSAGE_SCHLOSS:
+        _ANSAGE_FAEDEN[:] = [f for f in _ANSAGE_FAEDEN if f.is_alive()]
+        if len(_ANSAGE_FAEDEN) >= ANSAGE_HOECHSTENS_WARTEND:
+            _LOG.warning("Ansage (%s) entfaellt: %d Ansagen laufen oder warten schon.",
+                         art, len(_ANSAGE_FAEDEN))
+            return "verworfen"
+        f = threading.Thread(target=ansage_rufen, args=(art, auftrag), name="ansage", daemon=True)
+        _ANSAGE_FAEDEN.append(f)
+    f.start()
+    return "gestartet"
+
+
+def ansagen_abwarten(zeit: float) -> None:
+    """Auf laufende Ansagen warten, hoechstens 'zeit' Sekunden (Pruefstaende)."""
+    ende = time.time() + float(zeit)
+    for f in list(_ANSAGE_FAEDEN):
+        f.join(max(0.0, ende - time.time()))
+
+
+def _ansage_php() -> str:
+    for k in ("/usr/bin/php", "/usr/local/bin/php"):
+        if os.path.isfile(k):
+            return k
+    return "php"
+
+
+def _ansage_zeile(roh: bytes) -> str:
+    """Die Kurzzeile der Bruecke (ASCII, hoechstens 200 Zeichen) - nie mehr."""
+    for z in (roh or b"").decode("utf-8", "replace").splitlines():
+        if z.startswith("ANSAGE;"):
+            return re.sub(r"[^\x20-\x7e]", "?", z.strip())[:200]
+    return ""
+
+
+def ansage_rufen(art: str, auftrag: dict) -> int:
+    """Die Bruecke aufrufen und ihren Rueckgabewert auswerten (ansage_cli()):
+    0 gesendet, 1 gescheitert, 3 nichts gesendet ohne Fehler (etwa Ausgabe
+    aus), 2 Aufruf falsch. Negativ: nicht aufrufbar oder Zeitgrenze."""
+    skript = os.path.join(HIER, "bw_ansage.php")
+    if not os.path.isfile(skript):
+        _LOG.warning("Ansage (%s) nicht moeglich: bin/bw_ansage.php fehlt.", art)
+        return -1
+    import subprocess  # noqa: PLC0415 - wie melden()
+    eingabe = json.dumps(auftrag).encode("utf-8")
+    with _ANSAGE_REIHE:
+        try:
+            r = subprocess.run([_ansage_php(), skript, ORDNER], input=eingabe,
+                               capture_output=True, timeout=ANSAGE_ZEITGRENZE_S)
+        except subprocess.TimeoutExpired:
+            _LOG.warning("Ansage (%s): die Bruecke antwortete nicht binnen %d s und wurde beendet.",
+                         art, int(ANSAGE_ZEITGRENZE_S))
+            return -2
+        except Exception as f:                  # noqa: BLE001 - eine Ansage haelt nichts auf
+            _LOG.warning("Ansage (%s) nicht moeglich (%s).", art, type(f).__name__)
+            return -3
+    zeile = _ansage_zeile(r.stdout) or "(keine Antwortzeile)"
+    rc = r.returncode
+    if rc == 0:
+        _LOG.info("Ansage (%s) gesendet: %s", art, zeile)
+    elif rc == 3:
+        _LOG.info("Ansage (%s) nicht gesendet, kein Fehler: %s", art, zeile)
+    elif rc == 1:
+        _LOG.warning("Ansage (%s) gescheitert: %s", art, zeile)
+    elif rc == 2:
+        _LOG.warning("Ansage (%s): Aufruf der Bruecke falsch: %s", art, zeile)
+    else:
+        fehl = re.sub(r"[^\x20-\x7e]", "?", (r.stderr or b"").decode("utf-8", "replace").strip())
+        _LOG.warning("Ansage (%s): die Bruecke endete mit %d: %s %s", art, rc, zeile, fehl[:160])
+    return rc
+
+
+def ventil_lauf_neu(jetzt=time.time) -> "ventil.Lauf":
+    """Der GARDENA-Lauf mit allen Anschluessen - EINE Stelle fuer VentilFaden und
+    Pruefstaende (seit 0.9.38, Nr. 36 b: dazu die Ansagen)."""
+    return ventil.Lauf(
+        jetzt=jetzt, lesen=ventil_lesen, port=lb_webport,
+        rufen=ventil.aufrufen, buchen=ventil_buchen,
+        laden=lambda: _still_lesen(DATEI_VENTIL),
+        speichern=lambda d: json_schreiben(DATEI_VENTIL, d),
+        melden=lambda stufe, text: _LOG.log(stufe, text),
+        ansagen=ansage_ereignis)
+
+
 class VentilFaden(threading.Thread):
     """Der GARDENA-Lauf neben der Rechenschleife (bin/ventil.py).
 
@@ -2055,12 +2257,7 @@ class VentilFaden(threading.Thread):
 
     def run(self) -> None:
         try:
-            lauf = ventil.Lauf(
-                jetzt=time.time, lesen=ventil_lesen, port=lb_webport,
-                rufen=ventil.aufrufen, buchen=ventil_buchen,
-                laden=lambda: _still_lesen(DATEI_VENTIL),
-                speichern=lambda d: json_schreiben(DATEI_VENTIL, d),
-                melden=lambda stufe, text: _LOG.log(stufe, text))
+            lauf = ventil_lauf_neu()
         except Exception as f:                  # noqa: BLE001
             _LOG.error("GARDENA-Lauf nicht gestartet: %s", f, exc_info=True)
             return
