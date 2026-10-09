@@ -1915,6 +1915,10 @@ function bw_host()
  *
  * Rueckgabe: Zeilen array(Nr, Typ (HTML), Name (Klartext), Parameter
  * (HTML), Eingaenge (HTML)).
+ *
+ * X-10 (0.9.39): die Spalte Eingaenge in der Schreibweise von
+ * Werkzeuge/leitungen_setzen.py - "#N" (erster Eingang), "I1 = #N, I2 = #M",
+ * Anschlussnamen wie in Loxone Config ("AI1 = #7", "Off = #9") statt Pfeil.
  */
 function bw_baustein_liste($cfg, $token)
 {
@@ -1940,12 +1944,12 @@ function bw_baustein_liste($cfg, $token)
         array(5,  bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N05'), bw_t('BAUSTEIN.P05'), '#1'),
         array(6,  bw_t('BAUSTEIN.T_NICHT'),   bw_t('BAUSTEIN.N06'), '',                   '#5'),
         array(7,  bw_t('BAUSTEIN.T_ZAEHLER'), bw_t('BAUSTEIN.N07'),
-              sprintf(bw_t('BAUSTEIN.P07'), bw_e($von)), 'I &larr; ' . bw_t('BAUSTEIN.E_DURCHLAUF')),
+              sprintf(bw_t('BAUSTEIN.P07'), bw_e($von)), 'I = ' . bw_t('BAUSTEIN.E_DURCHLAUF')),
         array(8,  bw_t('BAUSTEIN.T_VERGL'),   bw_t('BAUSTEIN.N08'),
               sprintf(bw_t('BAUSTEIN.P08'), bw_e(bw_t($f['DURCHLAEUFE'][2]))),
-              'AI1 &larr; #7, AI2 &larr; #2'),
+              'AI1 = #7, AI2 = #2'),
         array(9,  bw_t('BAUSTEIN.T_ODER'),    bw_t('BAUSTEIN.N09'), '',                   'I1 = #6, I2 = #8'),
-        array(10, bw_t('BAUSTEIN.T_BEW'),     bw_t('BAUSTEIN.N10'), bw_t('BAUSTEIN.P10'), 'Off &larr; #9'),
+        array(10, bw_t('BAUSTEIN.T_BEW'),     bw_t('BAUSTEIN.N10'), bw_t('BAUSTEIN.P10'), 'Off = #9'),
         array(11, bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N11'), bw_t('BAUSTEIN.P11'), '#4'),
         array(12, bw_t('BAUSTEIN.T_BENACHR'), bw_t('BAUSTEIN.N12'), bw_t('BAUSTEIN.P12'), '#11'),
     );
@@ -2646,10 +2650,11 @@ function bw_ansage_k()
         'kopf'   => array('User-Agent: LoxBerry Bewaesserung'),
         'ordner' => @is_dir($p['datadir']) ? $p['datadir'] : '',
         't'      => function ($s) { return bw_t($s); },
-        /* Zu diesen Kennungen hat das Modul (1.0.2) keinen Satz in [ANSAGE]; ohne die
-         * linieneigenen Schluessel stuende die Kennung roh in der Sicherungsmeldung. */
-        'schluessel' => array('K_TTS_EINTRAG' => 'EINST.SICH_TTS_EINTRAG',
-                              'K_KEIN_FELD' => 'EINST.SICH_TTS_KEIN_FELD'),
+        /* K_TTS_EINTRAG: den Satz bringt das Modul seit 1.1.2 selbst mit (wortgleich); die
+         * Umlenkung auf EINST.SICH_TTS_EINTRAG ist seit 0.9.39 gestrichen (X-10).
+         * K_KEIN_FELD bleibt umgelenkt: der Satz der Linie ("kein Verzeichnis") ist nicht der
+         * des Moduls ("kein Feld von Einstellungen"). Ab Werk aus - kein 'werk'. */
+        'schluessel' => array('K_KEIN_FELD' => 'EINST.SICH_TTS_KEIN_FELD'),
     );
 }
 
