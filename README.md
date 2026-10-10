@@ -5,12 +5,33 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.39 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.40 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.40
+
+Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
+verlinkt die Projektdatei; die Baustein-Liste ist die dort in Loxone Config gebaute.
+
+* Unter der Baustein-Liste (Schritt 3) steht das Bild der Seite „Bewässerung“ aus dem
+  [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt); das Bild liegt im Plugin,
+  nachgeladen wird nichts. Config kürzt lange Bausteinnamen, die vollen Namen stehen in der Tabelle.
+* **Baustein-Liste neu (13 Zeilen):** eine Zeile = ein Baustein, nur die Hauptvariante, so wie im
+  Musterprojekt gebaut und verbunden. **Berichtigt:** Die Liste nannte als Zähleingang den Ausgang
+  „Durchlauf fertig“ des Bewässerungsbausteins – den gibt es in Loxone nicht. Jetzt zählt eine
+  Flankenerkennung die fallende Flanke der Pumpe (Ausgang P) in einen Aufwärtszähler; ein Impuls zum
+  Fensterbeginn setzt ihn zurück. Die Eingänge sind jetzt `Bewässerung heute Nacht gießen`,
+  `Bewässerung Durchläufe heute Nacht` und `Bewässerung Anlage deckt den Bedarf`; Verdunstung und
+  die eigene Zeile für den virtuellen HTTP-Eingang stehen nicht mehr in der Liste (die Vorlage legt
+  alles weiter an). Unter der Tabelle drei neue Hinweise: kein Ausgang „Durchlauf fertig“, den
+  Eingang Off über „+“ einblenden, die Uhrzeit des Impulses ist der Beginn des Nachtfensters.
+* Reiter Test: Die Prüfung „Heißen die Bausteine in der Liste so, wie die Importvorlage sie
+  anlegt?“ vergleicht jetzt die drei Eingänge der neuen Liste.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 0.9.39
 
@@ -714,6 +735,10 @@ Wasser aufdrehen kann, wäre eine Angriffsfläche ohne Gegenwert — geschaltet
 wird vom Bewässerungsbaustein im Miniserver. Daran ändert auch
 „GARDENA-Ventile direkt“ nichts: dort schaltet der Dienst selbst, über die
 Schnittstelle des Plugins GardenaSmartSystem; der Endpunkt bleibt lesend.
+
+Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
+der Seite „Bewässerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 ## Neu in 0.9.23 — zwei Punkte aus einer Messung an der Anlage
 

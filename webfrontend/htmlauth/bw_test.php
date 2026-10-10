@@ -1273,8 +1273,10 @@ function bw_pruefungen()
     /* O12 (Durchgang 30.09.2026): verglichen wird die Liste, die der
      * Reiter zeigt (bw_baustein_liste()), mit der Vorlage, die der Knopf
      * erzeugt (bw_vorlage()) - nicht zwei Sprachschluessel miteinander.
-     * Zeile 0 gegen den Titel des Eingangs, 1 bis 4 gegen die Titel der
-     * Befehle. */
+     * Welle Bild 6 (0.9.40): die Liste des Musterprojekts hat keine Zeile 0
+     * mehr, Zeile 4 ist der Bewaesserungsbaustein. Die Zeilen 1 bis 3 gegen
+     * die Titel der Befehle, und der Titel des Eingangs muss in ihrem Typ
+     * stehen ("Vorlage ..."). */
     list($bw_vn, $bw_vx) = bw_vorlage();
     $bw_dek = function ($s) { return html_entity_decode($s, ENT_QUOTES | ENT_XML1, 'UTF-8'); };
     preg_match_all('/<VirtualInHttpCmd Title="([^"]*)"/', $bw_vx, $bw_vt);
@@ -1284,10 +1286,10 @@ function bw_pruefungen()
     $bw_paare = array();
     $bw_un = array();
     foreach (bw_baustein_liste($cfg, bw_token()) as $bw_bz) {
-        if ($bw_bz[0] > 4) { continue; }
+        if ($bw_bz[0] < 1 || $bw_bz[0] > 3) { continue; }
         $bw_paare[] = $bw_bz[0];
-        $bw_ok = $bw_bz[0] === 0 ? ($bw_bz[2] === $bw_kopf)
-                                 : in_array($bw_bz[2], $bw_titel, true);
+        $bw_ok = in_array($bw_bz[2], $bw_titel, true)
+                 && $bw_kopf !== '' && strpos($bw_bz[1], bw_e($bw_kopf)) !== false;
         if (!$bw_ok) { $bw_un[] = '#' . $bw_bz[0]; }
     }
     $zeilen[] = bw_pruefzeile($bw_un ? 0 : 1, bw_t('TEST.F_NAMEN'),

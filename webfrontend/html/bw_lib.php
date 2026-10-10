@@ -1919,39 +1919,39 @@ function bw_host()
  * X-10 (0.9.39): die Spalte Eingaenge in der Schreibweise von
  * Werkzeuge/leitungen_setzen.py - "#N" (erster Eingang), "I1 = #N, I2 = #M",
  * Anschlussnamen wie in Loxone Config ("AI1 = #7", "Off = #9") statt Pfeil.
+ *
+ * Welle Bild 6 (0.9.40): ersetzt durch die Liste des LoxBerry-Plugins Musterprojekts
+ * (13 Zeilen, keine Zeile 0 mehr). Der Reiter Test vergleicht die Zeilen 1 bis 3.
  */
 function bw_baustein_liste($cfg, $token)
 {
-    $p = bw_paths();
+    /* Welle Bild 6 (0.9.40, Entscheidung A): die Liste ist die im LoxBerry-Plugins
+     * Musterprojekt in Loxone Config gebaute und mit leitungen_setzen.py verbundene
+     * (Musterprojekt/baustein_listen.txt, Abschnitt Bewaesserung) - eine Zeile = ein
+     * Baustein, nur die Hauptvariante. Namen 1 bis 3 aus BW_TITEL, der Vorlagentitel im
+     * Typ aus ALLG.TITEL - beides dieselbe Quelle wie bw_vorlage(). Die Uebrigen Namen in
+     * beiden Sprachen wie im Musterprojekt. $cfg und $token bleiben in der Unterschrift
+     * (Aufrufer index.php und bw_test.php). Den Ausgang 'Durchlauf fertig' hat der
+     * Bewaesserungsbaustein nicht: #7 zaehlt die fallende Flanke der Pumpe (Ausgang P). */
     $f = bw_status_felder();
-    $von = (isset($cfg['fenster_von'])
-            && preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', (string) $cfg['fenster_von']))
-        ? (string) $cfg['fenster_von'] : '22:00';
-    $adresse = 'http://' . bw_host() . '/plugins/' . $p['plugin']
-             . '/index.php?token=' . $token . '&aktion=status';
-    $mono = function ($s) { return '<span class="sm-mono">' . bw_e($s) . '</span>'; };
+    $vt = bw_e(bw_t('ALLG.TITEL'));
     return array(
-        array(0,  bw_t('BAUSTEIN.T_VHTTP'), bw_t('ALLG.TITEL'),
-              sprintf(bw_t('BAUSTEIN.P00'), $mono($adresse), 300), '&mdash;'),
-        array(1,  bw_t('BAUSTEIN.T_VE'), bw_t($f['GIESSEN'][2]),
-              sprintf(bw_t('BAUSTEIN.P01'), $mono(bw_check('GIESSEN'))), '&mdash;'),
-        array(2,  bw_t('BAUSTEIN.T_VE'), bw_t($f['DURCHLAEUFE'][2]),
-              sprintf(bw_t('BAUSTEIN.P02'), $mono(bw_check('DURCHLAEUFE'))), '&mdash;'),
-        array(3,  bw_t('BAUSTEIN.T_VE'), bw_t($f['ET0'][2]),
-              sprintf(bw_t('BAUSTEIN.P03'), $mono(bw_check('ET0'))), '&mdash;'),
-        array(4,  bw_t('BAUSTEIN.T_VE'), bw_t($f['REICHT'][2]),
-              sprintf(bw_t('BAUSTEIN.P04'), $mono(bw_check('REICHT'))), '&mdash;'),
-        array(5,  bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N05'), bw_t('BAUSTEIN.P05'), '#1'),
-        array(6,  bw_t('BAUSTEIN.T_NICHT'),   bw_t('BAUSTEIN.N06'), '',                   '#5'),
-        array(7,  bw_t('BAUSTEIN.T_ZAEHLER'), bw_t('BAUSTEIN.N07'),
-              sprintf(bw_t('BAUSTEIN.P07'), bw_e($von)), 'I = ' . bw_t('BAUSTEIN.E_DURCHLAUF')),
-        array(8,  bw_t('BAUSTEIN.T_VERGL'),   bw_t('BAUSTEIN.N08'),
-              sprintf(bw_t('BAUSTEIN.P08'), bw_e(bw_t($f['DURCHLAEUFE'][2]))),
-              'AI1 = #7, AI2 = #2'),
-        array(9,  bw_t('BAUSTEIN.T_ODER'),    bw_t('BAUSTEIN.N09'), '',                   'I1 = #6, I2 = #8'),
-        array(10, bw_t('BAUSTEIN.T_BEW'),     bw_t('BAUSTEIN.N10'), bw_t('BAUSTEIN.P10'), 'Off = #9'),
-        array(11, bw_t('BAUSTEIN.T_SWS'),     bw_t('BAUSTEIN.N11'), bw_t('BAUSTEIN.P11'), '#4'),
-        array(12, bw_t('BAUSTEIN.T_BENACHR'), bw_t('BAUSTEIN.N12'), bw_t('BAUSTEIN.P12'), '#11'),
+        array(1,  sprintf(bw_t('BAUSTEIN.B1_TYP'), $vt), bw_t($f['GIESSEN'][2]),
+              bw_t('BAUSTEIN.B1_PARAM'), bw_t('BAUSTEIN.B1_VERB')),
+        array(2,  sprintf(bw_t('BAUSTEIN.B2_TYP'), $vt), bw_t($f['DURCHLAEUFE'][2]),
+              bw_t('BAUSTEIN.B2_PARAM'), bw_t('BAUSTEIN.B2_VERB')),
+        array(3,  sprintf(bw_t('BAUSTEIN.B3_TYP'), $vt), bw_t($f['REICHT'][2]),
+              bw_t('BAUSTEIN.B3_PARAM'), bw_t('BAUSTEIN.B3_VERB')),
+        array(4,  bw_t('BAUSTEIN.B4_TYP'),  bw_t('BAUSTEIN.B4_NAME'),  bw_t('BAUSTEIN.B4_PARAM'),  bw_t('BAUSTEIN.B4_VERB')),
+        array(5,  bw_t('BAUSTEIN.B5_TYP'),  bw_t('BAUSTEIN.B5_NAME'),  bw_t('BAUSTEIN.B5_PARAM'),  bw_t('BAUSTEIN.B5_VERB')),
+        array(6,  bw_t('BAUSTEIN.B6_TYP'),  bw_t('BAUSTEIN.B6_NAME'),  bw_t('BAUSTEIN.B6_PARAM'),  bw_t('BAUSTEIN.B6_VERB')),
+        array(7,  bw_t('BAUSTEIN.B7_TYP'),  bw_t('BAUSTEIN.B7_NAME'),  bw_t('BAUSTEIN.B7_PARAM'),  bw_t('BAUSTEIN.B7_VERB')),
+        array(8,  bw_t('BAUSTEIN.B8_TYP'),  bw_t('BAUSTEIN.B8_NAME'),  bw_t('BAUSTEIN.B8_PARAM'),  bw_t('BAUSTEIN.B8_VERB')),
+        array(9,  bw_t('BAUSTEIN.B9_TYP'),  bw_t('BAUSTEIN.B9_NAME'),  bw_t('BAUSTEIN.B9_PARAM'),  bw_t('BAUSTEIN.B9_VERB')),
+        array(10, bw_t('BAUSTEIN.B10_TYP'), bw_t('BAUSTEIN.B10_NAME'), bw_t('BAUSTEIN.B10_PARAM'), bw_t('BAUSTEIN.B10_VERB')),
+        array(11, bw_t('BAUSTEIN.B11_TYP'), bw_t('BAUSTEIN.B11_NAME'), bw_t('BAUSTEIN.B11_PARAM'), bw_t('BAUSTEIN.B11_VERB')),
+        array(12, bw_t('BAUSTEIN.B12_TYP'), bw_t('BAUSTEIN.B12_NAME'), bw_t('BAUSTEIN.B12_PARAM'), bw_t('BAUSTEIN.B12_VERB')),
+        array(13, bw_t('BAUSTEIN.B13_TYP'), bw_t('BAUSTEIN.B13_NAME'), bw_t('BAUSTEIN.B13_PARAM'), bw_t('BAUSTEIN.B13_VERB')),
     );
 }
 

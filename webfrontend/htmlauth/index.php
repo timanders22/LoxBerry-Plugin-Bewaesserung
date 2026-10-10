@@ -1322,6 +1322,10 @@ if ($bw_rahmen) {
  * Beanstandung - eigene Zutat dieser Linie. */
 .sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet, .sm-wrap textarea.sm-beanstandet {
     border: 2px solid #c62828 !important; background-color: #fff5f5; }
+/* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 </style>
 
 <div class="sm-wrap">
@@ -2373,8 +2377,8 @@ $bw_ret_zone = $bw_rt['zone'];
 <?php
 /* O12 (Durchgang 30.09.2026): die Liste kommt aus bw_baustein_liste()
  * (bw_lib.php) - dieselbe, die der Reiter Test mit der erzeugten Vorlage
- * vergleicht. Namen 1 bis 4 sind die Titel der Vorlage (BW_TITEL), Zeile 0
- * ist der virtuelle HTTP-Eingang selbst, P07 nennt fenster_von. */
+ * vergleicht. Welle Bild 6 (0.9.40): die Liste des Musterprojekts, 13 Zeilen;
+ * Namen 1 bis 3 sind die Titel der Vorlage (BW_TITEL). */
 foreach (bw_baustein_liste($bw_cfg, $bw_token) as $bw_z2) { ?>
 <tr><td><?= (int) $bw_z2[0] ?></td><td><?= $bw_z2[1] ?></td>
     <td class="sm-mono"><?= bw_e($bw_z2[2]) ?></td>
@@ -2382,8 +2386,16 @@ foreach (bw_baustein_liste($bw_cfg, $bw_token) as $bw_z2) { ?>
     <td class="sm-mono"><?= $bw_z2[4] ?></td></tr>
 <?php } ?>
 </table>
-<div class="sm-hinweis"><?= bw_t('LOX.S3_ERLAEUTERUNG') ?></div>
+<div class="sm-hinweis"><?= bw_t('LOX.S3_ERLAEUTERUNG') ?><br>
+<?= bw_t('BAUSTEIN.H_DURCHLAUF') ?><br>
+<?= bw_t('BAUSTEIN.H_OFF') ?><br>
+<?= bw_t('BAUSTEIN.H_IMPULS') ?></div>
 <p class="sm-hilfe"><?= bw_t('LOX.S3_ANSAGE') ?></p>
+<figure class="sm-bild">
+<img src="einbindung_loxone.png" alt="<?= bw_e(bw_t('LOX.BILD_ALT')) ?>" loading="lazy">
+<figcaption><?= bw_e(bw_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
+</figure>
+<p class="sm-hilfe"><?= bw_t('LOX.MUSTERPROJEKT') ?></p>
 </div>
 
 <div class="sm-step">
