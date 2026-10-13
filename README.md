@@ -5,12 +5,25 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.40 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.41 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.41
+
+Reiter „Einbindung in Loxone“: Vollausstattung aus dem LoxBerry-Plugins Musterprojekt mit zwei Bildern
+und Schritt-für-Schritt-Anleitung – „Steuern, Nachtplan und Meldungen“ (46 Zeilen) und „Werte je
+Zone“ (18 Zeilen) statt einer Liste mit 13 Zeilen –, dazu die neuen Knöpfe „Zonenvorlage erzeugen“
+(mit Zonenauswahl) und „Rückmeldevorlage erzeugen“.
+
+* **Berichtigt:** Bis 0.9.40 stand hier im Abschnitt zu 0.9.34, die Zahl der Durchläufe gehöre an
+  einen Eingang des Bewässerungsbausteins. Den gibt es nicht – MaxP ist ein Regenparameter (in Config
+  „MaxR – größte Niederschlagsmenge l/m²“). Ein Start ist ein Durchlauf aller Zonen; die Seite
+  „Bewässerung“ startet bis zur geplanten Zahl neu. Die Ventilzeiten Tv1/Tv2 kommen aus dem Plugin.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 0.9.40
 
@@ -216,7 +229,9 @@ SUBACK-Auswertung zusätzlich mit echtem `paho-mqtt` 1.6.1 unter Windows.
 Nicht am Gerät, nicht an mosquitto.
 
 Wer die Themen wie vorgesehen am Bewässerungsbaustein angeschlossen hat
-(`durchlaeufe` an `MaxP`, `<zone>/sekunden` an `Tv1` … `Tv8`): nach einem
+(`<zone>/sekunden` an `Tv1` … `Tv8`; eine Zahl der Durchläufe nimmt der Baustein
+nicht – ein Start ist ein Durchlauf aller Zonen, die Seite „Bewässerung“ startet
+bis zur geplanten Zahl neu, Nr. 44–46): nach einem
 Neustart des Miniservers tragen diese Eingänge bis zum nächsten Rechengang des
 Dienstes, was Loxone nach dem Neustart für sie hält (am Gerät nicht gemessen).
 Ein Neustart in den zehn Minuten vor dem Gießbeginn kann diese Nacht also
@@ -736,9 +751,10 @@ wird vom Bewässerungsbaustein im Miniserver. Daran ändert auch
 „GARDENA-Ventile direkt“ nichts: dort schaltet der Dienst selbst, über die
 Schnittstelle des Plugins GardenaSmartSystem; der Endpunkt bleibt lesend.
 
-Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
-der Seite „Bewässerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
-einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
+Die Bausteine der beiden Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden
+auf den Seiten „Bewässerung“ und „Bewässerung Zonen“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen; die Zonen- und die
+Rückmeldevorlage erzeugt das Plugin selbst (Reiter *Einbindung in Loxone*, Schritt 1).
 
 ## Neu in 0.9.23 — zwei Punkte aus einer Messung an der Anlage
 

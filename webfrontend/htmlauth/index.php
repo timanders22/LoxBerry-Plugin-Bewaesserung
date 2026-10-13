@@ -172,6 +172,36 @@ if ($bw_post && isset($_POST['vorlage_laden'])) {
     exit;
 }
 
+/* ---------------- Zonen- und Rueckmeldevorlage ----------------
+ * Welle Bild 11 VOLL (0.9.41, Entscheidungen vom 12.10.2026): zwei neue
+ * Vorlagen fuer die Vollausstattung des Musterprojekts (bw_zonen_vorlage(),
+ * bw_rueckmelde_vorlage()). Beide lesen nur und schalten nichts; eine
+ * unbekannte Zone oder gar keine liefert keine Datei, sondern eine Meldung.
+ * Die Zone kommt nur als Zeichenkette an (ein Feld zone[] gilt als leer). */
+if ($bw_post && isset($_POST['zonenvorlage_laden'])) {
+    $bw_zwahl = (isset($_POST['zone']) && is_string($_POST['zone'])) ? $_POST['zone'] : '';
+    $bw_zdatei = bw_zonen_vorlage($bw_zwahl);
+    if (is_array($bw_zdatei)) {
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $bw_zdatei[0] . '"');
+        echo $bw_zdatei[1];
+        exit;
+    }
+    $bw_fehler[] = bw_t('LOX.FEHLER_ZONE');
+    $bw_tab = 'tab-loxone';
+}
+if ($bw_post && isset($_POST['rueckmeldung_laden'])) {
+    $bw_zdatei = bw_rueckmelde_vorlage();
+    if (is_array($bw_zdatei)) {
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $bw_zdatei[0] . '"');
+        echo $bw_zdatei[1];
+        exit;
+    }
+    $bw_fehler[] = bw_t('LOX.KEINE_ZONE');
+    $bw_tab = 'tab-loxone';
+}
+
 /* ---------------- Einstellungen ---------------- */
 if ($bw_post && isset($_POST['speichern'])) {
     $bw_cfg = bw_config();
@@ -2360,6 +2390,32 @@ $bw_ret_zone = $bw_rt['zone'];
          zweimal importiert heisst doppelte Objekte (Regeln/04). Bis 0.9.21
          stand er in keiner der beiden Sprachdateien. */ ?>
 <p class="sm-hilfe"><?= bw_t('LOX.IMPORT_HINWEIS') ?></p>
+<?php /* Welle Bild 11 VOLL (0.9.41): Vorlage je Zone (mit Auswahl) und
+         Rueckmeldevorlage - nur, wenn es Zonen gibt. Grau wie der Knopf
+         darueber (technische Auskunft, Regeln/04). */
+$bw_lz = bw_zonen(); ?>
+<?php if ($bw_lz) { ?>
+<p class="sm-hilfe"><?= bw_t('LOX.ERKLAERUNG_ZONE') ?></p>
+<form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <label for="bw_vorlage_zone"><?= bw_e(bw_t('LOX.L_ZONE')) ?></label>
+  <select data-role="none" name="zone" id="bw_vorlage_zone">
+  <?php foreach ($bw_lz as $bw_lzz) { if (!is_array($bw_lzz) || !isset($bw_lzz['schluessel'])) { continue; } ?>
+    <option value="<?= bw_e($bw_lzz['schluessel']) ?>"><?= bw_e((isset($bw_lzz['name']) ? $bw_lzz['name'] : '') . ' (' . $bw_lzz['schluessel'] . ')') ?></option>
+  <?php } ?>
+  </select>
+  <button data-role="none" class="sm-b sm-b-technik" name="zonenvorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_ZONENVORLAGE')) ?></button>
+</form>
+<p class="sm-hilfe"><?= bw_t('LOX.ERKLAERUNG_RM') ?></p>
+<form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <button data-role="none" class="sm-b sm-b-technik" name="rueckmeldung_laden" value="1"><?= bw_e(bw_t('LOX.K_RUECKMELDUNG')) ?></button>
+</form>
+<?php } else { ?>
+<p class="sm-hilfe"><?= bw_t('LOX.KEINE_ZONE') ?></p>
+<?php } ?>
 </div>
 
 <div class="sm-step">
@@ -2371,31 +2427,46 @@ $bw_ret_zone = $bw_rt['zone'];
 <div class="sm-step">
 <h3><?= bw_e(bw_t('LOX.S3_TITEL')) ?></h3>
 <p class="sm-hilfe"><?= bw_t('LOX.S3_TEXT') ?></p>
+<?php
+/* O12 (Durchgang 30.09.2026): die Listen kommen aus bw_baustein_liste()
+ * (bw_lib.php) - die Seite 1 vergleicht der Reiter Test mit der erzeugten
+ * Vorlage. Welle Bild 6 (0.9.40): die Liste des Musterprojekts.
+ * Welle Bild 11 VOLL (0.9.41): zwei Seiten, je Ueberschrift, Kasten "So
+ * uebernehmen Sie diese Seite", Tabelle, Hinweise, Bild und Link
+ * (bw_baustein_seite()); jeder Abschnitt immer sichtbar. */
+foreach (array(1, 2) as $bw_ls) {
+    $bw_lk = bw_baustein_seite($bw_ls); ?>
+<h3><?= bw_e($bw_lk['titel']) ?></h3>
+<div class="sm-hinweis"><b><?= bw_e(bw_t('BAUSTEIN.SO_TITEL')) ?></b>
+<ol>
+<?php foreach ($bw_lk['schritte'] as $bw_lt) { ?>
+<li><?= $bw_lt ?></li>
+<?php } ?>
+</ol>
+</div>
 <table class="sm-tabelle">
 <tr><th>#</th><th><?= bw_e(bw_t('LOX.T_BAUSTEIN')) ?></th><th><?= bw_e(bw_t('LOX.T_NAMENSVORSCHLAG')) ?></th>
     <th><?= bw_e(bw_t('LOX.T_PARAMETER')) ?></th><th><?= bw_e(bw_t('LOX.T_EINGAENGE')) ?></th></tr>
-<?php
-/* O12 (Durchgang 30.09.2026): die Liste kommt aus bw_baustein_liste()
- * (bw_lib.php) - dieselbe, die der Reiter Test mit der erzeugten Vorlage
- * vergleicht. Welle Bild 6 (0.9.40): die Liste des Musterprojekts, 13 Zeilen;
- * Namen 1 bis 3 sind die Titel der Vorlage (BW_TITEL). */
-foreach (bw_baustein_liste($bw_cfg, $bw_token) as $bw_z2) { ?>
+<?php foreach (bw_baustein_liste($bw_cfg, $bw_token, $bw_ls) as $bw_z2) { ?>
 <tr><td><?= (int) $bw_z2[0] ?></td><td><?= $bw_z2[1] ?></td>
     <td class="sm-mono"><?= bw_e($bw_z2[2]) ?></td>
     <td><?= $bw_z2[3] !== '' ? $bw_z2[3] : '&mdash;' ?></td>
     <td class="sm-mono"><?= $bw_z2[4] ?></td></tr>
 <?php } ?>
 </table>
-<div class="sm-hinweis"><?= bw_t('LOX.S3_ERLAEUTERUNG') ?><br>
-<?= bw_t('BAUSTEIN.H_DURCHLAUF') ?><br>
-<?= bw_t('BAUSTEIN.H_OFF') ?><br>
-<?= bw_t('BAUSTEIN.H_IMPULS') ?></div>
-<p class="sm-hilfe"><?= bw_t('LOX.S3_ANSAGE') ?></p>
+<p class="sm-hilfe"><b><?= bw_e(bw_t('BAUSTEIN.H_TITEL')) ?></b></p>
+<ul class="sm-hilfe">
+<?php foreach ($bw_lk['hinweise'] as $bw_lt) { ?>
+<li><?= $bw_lt ?></li>
+<?php } ?>
+</ul>
 <figure class="sm-bild">
-<img src="einbindung_loxone.png" alt="<?= bw_e(bw_t('LOX.BILD_ALT')) ?>" loading="lazy">
-<figcaption><?= bw_e(bw_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
+<img src="<?= bw_e($bw_lk['bild']) ?>" alt="<?= bw_e(bw_t('LOX.BILD_ALT')) ?>" loading="lazy">
+<figcaption><?= bw_e(sprintf(bw_t('LOX.BILD_UNTERSCHRIFT'), $bw_lk['seite'])) ?></figcaption>
 </figure>
 <p class="sm-hilfe"><?= bw_t('LOX.MUSTERPROJEKT') ?></p>
+<?php } ?>
+<p class="sm-hilfe"><?= bw_t('LOX.S3_ANSAGE') ?></p>
 </div>
 
 <div class="sm-step">

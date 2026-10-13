@@ -1023,8 +1023,12 @@ function bw_zonenzeile($schluessel)
                               ?: 'Die Zone liess sich nicht rechnen - Einzelheiten im '
                                . 'Reiter Logdateien.');
     }
-    // SEKUNDEN und DURCHLAEUFE sind neu in 0.9.7: sie gehoeren auf Tv1 bis
-    // Tv8 und MaxP des Bewaesserungsbausteins. GEGOSSEN meldet zurueck, was
+    // SEKUNDEN und DURCHLAEUFE sind neu in 0.9.7. SEKUNDEN gehoert auf Tv1 bis
+    // Tv8 des Bewaesserungsbausteins (unter "Erweiterte Parameter", als Eingang
+    // eingeblendet). Einen Eingang fuer die Zahl der Durchlaeufe hat der Baustein
+    // nicht - MaxP ist ein Regenparameter (Welle Bild 11 VOLL, in Config
+    // abgelesen): ein Start ist ein Durchlauf aller Zonen, die Seite
+    // "Bewaesserung" startet bis zur geplanten Zahl neu. GEGOSSEN meldet zurueck, was
     // das Plugin fuer diese Zone verbucht hat - damit laesst sich die eigene
     // Rueckmeldung gegenpruefen, ohne in Dateien zu sehen.
     $a2 = bw_abbild();
@@ -1922,36 +1926,101 @@ function bw_host()
  *
  * Welle Bild 6 (0.9.40): ersetzt durch die Liste des LoxBerry-Plugins Musterprojekts
  * (13 Zeilen, keine Zeile 0 mehr). Der Reiter Test vergleicht die Zeilen 1 bis 3.
+ *
+ * Welle Bild 11 VOLL (0.9.41): Vollausstattung, zwei Seiten ($seite 1: 46 Zeilen,
+ * $seite 2: 18 Zeilen); Schritte, Hinweise und Bild je Seite in bw_baustein_seite().
  */
-function bw_baustein_liste($cfg, $token)
+function bw_baustein_liste($cfg, $token, $seite = 1)
 {
     /* Welle Bild 6 (0.9.40, Entscheidung A): die Liste ist die im LoxBerry-Plugins
      * Musterprojekt in Loxone Config gebaute und mit leitungen_setzen.py verbundene
-     * (Musterprojekt/baustein_listen.txt, Abschnitt Bewaesserung) - eine Zeile = ein
-     * Baustein, nur die Hauptvariante. Namen 1 bis 3 aus BW_TITEL, der Vorlagentitel im
-     * Typ aus ALLG.TITEL - beides dieselbe Quelle wie bw_vorlage(). Die Uebrigen Namen in
-     * beiden Sprachen wie im Musterprojekt. $cfg und $token bleiben in der Unterschrift
-     * (Aufrufer index.php und bw_test.php). Den Ausgang 'Durchlauf fertig' hat der
-     * Bewaesserungsbaustein nicht: #7 zaehlt die fallende Flanke der Pumpe (Ausgang P). */
+     * (Musterprojekt/baustein_listen.txt) - eine Zeile = ein Baustein. $cfg und $token
+     * bleiben in der Unterschrift (Aufrufer index.php und bw_test.php).
+     *
+     * Welle Bild 11 VOLL (0.9.41, Hausherr 11.10.2026: Vollausstattung, ein Laie soll das
+     * Maximum leicht uebernehmen koennen): ZWEI Seiten, $seite 1 = Abschnitt "Bewaesserung"
+     * (46 Zeilen), $seite 2 = "Bewaesserung Zonen" (18 Zeilen, Beispielzonen Rasen und Beet wie
+     * im Musterprojekt). Ohne $seite die Seite 1 - der Reiter Test vergleicht deren Zeilen
+     * 1 bis 3 mit der Vorlage. Namen aus den Vorlagen der Linie, nicht abgeschrieben: Zeilen
+     * 1 bis 3 und 14 bis 21 aus BW_TITEL (wie bw_vorlage()), die Zonenwerte aus
+     * bw_zonen_befehl_titel() (wie bw_zonen_vorlage()), die Rueckmeldebefehle aus
+     * BW_ZONE.RM_BEFEHL (wie bw_rueckmelde_vorlage()); die Vorlagentitel im Typ ebenso.
+     * Den Ausgang 'Durchlauf fertig' hat der Bewaesserungsbaustein nicht (#7 zaehlt die
+     * fallende Flanke der Pumpe), und einen Eingang fuer die Zahl der Durchlaeufe auch nicht:
+     * MaxP ist ein Regenparameter; ein Start ist ein Durchlauf aller Zonen, #44 bis #46
+     * starten bis zur geplanten Zahl neu. */
     $f = bw_status_felder();
-    $vt = bw_e(bw_t('ALLG.TITEL'));
+    $t = function ($k) { return bw_t('BAUSTEIN.' . $k); };
+    $s = function ($feld) use ($f) { return bw_t($f[$feld][2]); };
+    $vs = sprintf(bw_t('BAUSTEIN.T_VHTTP'), bw_e(bw_t('ALLG.TITEL')));
+    $vz = array();
+    foreach (array('Rasen', 'Beet') as $name) {
+        $vz[$name] = sprintf(bw_t('BAUSTEIN.T_VHTTP'), bw_e(bw_zonen_vorlage_titel($name)));
+    }
+    $vq = sprintf(bw_t('BAUSTEIN.T_VQ'), bw_e(bw_t('BW_ZONE.RM_TITEL')));
+    if ((int) $seite === 2) {
+        $aus = array();
+        $nr = 0;
+        foreach (array('Rasen' => 'Z9_VERB', 'Beet' => 'Z18_VERB') as $name => $verb) {
+            $i = 0;
+            foreach (array_keys(bw_zonen_felder()) as $feld) {
+                $i++;
+                $aus[] = array(++$nr, $vz[$name], bw_zonen_befehl_titel($name, $feld),
+                               $t('Z' . $i . '_PARAM'), $t('STRICH'));
+            }
+            $aus[] = array(++$nr, $t('T_STATUS'), sprintf(bw_t('BAUSTEIN.Z_STATUS_NAME'), $name),
+                           $t('Z9_PARAM'), $t($verb));
+        }
+        return $aus;
+    }
+    $rm = function ($name) { return sprintf(bw_t('BW_ZONE.RM_BEFEHL'), $name); };
     return array(
-        array(1,  sprintf(bw_t('BAUSTEIN.B1_TYP'), $vt), bw_t($f['GIESSEN'][2]),
-              bw_t('BAUSTEIN.B1_PARAM'), bw_t('BAUSTEIN.B1_VERB')),
-        array(2,  sprintf(bw_t('BAUSTEIN.B2_TYP'), $vt), bw_t($f['DURCHLAEUFE'][2]),
-              bw_t('BAUSTEIN.B2_PARAM'), bw_t('BAUSTEIN.B2_VERB')),
-        array(3,  sprintf(bw_t('BAUSTEIN.B3_TYP'), $vt), bw_t($f['REICHT'][2]),
-              bw_t('BAUSTEIN.B3_PARAM'), bw_t('BAUSTEIN.B3_VERB')),
-        array(4,  bw_t('BAUSTEIN.B4_TYP'),  bw_t('BAUSTEIN.B4_NAME'),  bw_t('BAUSTEIN.B4_PARAM'),  bw_t('BAUSTEIN.B4_VERB')),
-        array(5,  bw_t('BAUSTEIN.B5_TYP'),  bw_t('BAUSTEIN.B5_NAME'),  bw_t('BAUSTEIN.B5_PARAM'),  bw_t('BAUSTEIN.B5_VERB')),
-        array(6,  bw_t('BAUSTEIN.B6_TYP'),  bw_t('BAUSTEIN.B6_NAME'),  bw_t('BAUSTEIN.B6_PARAM'),  bw_t('BAUSTEIN.B6_VERB')),
-        array(7,  bw_t('BAUSTEIN.B7_TYP'),  bw_t('BAUSTEIN.B7_NAME'),  bw_t('BAUSTEIN.B7_PARAM'),  bw_t('BAUSTEIN.B7_VERB')),
-        array(8,  bw_t('BAUSTEIN.B8_TYP'),  bw_t('BAUSTEIN.B8_NAME'),  bw_t('BAUSTEIN.B8_PARAM'),  bw_t('BAUSTEIN.B8_VERB')),
-        array(9,  bw_t('BAUSTEIN.B9_TYP'),  bw_t('BAUSTEIN.B9_NAME'),  bw_t('BAUSTEIN.B9_PARAM'),  bw_t('BAUSTEIN.B9_VERB')),
-        array(10, bw_t('BAUSTEIN.B10_TYP'), bw_t('BAUSTEIN.B10_NAME'), bw_t('BAUSTEIN.B10_PARAM'), bw_t('BAUSTEIN.B10_VERB')),
-        array(11, bw_t('BAUSTEIN.B11_TYP'), bw_t('BAUSTEIN.B11_NAME'), bw_t('BAUSTEIN.B11_PARAM'), bw_t('BAUSTEIN.B11_VERB')),
-        array(12, bw_t('BAUSTEIN.B12_TYP'), bw_t('BAUSTEIN.B12_NAME'), bw_t('BAUSTEIN.B12_PARAM'), bw_t('BAUSTEIN.B12_VERB')),
-        array(13, bw_t('BAUSTEIN.B13_TYP'), bw_t('BAUSTEIN.B13_NAME'), bw_t('BAUSTEIN.B13_PARAM'), bw_t('BAUSTEIN.B13_VERB')),
+        array(1,  $vs, $s('GIESSEN'),     $t('B1_PARAM'),  $t('B1_VERB')),
+        array(2,  $vs, $s('DURCHLAEUFE'), $t('B2_PARAM'),  $t('B2_VERB')),
+        array(3,  $vs, $s('REICHT'),      $t('B3_PARAM'),  $t('B3_VERB')),
+        array(4,  $t('T_BEW'),     $t('B4_NAME'),  $t('B4_PARAM'),  $t('B4_VERB')),
+        array(5,  $t('T_SWS'),     $t('B5_NAME'),  $t('B5_PARAM'),  $t('B5_VERB')),
+        array(6,  $t('T_NICHT'),   $t('B6_NAME'),  $t('B6_PARAM'),  $t('B6_VERB')),
+        array(7,  $t('T_FLANKE'),  $t('B7_NAME'),  $t('B7_PARAM'),  $t('B7_VERB')),
+        array(8,  $t('T_IMPULS'),  $t('B8_NAME'),  $t('B8_PARAM'),  $t('B8_VERB')),
+        array(9,  $t('T_ZAEHLER'), $t('B9_NAME'),  $t('B9_PARAM'),  $t('B9_VERB')),
+        array(10, $t('T_GROESSERGLEICH'), $t('B10_NAME'), $t('B10_PARAM'), $t('B10_VERB')),
+        array(11, $t('T_ODER'),    $t('B11_NAME'), $t('B11_PARAM'), $t('B11_VERB')),
+        array(12, $t('T_SWS'),     $t('B12_NAME'), $t('B12_PARAM'), $t('B12_VERB')),
+        array(13, $t('T_BENACH'),  $t('B13_NAME'), $t('B13_PARAM'), $t('B13_VERB')),
+        array(14, $vs, $s('OK'),       $t('B14_PARAM'), $t('STRICH')),
+        array(15, $vs, $s('ALTER'),    $t('B15_PARAM'), $t('STRICH')),
+        array(16, $vs, $s('GESPERRT'), $t('B16_PARAM'), $t('STRICH')),
+        array(17, $vs, $s('NOETIG'),   $t('B17_PARAM'), $t('STRICH')),
+        array(18, $vs, $s('PLANFEST'), $t('B18_PARAM'), $t('STRICH')),
+        array(19, $vs, $s('DECKT'),    $t('B19_PARAM'), $t('STRICH')),
+        array(20, $vs, $s('GEKUERZT'), $t('B20_PARAM'), $t('STRICH')),
+        array(21, $vs, $s('ET0'),      $t('B21_PARAM'), $t('STRICH')),
+        array(22, $t('T_STATUS'),  $t('B22_NAME'), $t('B22_PARAM'), $t('B22_VERB')),
+        array(23, $t('T_STATUS'),  $t('B23_NAME'), $t('B23_PARAM'), $t('B23_VERB')),
+        array(24, $t('T_STATUS'),  $t('B24_NAME'), $t('B24_PARAM'), $t('B24_VERB')),
+        array(25, $t('T_KONST'),   $t('B25_NAME'), $t('B25_PARAM'), $t('STRICH')),
+        array(26, $t('T_AWV'),     $t('B26_NAME'), $t('B26_PARAM'), $t('B26_VERB')),
+        array(27, $t('T_NICHT'),   $t('B27_NAME'), $t('STRICH'),    $t('B27_VERB')),
+        array(28, $t('T_ODER'),    $t('B28_NAME'), $t('STRICH'),    $t('B28_VERB')),
+        array(29, $t('T_EINVERZ'), $t('B29_NAME'), $t('B29_PARAM'), $t('B29_VERB')),
+        array(30, $t('T_BENACH'),  $t('B30_NAME'), $t('B30_PARAM'), $t('B30_VERB')),
+        array(31, $t('T_SWS'),     $t('B31_NAME'), $t('B31_PARAM'), $t('B31_VERB')),
+        array(32, $t('T_SWS'),     $t('B32_NAME'), $t('B32_PARAM'), $t('B32_VERB')),
+        array(33, $t('T_ODER'),    $t('B33_NAME'), $t('STRICH'),    $t('B33_VERB')),
+        array(34, $t('T_BENACH'),  $t('B34_NAME'), $t('B34_PARAM'), $t('B34_VERB')),
+        array(35, $vz['Rasen'], bw_zonen_befehl_titel('Rasen', 'SEKUNDEN'), $t('B35_PARAM'), $t('STRICH')),
+        array(36, $vz['Beet'],  bw_zonen_befehl_titel('Beet', 'SEKUNDEN'),  $t('B36_PARAM'), $t('STRICH')),
+        array(37, $t('T_IMPULS'),  $t('B37_NAME'), $t('B37_PARAM'), $t('STRICH')),
+        array(38, $t('T_FLANKE'),  $t('B38_NAME'), $t('B38_PARAM'), $t('B38_VERB')),
+        array(39, $t('T_ZAEHLER'), $t('B39_NAME'), $t('STRICH'),    $t('B39_VERB')),
+        array(40, $vq, $rm('Rasen'), $t('B40_PARAM'), $t('B40_VERB')),
+        array(41, $t('T_FLANKE'),  $t('B41_NAME'), $t('B41_PARAM'), $t('B41_VERB')),
+        array(42, $t('T_ZAEHLER'), $t('B42_NAME'), $t('STRICH'),    $t('B42_VERB')),
+        array(43, $vq, $rm('Beet'),  $t('B43_PARAM'), $t('B43_VERB')),
+        array(44, $t('T_NICHT'),   $t('B44_NAME'), $t('STRICH'),    $t('B44_VERB')),
+        array(45, $t('T_UND'),     $t('B45_NAME'), $t('B45_PARAM'), $t('B45_VERB')),
+        array(46, $t('T_ODER'),    $t('B46_NAME'), $t('B46_PARAM'), $t('B46_VERB')),
     );
 }
 
@@ -2131,6 +2200,185 @@ function bw_xml_virtual_in_http($kopf, $cmds)
         $o .= '/>' . $crlf;
     }
     $o .= '</VirtualInHttp>' . $crlf;
+    return $o;
+}
+
+/* ==================================================================
+ * Welle Bild 11 VOLL (0.9.41, Entscheidungen vom 12.10.2026): die beiden
+ * Seiten des Reiters "Einbindung in Loxone" und zwei neue Vorlagen.
+ *
+ * - Vorlage je Zone ("Bewaesserung Zone <Name>"): die Zonenwerte lieferte
+ *   der Endpunkt schon (aktion=zone, bw_zonenzeile()), eine Vorlage dafuer
+ *   gab es nicht. Acht Befehle wie Musterprojekt/vorlagen/
+ *   VI_Bewaesserung_Zone_<Name>.xml; OK und BEDARF bleiben frei (OK gleich
+ *   dem Statuswert, BEDARF gleich DEFIZIT).
+ * - Rueckmeldevorlage ("Bewaesserung Rueckmeldung"): je Zone ein Befehl
+ *   "publish <Rueckmeldethema> <v.0>" an den UDP-Eingang des MQTT-Gateways,
+ *   wie Musterprojekt/vorlagen/VQ_Bewaesserung_Rueckmeldung.xml. Den
+ *   Rueckweg (Thema je Zone, giesswerte_einsammeln() im Dienst) gab es schon.
+ * Beide lesen nur (Zonen, Token, MQTT-Gateway) und schalten nichts.
+ * ================================================================== */
+
+/* Ueberschrift, Seitenname im Musterprojekt, Bild, Schritte und Hinweise
+ * einer Seite (1 "Bewaesserung", 2 "Bewaesserung Zonen"). Texte als HTML. */
+function bw_baustein_seite($seite)
+{
+    if ((int) $seite === 2) {
+        return array(
+            'titel' => bw_t('BAUSTEIN.UE_ZONEN'),
+            'seite' => bw_t('BAUSTEIN.SEITE_ZONEN'),
+            'bild'  => 'einbindung_loxone_zonen.png',
+            'schritte' => array(bw_t('BAUSTEIN.B_S1'), bw_t('BAUSTEIN.B_S2'),
+                                bw_t('BAUSTEIN.B_S3'), bw_t('BAUSTEIN.B_S4')),
+            'hinweise' => array(bw_t('BAUSTEIN.B_H1'), bw_t('BAUSTEIN.B_H2')),
+        );
+    }
+    return array(
+        'titel' => bw_t('BAUSTEIN.UE_STEUERN'),
+        'seite' => bw_t('BAUSTEIN.SEITE_STEUERN'),
+        'bild'  => 'einbindung_loxone.png',
+        'schritte' => array(bw_t('BAUSTEIN.A_S1'), bw_t('BAUSTEIN.A_S2'), bw_t('BAUSTEIN.A_S3'),
+                            bw_t('BAUSTEIN.A_S4'), bw_t('BAUSTEIN.A_S5'), bw_t('BAUSTEIN.A_S6'),
+                            bw_t('BAUSTEIN.A_S7'), bw_t('BAUSTEIN.A_S8'), bw_t('BAUSTEIN.A_S9')),
+        'hinweise' => array(bw_t('BAUSTEIN.A_H1'), bw_t('LOX.S3_ERLAEUTERUNG'),
+                            bw_t('BAUSTEIN.H_DURCHLAUF'), bw_t('BAUSTEIN.H_OFF'),
+                            bw_t('BAUSTEIN.H_IMPULS'), bw_t('BAUSTEIN.A_H6'),
+                            bw_t('BAUSTEIN.A_H5'), bw_t('BAUSTEIN.A_H2'),
+                            bw_t('BAUSTEIN.A_H3'), bw_t('BAUSTEIN.A_H4')),
+    );
+}
+
+/* Die Werte der Zonenvorlage in der Reihenfolge des Musterprojekts:
+ * Feld der Zonenzeile => array(Signed, Analog, MinVal, MaxVal, Unit). */
+function bw_zonen_felder()
+{
+    return array(
+        'FUELLSTAND'  => array('false', 'true',  '0', '100',     '<v.0> %'),
+        'DEFIZIT'     => array('false', 'true',  '0', '1000',    '<v.1> mm'),
+        'LITER'       => array('false', 'true',  '0', '1000000', '<v.0> l'),
+        'MINUTEN'     => array('false', 'true',  '0', '1440',    '<v.0> min'),
+        'GEMESSEN'    => array('false', 'false', '0', '1',       '<v.1>'),
+        'DURCHLAEUFE' => array('false', 'true',  '0', '24',      '<v.1>'),
+        'SEKUNDEN'    => array('false', 'true',  '0', '86400',   '<v.0> s'),
+        'GEGOSSEN'    => array('false', 'true',  '0', '1000',    '<v.1> mm'),
+    );
+}
+
+/* Titel eines Befehls der Zonenvorlage, "Bewaesserung <Name> <Wert>" -
+ * EINE Stelle fuer bw_zonen_vorlage() und die Baustein-Listen. */
+function bw_zonen_befehl_titel($name, $feld)
+{
+    return bw_t('BW_ZONE.PRAEFIX') . ' ' . $name . ' ' . bw_t('BW_ZONE.T_' . $feld);
+}
+
+function bw_zonen_vorlage_titel($name)
+{
+    return sprintf(bw_t('BW_ZONE.TITEL'), $name);
+}
+
+/* Ein Zonenname als Teil eines Dateinamens: Umlaute umschrieben, alles
+ * ausser Buchstaben, Ziffern, _ und - wird zu _. */
+function bw_dateiname_teil($s)
+{
+    $s = strtr((string) $s, array("\xc3\xa4" => 'ae', "\xc3\xb6" => 'oe', "\xc3\xbc" => 'ue',
+        "\xc3\x84" => 'Ae', "\xc3\x96" => 'Oe', "\xc3\x9c" => 'Ue', "\xc3\x9f" => 'ss'));
+    return trim((string) preg_replace('/[^A-Za-z0-9_-]+/', '_', $s), '_');
+}
+
+/* Die Vorlage einer Zone. Rueckgabe array(Dateiname, XML) oder null, wenn
+ * es den Schluessel nicht gibt. Adresse und Token wie bw_vorlage(). */
+function bw_zonen_vorlage($schluessel)
+{
+    $z = bw_zone((string) $schluessel);
+    if (!is_array($z) || !isset($z['schluessel']) || (string) $z['schluessel'] === '') {
+        return null;
+    }
+    $s = (string) $z['schluessel'];
+    $name = (isset($z['name']) && trim((string) $z['name']) !== '') ? trim((string) $z['name']) : $s;
+    $p = bw_paths();
+    $cmds = array();
+    foreach (bw_zonen_felder() as $feld => $art) {
+        $cmds[] = array(
+            'title'   => bw_zonen_befehl_titel($name, $feld),
+            'comment' => bw_kommentar_kurz(bw_t('BW_ZONE.K_' . $feld)),
+            'signed'  => $art[0], 'analog' => $art[1],
+            'min'     => $art[2], 'max' => $art[3], 'unit' => $art[4],
+            'check'   => bw_check($feld),
+        );
+    }
+    $teil = bw_dateiname_teil($name);
+    if ($teil === '') { $teil = bw_dateiname_teil($s); }
+    return array('VI_Bewaesserung_Zone_' . $teil . '.xml', bw_xml_virtual_in_http(array(
+        'title'   => bw_zonen_vorlage_titel($name),
+        'address' => 'http://' . bw_host() . '/plugins/' . $p['plugin']
+                   . '/index.php?token=' . bw_token() . '&aktion=zone&zone=' . rawurlencode($s),
+        'polling' => '300',
+        'comment' => bw_kommentar_kurz(sprintf(bw_t('BW_ZONE.KOMMENTAR'), $s)),
+    ), $cmds));
+}
+
+/* Das Rueckmeldethema einer Zone; ist keines eingetragen, der Vorschlag
+ * loxone/bewaesserung/<Schluessel> (wie der Platzhalter im Reiter Zonen) -
+ * der Hinweis am Knopf sagt, dass es dann dort einzutragen ist. */
+function bw_rueckmelde_thema($z)
+{
+    $t = isset($z['giess_thema']) ? trim((string) $z['giess_thema']) : '';
+    return $t !== '' ? $t : 'loxone/bewaesserung/' . (string) $z['schluessel'];
+}
+
+/* Die Rueckmeldevorlage: je Zone ein Befehl. Rueckgabe array(Dateiname,
+ * XML) oder null ohne Zone. Adresse: der UDP-Eingang des MQTT-Gateways auf
+ * diesem LoxBerry (Port aus general.json, sonst 11884 ab Werk). */
+function bw_rueckmelde_vorlage()
+{
+    $cmds = array();
+    foreach (bw_zonen() as $z) {
+        if (!is_array($z) || !isset($z['schluessel']) || (string) $z['schluessel'] === '') { continue; }
+        $s = (string) $z['schluessel'];
+        $name = (isset($z['name']) && trim((string) $z['name']) !== '') ? trim((string) $z['name']) : $s;
+        $cmds[] = array(
+            'title'   => sprintf(bw_t('BW_ZONE.RM_BEFEHL'), $name),
+            'comment' => bw_kommentar_kurz(sprintf(bw_t('BW_ZONE.RM_BEFEHL_KOMMENTAR'), $s)),
+            'on'      => 'publish ' . bw_rueckmelde_thema($z) . ' <v.0>',
+        );
+    }
+    if (!$cmds) { return null; }
+    $h = bw_host();
+    if (substr_count($h, ':') === 1) { $h = substr($h, 0, strpos($h, ':')); }
+    $m = bw_mqtt_zustand();
+    $port = !empty($m['udpport']) ? (int) $m['udpport'] : 11884;
+    return array('VQ_Bewaesserung_Rueckmeldung.xml', bw_xml_virtual_out(array(
+        'title'   => bw_t('BW_ZONE.RM_TITEL'),
+        'comment' => bw_t('BW_ZONE.RM_KOMMENTAR'),
+        'address' => '/dev/udp/' . $h . '/' . $port,
+    ), $cmds));
+}
+
+/* Virtueller Ausgang in der Form der Musterprojekt-Vorlagen (Attribute in
+ * dieser Reihenfolge, CRLF wie bw_xml_virtual_in_http()). Alle Befehle
+ * analog, gesendet wird nur CmdOn. */
+function bw_xml_virtual_out($kopf, $cmds)
+{
+    $crlf = "\r\n";
+    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualOut HintText="" ';
+    $o .= 'Title="' . bw_x($kopf['title']) . '" ';
+    $o .= 'Comment="' . bw_x(isset($kopf['comment']) ? $kopf['comment'] : '') . '" ';
+    $o .= 'Address="' . bw_x(isset($kopf['address']) ? $kopf['address'] : '') . '" ';
+    $o .= 'CmdInit="" CloseAfterSend="true" CmdSep=""';
+    $o .= '>' . $crlf;
+    $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+    foreach ($cmds as $c) {
+        $o .= "\t" . '<VirtualOutCmd ';
+        $o .= 'Title="' . bw_x($c['title']) . '" ';
+        $o .= 'Comment="' . bw_x(isset($c['comment']) ? $c['comment'] : '') . '" ';
+        $o .= 'CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= 'CmdOn="' . bw_x(isset($c['on']) ? $c['on'] : '') . '" ';
+        $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
+        $o .= 'Analog="true" Repeat="0" RepeatRate="0" HintText=""';
+        $o .= '/>' . $crlf;
+    }
+    $o .= '</VirtualOut>' . $crlf;
     return $o;
 }
 
