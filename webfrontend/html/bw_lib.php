@@ -884,19 +884,22 @@ function bw_status_felder()
     // 'Einfahrtstoroeffner', und niemand weiss ohne Nachschlagen, was
     // 'DECKT' bedeutet. Das Suchmuster bleibt technisch, der Name wird
     // lesbar - beides ist unabhaengig voneinander.
+    // 0.9.42 (Regeln/07 Abschnitt 4): der Name steht hier selbst und FEST
+    // deutsch - Titel einer Loxone-Vorlage gehen nie ueber die Sprachdatei
+    // (bis 0.9.41 aus dem Abschnitt BW_TITEL, unter Englisch uebersetzt).
     return array(
-        'OK'           => array('',   'BW_FELD.OK',          'BW_TITEL.OK'),
-        'ET0'          => array('mm', 'BW_FELD.ET0',         'BW_TITEL.ET0'),
-        'GIESSEN'      => array('',   'BW_FELD.GIESSEN',     'BW_TITEL.GIESSEN'),
-        'DURCHLAEUFE'  => array('',   'BW_FELD.DURCHLAEUFE', 'BW_TITEL.DURCHLAEUFE'),
-        'NOETIG'       => array('',   'BW_FELD.NOETIG',      'BW_TITEL.NOETIG'),
-        'REICHT'       => array('',   'BW_FELD.REICHT',      'BW_TITEL.REICHT'),
-        'ALTER'        => array('s',  'BW_FELD.ALTER',       'BW_TITEL.ALTER'),
-        'GESPERRT'     => array('',   'BW_FELD.GESPERRT',    'BW_TITEL.GESPERRT'),
-        'DECKT'        => array('',   'BW_FELD.DECKT',       'BW_TITEL.DECKT'),
-        'PLANFEST'     => array('',   'BW_FELD.PLANFEST',    'BW_TITEL.PLANFEST'),
+        'OK'           => array('',   'BW_FELD.OK',          "Bew\u{e4}sserung Rechnung in Ordnung"),
+        'ET0'          => array('mm', 'BW_FELD.ET0',         "Bew\u{e4}sserung Verdunstung heute"),
+        'GIESSEN'      => array('',   'BW_FELD.GIESSEN',     "Bew\u{e4}sserung heute Nacht gie\u{df}en"),
+        'DURCHLAEUFE'  => array('',   'BW_FELD.DURCHLAEUFE', "Bew\u{e4}sserung Durchl\u{e4}ufe heute Nacht"),
+        'NOETIG'       => array('',   'BW_FELD.NOETIG',      "Bew\u{e4}sserung n\u{f6}tige Durchl\u{e4}ufe"),
+        'REICHT'       => array('',   'BW_FELD.REICHT',      "Bew\u{e4}sserung Anlage deckt den Bedarf"),
+        'ALTER'        => array('s',  'BW_FELD.ALTER',       "Bew\u{e4}sserung Alter der Rechnung"),
+        'GESPERRT'     => array('',   'BW_FELD.GESPERRT',    "Bew\u{e4}sserung gesperrt"),
+        'DECKT'        => array('',   'BW_FELD.DECKT',       "Bew\u{e4}sserung Ventilzeit deckt Bedarf"),
+        'PLANFEST'     => array('',   'BW_FELD.PLANFEST',    "Bew\u{e4}sserung Nachtplan steht fest"),
         /* a1 (Verbesserungsbau 30.09.2026): hinten angehaengt. */
-        'GEKUERZT'     => array('min', 'BW_FELD.GEKUERZT',    'BW_TITEL.GEKUERZT'),
+        'GEKUERZT'     => array('min', 'BW_FELD.GEKUERZT',    "Bew\u{e4}sserung durch Fenster gek\u{fc}rzt"),
     );
 }
 
@@ -1098,7 +1101,7 @@ function bw_vorlage()
          * Massvorlage (bw_vorlage_art()). */
         $art = bw_vorlage_art($feld);
         $cmds[] = array(
-            'title'   => isset($info[2]) ? bw_t($info[2]) : ('BEW_' . $feld),
+            'title'   => isset($info[2]) ? $info[2] : ('BEW_' . $feld),
             'comment' => bw_kommentar_kurz(bw_t('BW_KOMMENTAR.' . $feld)),
             'signed'  => $art[0], 'analog' => $art[1],
             'min'     => $art[2], 'max' => $art[3], 'unit' => $art[4],
@@ -1113,7 +1116,7 @@ function bw_vorlage()
     return array('bewaesserung_status.xml', bw_xml_virtual_in_http(array(
         /* O14: Titel und Kommentar ueber bw_t(); der Kommentar hoechstens
          * 40 Zeichen (O11). */
-        'title'   => bw_t('ALLG.TITEL'),
+        'title'   => bw_vorlage_titel_status(),
         'address' => 'http://' . $host . '/plugins/' . $p['plugin']
                    . '/index.php?token=' . $token . '&aktion=status',
         'polling' => '300',
@@ -1942,22 +1945,23 @@ function bw_baustein_liste($cfg, $token, $seite = 1)
      * (46 Zeilen), $seite 2 = "Bewaesserung Zonen" (18 Zeilen, Beispielzonen Rasen und Beet wie
      * im Musterprojekt). Ohne $seite die Seite 1 - der Reiter Test vergleicht deren Zeilen
      * 1 bis 3 mit der Vorlage. Namen aus den Vorlagen der Linie, nicht abgeschrieben: Zeilen
-     * 1 bis 3 und 14 bis 21 aus BW_TITEL (wie bw_vorlage()), die Zonenwerte aus
+     * 1 bis 3 und 14 bis 21 aus bw_status_felder() (wie bw_vorlage()), die Zonenwerte aus
      * bw_zonen_befehl_titel() (wie bw_zonen_vorlage()), die Rueckmeldebefehle aus
-     * BW_ZONE.RM_BEFEHL (wie bw_rueckmelde_vorlage()); die Vorlagentitel im Typ ebenso.
+     * bw_rueckmelde_befehl_titel() (wie bw_rueckmelde_vorlage()); die Vorlagentitel im Typ
+     * ebenso. 0.9.42: alle diese Namen fest deutsch, auch unter Englisch (Regeln/07 Abschnitt 4).
      * Den Ausgang 'Durchlauf fertig' hat der Bewaesserungsbaustein nicht (#7 zaehlt die
      * fallende Flanke der Pumpe), und einen Eingang fuer die Zahl der Durchlaeufe auch nicht:
      * MaxP ist ein Regenparameter; ein Start ist ein Durchlauf aller Zonen, #44 bis #46
      * starten bis zur geplanten Zahl neu. */
     $f = bw_status_felder();
     $t = function ($k) { return bw_t('BAUSTEIN.' . $k); };
-    $s = function ($feld) use ($f) { return bw_t($f[$feld][2]); };
-    $vs = sprintf(bw_t('BAUSTEIN.T_VHTTP'), bw_e(bw_t('ALLG.TITEL')));
+    $s = function ($feld) use ($f) { return $f[$feld][2]; };
+    $vs = sprintf(bw_t('BAUSTEIN.T_VHTTP'), bw_e(bw_vorlage_titel_status()));
     $vz = array();
     foreach (array('Rasen', 'Beet') as $name) {
         $vz[$name] = sprintf(bw_t('BAUSTEIN.T_VHTTP'), bw_e(bw_zonen_vorlage_titel($name)));
     }
-    $vq = sprintf(bw_t('BAUSTEIN.T_VQ'), bw_e(bw_t('BW_ZONE.RM_TITEL')));
+    $vq = sprintf(bw_t('BAUSTEIN.T_VQ'), bw_e(bw_rueckmelde_titel()));
     if ((int) $seite === 2) {
         $aus = array();
         $nr = 0;
@@ -1973,7 +1977,7 @@ function bw_baustein_liste($cfg, $token, $seite = 1)
         }
         return $aus;
     }
-    $rm = function ($name) { return sprintf(bw_t('BW_ZONE.RM_BEFEHL'), $name); };
+    $rm = function ($name) { return bw_rueckmelde_befehl_titel($name); };
     return array(
         array(1,  $vs, $s('GIESSEN'),     $t('B1_PARAM'),  $t('B1_VERB')),
         array(2,  $vs, $s('DURCHLAEUFE'), $t('B2_PARAM'),  $t('B2_VERB')),
@@ -2264,16 +2268,51 @@ function bw_zonen_felder()
     );
 }
 
+/* 0.9.42 (Entscheidung Hausherr 13.10.2026, Regeln/07 Abschnitt 4): Titel
+ * einer Loxone-Vorlage - Wurzel und Befehle - sind FEST deutsch, in jeder
+ * Sprache gleich und gleich dem Musterprojekt und den Baustein-Listen. Nur
+ * die Kommentare kommen aus der Sprachdatei. Bis 0.9.41 kamen die Titel aus
+ * BW_TITEL und BW_ZONE und waren unter englischer Oberflaeche englisch. */
+function bw_vorlage_titel_status()
+{
+    return "Bew\u{e4}sserung vorausschauend";
+}
+
+function bw_zonen_titelteil($feld)
+{
+    $t = array(
+        'FUELLSTAND' => "F\u{fc}llstand (Proz)",
+        'DEFIZIT' => "Defizit",
+        'LITER' => "Liter",
+        'MINUTEN' => "Minuten",
+        'GEMESSEN' => "Rate gemessen",
+        'DURCHLAEUFE' => "Durchl\u{e4}ufe",
+        'SEKUNDEN' => "Ventilzeit",
+        'GEGOSSEN' => "gegossen",
+    );
+    return isset($t[$feld]) ? $t[$feld] : $feld;
+}
+
+function bw_rueckmelde_titel()
+{
+    return "Bew\u{e4}sserung R\u{fc}ckmeldung";
+}
+
+function bw_rueckmelde_befehl_titel($name)
+{
+    return $name . " R\u{fc}ckmeldung senden";
+}
+
 /* Titel eines Befehls der Zonenvorlage, "Bewaesserung <Name> <Wert>" -
  * EINE Stelle fuer bw_zonen_vorlage() und die Baustein-Listen. */
 function bw_zonen_befehl_titel($name, $feld)
 {
-    return bw_t('BW_ZONE.PRAEFIX') . ' ' . $name . ' ' . bw_t('BW_ZONE.T_' . $feld);
+    return "Bew\u{e4}sserung " . $name . ' ' . bw_zonen_titelteil($feld);
 }
 
 function bw_zonen_vorlage_titel($name)
 {
-    return sprintf(bw_t('BW_ZONE.TITEL'), $name);
+    return "Bew\u{e4}sserung Zone " . $name;
 }
 
 /* Ein Zonenname als Teil eines Dateinamens: Umlaute umschrieben, alles
@@ -2337,7 +2376,7 @@ function bw_rueckmelde_vorlage()
         $s = (string) $z['schluessel'];
         $name = (isset($z['name']) && trim((string) $z['name']) !== '') ? trim((string) $z['name']) : $s;
         $cmds[] = array(
-            'title'   => sprintf(bw_t('BW_ZONE.RM_BEFEHL'), $name),
+            'title'   => bw_rueckmelde_befehl_titel($name),
             'comment' => bw_kommentar_kurz(sprintf(bw_t('BW_ZONE.RM_BEFEHL_KOMMENTAR'), $s)),
             'on'      => 'publish ' . bw_rueckmelde_thema($z) . ' <v.0>',
         );
@@ -2348,7 +2387,7 @@ function bw_rueckmelde_vorlage()
     $m = bw_mqtt_zustand();
     $port = !empty($m['udpport']) ? (int) $m['udpport'] : 11884;
     return array('VQ_Bewaesserung_Rueckmeldung.xml', bw_xml_virtual_out(array(
-        'title'   => bw_t('BW_ZONE.RM_TITEL'),
+        'title'   => bw_rueckmelde_titel(),
         'comment' => bw_t('BW_ZONE.RM_KOMMENTAR'),
         'address' => '/dev/udp/' . $h . '/' . $port,
     ), $cmds));

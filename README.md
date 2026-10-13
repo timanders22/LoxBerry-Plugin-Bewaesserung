@@ -5,12 +5,18 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.41 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.42 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.42
+
+Die Titel aller drei Loxone-Vorlagen (Status, je Zone, Rückmeldung) sind jetzt in jeder Sprache
+deutsch, passend zu Musterprojekt und Baustein-Listen – wer eine Vorlage unter englischer Oberfläche
+importiert hatte, bekommt nach erneutem Import deutsche Namen; die Kommentare bleiben übersetzt.
 
 ## Neu in 0.9.41
 

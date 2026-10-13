@@ -2374,7 +2374,7 @@ $bw_ret_zone = $bw_rt['zone'];
          Liste. Wer abschrieb, baute etwas anderes als das Plugin
          dokumentiert - und wer beides tat, hatte zwei Eingaenge auf
          derselben Adresse. */ ?>
-<tr><td class="sm-mono"><?= bw_e(bw_t($bw_info[2])) ?></td><td class="sm-mono"><?= bw_e(bw_check($bw_feld)) ?></td>
+<tr><td class="sm-mono"><?= bw_e($bw_info[2]) ?></td><td class="sm-mono"><?= bw_e(bw_check($bw_feld)) ?></td>
     <td><?= bw_t($bw_info[1]) ?><?= $bw_info[0] !== '' ? ' [' . bw_e($bw_info[0]) . ']' : '' ?></td></tr>
 <?php } ?>
 </table>
