@@ -2244,7 +2244,7 @@ function bw_baustein_seite($seite)
         'schritte' => array(bw_t('BAUSTEIN.A_S1'), bw_t('BAUSTEIN.A_S2'), bw_t('BAUSTEIN.A_S3'),
                             bw_t('BAUSTEIN.A_S4'), bw_t('BAUSTEIN.A_S5'), bw_t('BAUSTEIN.A_S6'),
                             bw_t('BAUSTEIN.A_S7'), bw_t('BAUSTEIN.A_S8'), bw_t('BAUSTEIN.A_S9')),
-        'hinweise' => array(bw_t('BAUSTEIN.A_H1'), bw_t('LOX.S3_ERLAEUTERUNG'),
+        'hinweise' => array(bw_t('BAUSTEIN.A_H1'), bw_t('BAUSTEIN.A_H7'), bw_t('LOX.S3_ERLAEUTERUNG'),
                             bw_t('BAUSTEIN.H_DURCHLAUF'), bw_t('BAUSTEIN.H_OFF'),
                             bw_t('BAUSTEIN.H_IMPULS'), bw_t('BAUSTEIN.A_H6'),
                             bw_t('BAUSTEIN.A_H5'), bw_t('BAUSTEIN.A_H2'),

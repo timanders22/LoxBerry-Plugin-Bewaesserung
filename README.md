@@ -5,12 +5,18 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.42 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.43 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.43
+
+Einbindung in Loxone: Eingang En der Analogwertvalidierung nicht negieren (Hinweis und Bild); ohne diese Korrektur löste die Ausfallmeldung nie aus. Config legt den Eingang En negiert an – die Konstante 1 kam dann
+als 0 an, und die Validierung #26 der Seite „Bewässerung“ prüfte die Zeit Tmc nicht. Wer die Seite schon gebaut hat: Haken bei ‚En‘ entfernen (Eigenschaftsfenster, Parameter). Das Bild zeigt den Eingang jetzt ohne
+Negation. Plugin-Verhalten unverändert.
 
 ## Neu in 0.9.42
 
