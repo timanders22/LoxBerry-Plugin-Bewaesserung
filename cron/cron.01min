@@ -19,3 +19,8 @@
 mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
 touch "REPLACELBPLOGDIR/cron.err" 2>/dev/null
 "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"
+# Gruppe 2 / MQTT (0.9.44): Waechter der Befehlsbruecke (gemeinsame Stammfassung). Diese Linie hat keinen
+# PHP-Minutentakt, also hier (Bauvorschrift Gruppe 1, Nachtrag 19.10.2026). Er startet die Bruecke nur mit dem
+# Haken "Befehle ueber MQTT annehmen", haelt sie sonst an und sendet <praefix>/status/befehle (nie retained).
+# Aufruf ueber bash (das Skript ist bash, nicht sh); stdout weg, Fehler ins Protokoll wie oben.
+bash "REPLACELBPBINDIR/befehlsbruecke.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"

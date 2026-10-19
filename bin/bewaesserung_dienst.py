@@ -201,6 +201,11 @@ DATEI_PID = os.path.join(DATADIR, "dienst.pid")
 # C1 (Durchgang 30.09.2026): die Sperre des Dienstes selbst.
 DATEI_DIENSTSPERRE = os.path.join(DATADIR, "dienst.lock")
 DATEI_LOG = os.path.join(LOGDIR, "bewaesserung.log")
+# Gruppe 2 / MQTT (0.9.44): die Rueckmeldungen ueber die Befehlsbruecke (schreibt bw_rueckmeldung_annehmen()
+# in webfrontend/html/bw_lib.php; {zonenschluessel: {"wert", "ts"}}) und der Merker, wann ueber den ALTEN Weg
+# (giess_thema) zuletzt etwas kam (fuer den Hinweis im Reiter Test).
+DATEI_RUECKMELDUNG = os.path.join(DATADIR, "rueckmeldung.json")
+DATEI_RM_ALTWEG = os.path.join(DATADIR, "rueckmeldung_altweg.json")
 
 VORGABEN = {
     "breite": 0.0, "laenge": 0.0, "hoehe": 0.0, "wind_hoehe": 2.0,
@@ -278,6 +283,11 @@ VORGABEN = {
     # Anlaesse einzeln ab und stehen ab Werk an - wer die Ausgabe einschaltet, hoert sofort.
     "ansage_ende": 1, "ansage_ventil": 1,
     "tts": None,
+    #
+    # Gruppe 2 / MQTT (0.9.44): der Haken "Befehle ueber MQTT annehmen" der gemeinsamen Befehlsbruecke
+    # (PHP, bin/befehlsbruecke.php). AUS ab Werk. Der Dienst liest ihn nie; er steht hier, damit beide
+    # Vorgabelisten gleich bleiben (Reiter Test, Zeile "Vorgaben").
+    "befehle_mqtt_ein": 0,
 }
 
 _LOG = logging.getLogger("bewaesserung")
@@ -1096,11 +1106,15 @@ RETAINED_ZONE = ()
 # Alle Themen, die dieser Dienst sendet - fuer das Abraeumen und die
 # Deinstallation. Was hier nicht steht, ist kein eigenes Thema und wird nie
 # geloescht (etwa ein fremdes Thema unter demselben Praefix).
+# Gruppe 2 / MQTT (0.9.44): dazu das Lebenszeichen status/ok, status/ts, status/zaehler (lebenszeichen_senden())
+# und je Zone "gemessen" (Becherprobe gemacht). Der Reiter Test haelt die Namenstabelle (bw_mqtt_namen() in
+# bw_lib.php) gegen diese beiden Listen.
 MQTT_GLOBAL = ("ok", "et0", "durchlaeufe", "noetige_durchlaeufe", "reicht",
                "giessen", "alter", "ts", "zaehler", "gesperrt", "sperrgrund",
-               "plan_fest", "deckt", "gekuerzt_min")
+               "plan_fest", "deckt", "gekuerzt_min",
+               "status/ok", "status/ts", "status/zaehler")
 MQTT_ZONE = ("ok", "defizit_mm", "bedarf_mm", "dr_mm", "fuellstand", "liter",
-             "minuten", "sekunden", "durchlaeufe", "gegossen_mm")
+             "minuten", "sekunden", "durchlaeufe", "gegossen_mm", "gemessen")
 # Was frueher zurueckbehalten hinausging und es heute nicht mehr tut: 'ok'
 # und '<zone>/ok' bis 0.9.32, 'sperrgrund' bis 0.9.26, die Planwerte bis
 # 0.9.33. Nur diese gehen im UDP-Rueckfall als leere retain-Nutzlast hinaus
@@ -1658,6 +1672,95 @@ def _lauf_zaehler() -> int:
     return _ZAEHLER
 
 
+# Gruppe 2 / MQTT (0.9.44, Entwurf bw 2.2 a, E1/E2): das Lebenszeichen nach Hausform - <praefix>/status/ok,
+# status/ts und status/zaehler in JEDEM Takt des Dienstes (ab Werk 300 s), nie retained. 'zaehler' (je
+# Vollversand, _lauf_zaehler()) bleibt fuer bestehende Anlagen daneben stehen. Die Ausfallerkennung des
+# Musterprojekts haengt am Zaehler (Analogwertvalidierung, Tmc 5 x Takt); status/ok sagt, ob der Plan gilt.
+_STATUS_ZAEHLER = -1
+
+
+def _status_zaehler() -> int:
+    """Lebenszeichen 0...999, umlaufend, eins weiter je Takt (nie retained)."""
+    global _STATUS_ZAEHLER
+    _STATUS_ZAEHLER = 0 if _STATUS_ZAEHLER >= 999 else _STATUS_ZAEHLER + 1
+    return _STATUS_ZAEHLER
+
+
+def plan_gilt(abbild: dict, cfg: dict, jetzt: float | None = None) -> bool:
+    """Gilt der Plan im Abbild? Dieselbe Frage wie OK am HTTP-Endpunkt (bw_ok_gilt() in
+    webfrontend/html/bw_lib.php): ok = 1 UND ein Zeitstempel, nicht aelter als
+    3 x max(600, takt) Sekunden (Takt auf 60...3600 begrenzt) und hoechstens 300 s in der Zukunft
+    (Uhrsprung). Wer eine der beiden Stellen aendert, aendert beide; der Selbsttest haelt die Faelle
+    fest."""
+    if not isinstance(abbild, dict) or not abbild.get("ok") or not abbild.get("ts"):
+        return False
+    try:
+        takt = int(float(cfg.get("takt") or 300))
+    except (TypeError, ValueError):
+        takt = 300
+    takt = max(60, min(3600, takt))
+    try:
+        alter = (time.time() if jetzt is None else jetzt) - int(abbild.get("ts") or 0)
+    except (TypeError, ValueError):
+        return False
+    return -300 <= alter <= 3 * max(600, takt)
+
+
+def lebenszeichen_senden(cfg: dict | None) -> int:
+    """status/ok, status/ts, status/zaehler hinausgeben - am Ende JEDES Takts, auch nach einem
+    ausgelassenen oder gescheiterten Rechengang. Ohne brauchbare Konfiguration oder bei MQTT aus
+    nichts. Ein Fehler hier haelt die Schleife nie an."""
+    if not cfg or not int(cfg.get("mqtt_ein") or 0):
+        return 0
+    try:
+        a = json_lesen(DATEI_ABBILD)
+        praefix = str(cfg.get("mqtt_topic") or "bewaesserung")
+        return mqtt_senden({"status/ok": 1 if plan_gilt(a, cfg) else 0,
+                            "status/ts": int(time.time()),
+                            "status/zaehler": _status_zaehler()}, praefix)
+    except Exception as f:  # noqa: BLE001
+        _LOG.warning("Lebenszeichen nicht gesendet: %s", f)
+        return 0
+
+
+def lebenszeichen_selbstpruefung() -> list:
+    """Gruppe 2 (0.9.44): Rechenkern von Lebenszeichen und Rueckmeldung - ohne Broker, ohne Dateien.
+    plan_gilt() mit den Grenzfaellen von bw_ok_gilt() (PHP), die Umrechnung der Rueckmeldung (_giess_mm())
+    und der Umlauf des Zaehlers. Rueckgabe [(ok, Text)]."""
+    z: list = []
+    t0 = 1_800_000_000.0
+    for ok_soll, abbild, takt, text in (
+            (True, {"ok": 1, "ts": t0}, 300, "frisch"),
+            (True, {"ok": 1, "ts": t0 - 1790}, 300, "1790 s alt, Grenze 1800 s"),
+            (False, {"ok": 1, "ts": t0 - 1810}, 300, "1810 s alt, Grenze 1800 s"),
+            (False, {"ok": 0, "ts": t0}, 300, "ok = 0"),
+            (False, {"ok": 1}, 300, "ohne Zeitstempel"),
+            (True, {"ok": 1, "ts": t0 + 290}, 300, "290 s in der Zukunft"),
+            (False, {"ok": 1, "ts": t0 + 310}, 300, "310 s in der Zukunft"),
+            (True, {"ok": 1, "ts": t0 - 3590}, 1200, "Takt 1200: 3590 s alt, Grenze 3600 s"),
+            (False, {"ok": 1, "ts": t0 - 3610}, 1200, "Takt 1200: 3610 s alt"),
+            (True, {"ok": 1, "ts": t0 - 10790}, 9999, "Takt 9999 begrenzt auf 3600: Grenze 10800 s"),
+            (True, {"ok": 1, "ts": t0 - 1790}, 10, "Takt 10 begrenzt auf 60: Grenze 1800 s")):
+        ist = plan_gilt(abbild, {"takt": takt}, jetzt=t0)
+        z.append((ist == ok_soll, "plan_gilt %s: %s" % (text, "gilt" if ist else "gilt nicht")))
+    zone = {"giess_art": "durchlaeufe", "rate_mmh": 10.0, "rate_gemessen": 1, "dauer_s": 240}
+    for soll, roh, zz, text in (
+            (1.5, 3.0, zone, "3 Durchlaeufe x 240 s, 10 mm/h, Wirkungsgrad 0,75"),
+            (7.5, 60.0, dict(zone, giess_art="minuten"), "60 Laufminuten, 10 mm/h, Wirkungsgrad 0,75"),
+            (4.2, 4.2, dict(zone, giess_art="mm", rate_gemessen=0), "mm ohne Becherprobe"),
+            (None, 3.0, dict(zone, rate_gemessen=0), "Durchlaeufe ohne Becherprobe: keine Rueckmeldung"),
+            (None, 3.0, dict(zone, rate_mmh=0), "Rate 0: keine Rueckmeldung")):
+        ist = _giess_mm(roh, zz, {"zonendauer_s": 240}, 0.75)
+        z.append((ist == soll, "Rueckmeldung %s: %s mm" % (text, "-" if ist is None else ist)))
+    global _STATUS_ZAEHLER
+    alt = _STATUS_ZAEHLER
+    _STATUS_ZAEHLER = 998
+    folge = [_status_zaehler(), _status_zaehler(), _status_zaehler()]
+    _STATUS_ZAEHLER = alt
+    z.append((folge == [999, 0, 1], "status/zaehler laeuft um: %s" % folge))
+    return z
+
+
 def stoerung_veroeffentlichen(cfg: dict) -> int:
     """Nach einem gescheiterten Rechengang wenigstens 'ok=0' hinausgeben.
 
@@ -1803,13 +1906,52 @@ def verlauf_luecken_fuellen(nach_datum: dict, heute_s: str) -> list:
     return neu
 
 
+def _giess_mm(roh: float, z: dict, cfg: dict, wirkungsgrad: float) -> float | None:
+    """Eine Rueckmeldung (Tagesstand seit Mitternacht) in Millimeter - nach "Rueckmeldung als" der Zone.
+    None heisst: ohne gemessene Rate nicht umrechenbar (fail closed). Gemeinsam fuer beide Wege."""
+    art = str(z.get("giess_art") or "minuten")
+    rate = float(z.get("rate_mmh") or 0.0)
+    if art == "mm":
+        mm = roh
+    elif rate <= 0 or not z.get("rate_gemessen"):
+        # Fail closed: lieber keine Rueckmeldung als eine geratene.
+        return None
+    elif art == "durchlaeufe":
+        dauer = float(z.get("dauer_s") or cfg.get("zonendauer_s") or 240)
+        mm = roh * rate * wirkungsgrad * (dauer / 3600.0)
+    else:
+        mm = (roh / 60.0) * rate * wirkungsgrad
+    return round(max(0.0, mm), 2)
+
+
+def _altweg_merken(schluessel: str, ts: float) -> None:
+    """Gruppe 2 (0.9.44): wann kam ueber den ALTEN Weg (giess_thema) zuletzt etwas an? Fuer den Hinweis im Reiter
+    Test ("Loxone sendet noch an das alte Thema"). Hoechstens einmal je Stunde und Zone geschrieben."""
+    try:
+        d = json_lesen(DATEI_RM_ALTWEG)
+        if not isinstance(d, dict):
+            d = {}
+        if ts - float(d.get(schluessel) or 0) < 3600:
+            return
+        d[schluessel] = int(ts)
+        json_schreiben(DATEI_RM_ALTWEG, d)
+    except Exception as f:  # noqa: BLE001
+        _LOG.warning("Merker des alten Rueckmeldewegs nicht geschrieben: %s", f)
+
+
 def giesswerte_einsammeln(sammler, zonenliste: list, cfg: dict) -> dict:
     """Was Loxone in dieser Nacht ausgebracht hat - je Zone in Millimetern.
 
-    Der Weg ist derselbe, den das Plugin ohnehin benutzt: ein MQTT-Thema je
-    Zone. Ein schreibender Endpunkt kaeme nicht in Frage - der unangemeldete
-    Bereich darf nichts schreiben, und ein Endpunkt, der die Wasserbilanz
-    verstellen kann, waere eine Angriffsflaeche ohne Gegenwert.
+    Zwei Wege, dieselben Pruefungen:
+
+      1. die Befehlsbruecke (Gruppe 2, 0.9.44, Regelweg): Loxone sendet <praefix>/befehl/rueckmeldung/<zone>,
+         die Bruecke prueft Zone, Wert und Becherprobe (bw_rueckmeldung_annehmen() in bw_lib.php) und legt den
+         Wert mit Zeitstempel in rueckmeldung.json ab;
+      2. der alte Weg (bis 0.9.43, weiter angenommen, Entwurf bw E8): ein MQTT-Thema je Zone (giess_thema), das
+         dieser Dienst selbst abonniert.
+
+    Ein schreibender HTTP-Endpunkt kaeme nicht in Frage - der unangemeldete Bereich darf nichts schreiben, und ein
+    Endpunkt, der die Wasserbilanz verstellen kann, waere eine Angriffsflaeche ohne Gegenwert.
 
     Drei Lesarten, weil Loxone drei Dinge liefern kann:
 
@@ -1817,46 +1959,51 @@ def giesswerte_einsammeln(sammler, zonenliste: list, cfg: dict) -> dict:
       durchlaeufe   Zahl der fertigen Durchlaeufe seit Mitternacht
       mm            die Hoehe unmittelbar, falls jemand sie selbst rechnet
 
-    Aus Minuten und Durchlaeufen wird die Hoehe mit der **gemessenen**
-    Niederschlagsrate gerechnet. Ohne Becherprobe gibt es keine Rueckmeldung:
-    eine erfundene Rate waere je nach Regner um den Faktor sechzehn falsch,
-    und dieser Fehler ginge unmittelbar in die Bilanz.
+    Aus Minuten und Durchlaeufen wird die Hoehe mit der **gemessenen** Niederschlagsrate gerechnet. Ohne
+    Becherprobe gibt es keine Rueckmeldung: eine erfundene Rate waere je nach Regner um den Faktor sechzehn
+    falsch, und dieser Fehler ginge unmittelbar in die Bilanz.
 
-    Rueckgabe: {zonenschluessel: mm}. Zonen ohne Thema fehlen darin - das
-    ist der Regelfall und kein Mangel.
+    Kommt fuer eine Zone auf beiden Wegen etwas, gilt der groessere Wert - wie rechnen() ohnehin den
+    Tageshoechstwert bucht; doppelt gezaehlt wird nichts.
+
+    Rueckgabe: {zonenschluessel: mm}. Zonen ohne Rueckmeldung fehlen darin - das ist der Regelfall und kein
+    Mangel.
     """
     aus = {}
-    if sammler is None:
-        return aus
     hoechstalter = float(cfg.get("hoechstalter") or 3600)
     wirkungsgrad = max(0.3, min(1.0, float(cfg.get("wirkungsgrad") or 0.75)))
+    datei = json_lesen(DATEI_RUECKMELDUNG)
+    if not isinstance(datei, dict):
+        datei = {}
+    jetzt = time.time()
     for z in zonenliste:
         s = str(z.get("schluessel") or "")
+        if not s:
+            continue
+        kandidaten = []
+        # 1. Befehlsbruecke
+        e = datei.get(s)
+        if isinstance(e, dict):
+            try:
+                roh, ts = float(e.get("wert")), float(e.get("ts"))
+            except (TypeError, ValueError):
+                roh, ts = None, 0.0
+            if roh is not None and roh >= 0 and jetzt - ts <= hoechstalter:
+                kandidaten.append(roh)
+        # 2. alter Weg
         thema = str(z.get("giess_thema") or "").strip()
-        if not s or not thema:
-            continue
-        eintrag = sammler.mqtt.get(thema)
-        if eintrag is None:
-            continue
-        nutzlast, ts = eintrag
-        if time.time() - ts > hoechstalter:
-            continue
-        roh = quellen.zahl(nutzlast)
-        if roh is None or roh < 0:
-            continue
-        art = str(z.get("giess_art") or "minuten")
-        rate = float(z.get("rate_mmh") or 0.0)
-        if art == "mm":
-            mm = roh
-        elif rate <= 0 or not z.get("rate_gemessen"):
-            # Fail closed: lieber keine Rueckmeldung als eine geratene.
-            continue
-        elif art == "durchlaeufe":
-            dauer = float(z.get("dauer_s") or cfg.get("zonendauer_s") or 240)
-            mm = roh * rate * wirkungsgrad * (dauer / 3600.0)
-        else:
-            mm = (roh / 60.0) * rate * wirkungsgrad
-        aus[s] = round(max(0.0, mm), 2)
+        if thema and sammler is not None:
+            eintrag = sammler.mqtt.get(thema)
+            if eintrag is not None:
+                nutzlast, ts = eintrag
+                if jetzt - ts <= hoechstalter:
+                    roh = quellen.zahl(nutzlast)
+                    if roh is not None and roh >= 0:
+                        kandidaten.append(roh)
+                        _altweg_merken(s, jetzt)
+        mm = [m for m in (_giess_mm(r, z, cfg, wirkungsgrad) for r in kandidaten) if m is not None]
+        if mm:
+            aus[s] = max(mm)
     return aus
 
 
@@ -2691,8 +2838,9 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     sperre = abbild.get("sperre") or {}
     fest = abbild.get("nachtplan") or {}
     p["ok"] = int(abbild.get("ok") or 0)
-    if abbild.get("et0") is not None:
-        p["et0"] = round(float(abbild["et0"]), 2)
+    # Gruppe 2 (0.9.44, Entwurf bw E4, -1-Regel): ohne Verdunstung -1 statt nichts - Loxone liest dann
+    # "noch unbekannt" (Status "Rechnung"), nicht einen alten Wert. Die Bilanz liest et0 aus dem Abbild.
+    p["et0"] = round(float(abbild["et0"]), 2) if abbild.get("et0") is not None else -1
     # Der Nachtplan geht vor, sobald es einen fuer heute gibt.
     # Geklammert: "or" bindet staerker als der Bedingungsausdruck. Bis
     # 0.9.18 stand hier int(fest.get(...) if fest else ... or 0) - eine
@@ -2792,8 +2940,10 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
         # ('<zone>/sekunden') bleibt stehen: sie ist ein Sollwert, kein
         # Befehl, und Tv1..Tv8 sollen nicht bei jedem Frost auf 0 fallen.
         p["%s/durchlaeufe" % s] = 0 if int(sperre.get("aktiv") or 0)             else int(jz.get("durchlaeufe") or 0)
-        if e.get("gegossen_mm") is not None:
-            p["%s/gegossen_mm" % s] = round(float(e["gegossen_mm"]), 1)
+        # Gruppe 2 (0.9.44, Entwurf bw E5): immer, 0 ohne Rueckmeldung (wie HTTP, wie die Bilanz rechnet) -
+        # "heute nichts zurueckgemeldet" ist ein Wert. Dazu "gemessen" (E7): Becherprobe gemacht.
+        p["%s/gegossen_mm" % s] = round(float(e.get("gegossen_mm") or 0.0), 1)
+        p["%s/gemessen" % s] = 1 if e.get("rate_gemessen") else 0
     behalten = set(RETAINED_GLOBAL)
     for s in (abbild.get("zonen") or {}):
         for f in RETAINED_ZONE:
@@ -3068,6 +3218,9 @@ class Dienst:
                         stoerung_veroeffentlichen(cfg_gut)
                 except Exception as f2:
                     _LOG.warning("Stoerungsmeldung nicht absetzbar: %s", f2)
+            # Gruppe 2 (0.9.44, Entwurf bw E1): das Lebenszeichen in JEDEM Takt - auch nach einem
+            # ausgelassenen oder gescheiterten Rechengang (mit der letzten brauchbaren Konfiguration).
+            lebenszeichen_senden(cfg_gut)
             for _ in range(takt * 2):
                 if not self.laeuft:
                     break
@@ -3394,6 +3547,10 @@ def selbsttest() -> int:
         for ok, text in modul.selbstpruefung():
             print(("  [OK]   " if ok else "  [FEHL] ") + text)
             fehlt += 0 if ok else 1
+    print("Lebenszeichen und Rueckmeldung (Gruppe 2):")
+    for ok, text in lebenszeichen_selbstpruefung():
+        print(("  [OK]   " if ok else "  [FEHL] ") + text)
+        fehlt += 0 if ok else 1
     print()
     print("Nicht geprueft, weil dafuer echte Hardware noetig ist:")
     print("  - ob die Themen und Pfade zu IHRER Wetterstation passen")

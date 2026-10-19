@@ -5,12 +5,56 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.43 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.44 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.44
+
+Umstellung auf MQTT (Gruppe 2): Werte über das MQTT-Gateway in einfache Virtuelle Eingänge, die Rückmeldung aus
+Loxone über die gemeinsame Befehlsbrücke. Der HTTP-Weg und der bisherige Rückmeldeweg bleiben für bestehende Anlagen –
+**wer heute an `loxone/bewaesserung/<zone>` zurückmeldet, muss nichts ändern.**
+
+* **Reiter „Einbindung in Loxone“ neu, MQTT als Regelweg:** Schritt 1 MQTT einschalten (ab Werk an), 2 Gateway (V1:
+  Abo kommt mit; V2: Hakenliste, 13 + 8 je Zone, kein Thema braucht „Noncached“), 3 **Namenstabelle** – je Name ein
+  Virtueller Eingang, Name mit Kopierknopf, „Als Digitaleingang verwenden“ nicht anhaken, der LoxBerry-Benutzer braucht
+  Rechte auf die Eingänge; eine Importvorlage für diese Werte gibt es nicht –, 4 Ausfallerkennung, 5 Rückmeldung
+  (Befehle), 6 die zwei Baustein-Listen, 7 Gegenprobe. Die HTTP-Vorlagen (Status, je Zone, alte Rückmeldevorlage),
+  Adresse und Token stehen zugeklappt unter „Bestehende Anlagen: Weg über HTTP“.
+* **Lebenszeichen in jedem Takt:** `<präfix>/status/ok` (1 = der Plan gilt, dieselbe Altersgrenze wie `OK` am
+  Endpunkt: dreimal max(600 s, Takt)), `status/ts` und `status/zaehler` (0–999) gehen bei jedem Takt des Dienstes
+  hinaus (ab Werk 300 s), nie zurückbehalten. Die Musterseite erkennt den Ausfall am Zähler (Analogwertvalidierung,
+  Tmc 1500 s = fünf Takte); die Anzeige „gerechnet vor … s“ und der Eingang „Alter der Rechnung“ entfallen dort.
+  `ok`, `ts`, `zaehler` und `alter` gehen für bestehende Anlagen unverändert weiter.
+* **Neue Themen und −1-Regel:** je Zone `<zone>/gemessen` (Becherprobe gemacht); `et0` ohne Wert jetzt **−1** – über
+  MQTT (bisher: nichts) und in der HTTP-Zeile (bisher `ET0=0.00`); `<zone>/gegossen_mm` geht immer hinaus, 0 ohne
+  Rückmeldung (wie HTTP). Eine Zone, die sich nicht rechnen lässt, hält ihre Werte (−1 wäre an Tv1/Tv2 eine
+  Ventilzeit). Die HTTP-Vorlage trägt bei ET0 jetzt Min −1 (signed); bereits importierte Eingänge behalten Min 0 –
+  wer −1 sehen will, stellt MinVal am Eingang auf −1.
+* **Rückmeldung über die Befehlsbrücke** (Haken „Befehle über MQTT annehmen“ im Reiter MQTT, ab Werk aus; die Brücke
+  startet beim Speichern, der Minutentakt wacht über sie): Loxone sendet je Zone
+  `publish <präfix>/befehl/rueckmeldung/<zone> <v.0>` (ein „-“ im Zonenschlüssel wird „_“). Die Brücke prüft Zone,
+  Wert (0–1440) und Becherprobe und quittiert auf `…/quittung`: „angenommen“ heißt übergeben, verbucht wird beim
+  nächsten Rechengang (Tageshöchstwert – alter und neuer Weg zusammen zählen nichts doppelt). **Neu:** ohne
+  Becherprobe heißt die Quittung „abgelehnt: BECHERPROBE_FEHLT“ statt still verworfen. Gleicher Wert binnen 60 s wird
+  abgelehnt (schadet nicht). Knopf „Vorlage MQTT-Befehle erzeugen“ (eigener Ausgang „Bewässerung MQTT-Befehle“); im
+  Musterprojekt hängen die Befehle am gemeinsamen Ausgang „LoxBerry MQTT-Gateway“.
+* **Bisheriger Rückmeldeweg bleibt:** ein im Reiter Zonen eingetragenes Rückmeldethema (jetzt „Altes Rückmeldethema“)
+  wird weiter abonniert und verbucht, ohne Haken. Kommt darüber in den letzten 7 Tagen noch etwas, sagt der Reiter
+  Test, dass der Ausgang auf die Befehlsbrücke umgestellt werden kann. Entfernt wird der alte Weg frühestens in einer
+  späteren Fassung, nach Ankündigung hier.
+* **Musterseite „Bewässerung“ mit Leersperre** (ab Nr. 48): „Wasservorrat (eigene Quelle)“ und Schalter „Leersperre
+  an“ (ab Werk 0 – ohne Zisterne bleibt alles wie bisher), Schwellwert 20/30 %, Meldung „Bewässerung Wasservorrat
+  leer“. Beide Bilder neu.
+* Reiter Test: neue Zeilen „Befehlsbrücke“ und „Sendet der Dienst jedes Thema der Namenstabelle?“; die Namensprüfung
+  vergleicht jetzt die Eingänge der Listen mit der Namenstabelle. Deinstallation: hält die Befehlsbrücke an, entfernt
+  ihre Zugangsdaten und tut nichts, wenn ein anderes Plugin mit ähnlichem Namen deinstalliert wird.
+* Geprüft unter PHP 7.4, 8.4 und 8.5 und mit Python gegen Attrappen (Brücke ohne Broker über ihren Rechenkern), nicht
+  am Gerät.
+
 
 ## Neu in 0.9.43
 

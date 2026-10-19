@@ -61,6 +61,14 @@ else
     echo "<WARNING> koennte waehrend der Aktualisierung anlaufen."
 fi
 
+# Gruppe 2 / MQTT (0.9.44): die Befehlsbruecke vor dem Austausch der Dateien anhalten. Die Marke liegt schon -
+# der Waechter im Minutentakt startet sie bis postinstall.sh nicht neu. Bis 0.9.43 gab es keine Bruecke (dann
+# fehlt die Datei). Muster: Ferien und Feiertage 1.2.27.
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    echo "<INFO> Befehlsbruecke: $(timeout 40 bash "$BBSH" stop 2>&1 | head -n 1)"
+fi
+
 # Anhalten ueber dienst.sh, nicht mit einem eigenen kill.
 #
 # Bis 0.9.0 stand hier: SIGTERM, zwei Sekunden warten, kill -9. Zwei Sekunden

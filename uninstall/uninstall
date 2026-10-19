@@ -26,6 +26,14 @@
 # Aufruf: <ZUFALLSKENNUNG> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <TEMPFOLDER>
 # ACHTUNG: $1 ist NICHT der Arbeitsordner, sondern eine zehnstellige
 # Zufallskennung. Gearbeitet wird deshalb mit $3 und $5.
+# Gruppe 2 / MQTT (0.9.44): Uninstall-Praefix (am Geraet gemessen 08.10.2026, plugininstall.pl :1570/:1603):
+# beim Deinstallieren ruft der Installer JEDES data/system/uninstall/<name>* - auch dieses Skript, wenn ein
+# Plugin deinstalliert wird, dessen NAME ein Praefix von "bewaesserung" ist; $2 ist dann DESSEN Name. Dann
+# gehoert der Lauf nicht uns: nichts tun.
+if [ -n "$2" ] && [ "$2" != "bewaesserung" ]; then
+    echo "<INFO> Deinstallation von '$2' - dieses Skript gehoert zu 'bewaesserung' und tut nichts."
+    exit 0
+fi
 UN_FOLDER="${3:-bewaesserung}"
 
 # Der Ordnername geht in 'rm -rf' ein und wird deshalb GEPRUEFT, nicht
@@ -115,6 +123,53 @@ if [ "$UN_REST" != "0" ]; then
     echo "<WARNING> bitte als root anhalten."
 else
     echo "<OK> Kein Dienst dieses Plugins laeuft mehr (nachgesehen)."
+fi
+
+# ---------------------------------------------------------------
+# 1b. Befehlsbruecke (Gruppe 2 / MQTT, 0.9.44; Muster vb_g1_bruecke_bau/beispiel/uninstall/uninstall)
+# ---------------------------------------------------------------
+# Anhalten (stop beendet Dienst und mosquitto_sub, auch ein verwaistes), argumentweise nachzaehlen, die
+# Optionsdateien mit dem Broker-Kennwort ueberschreiben und den Ordner befehle/ entfernen, dazu die
+# Rueckmeldungen. Im Broker bleibt nichts: Quittungen und status/befehle sind nie zurueckbehalten.
+BBSH="$UN_BASE/bin/plugins/$UN_FOLDER/befehlsbruecke.sh"
+BBPHP="$UN_BASE/bin/plugins/$UN_FOLDER/befehlsbruecke.php"
+BBDIR="$UN_BASE/data/plugins/$UN_FOLDER/befehle"
+if [ -f "$BBSH" ]; then
+    timeout 40 bash "$BBSH" stop
+fi
+BB_REST=0
+for d in /proc/[0-9]*; do
+    mapfile -d '' -t a 2>/dev/null < "$d/cmdline" || continue
+    if [ "${#a[@]}" -eq 2 ] && [ "${a[1]}" = "$BBPHP" ] && [[ "${a[0]}" =~ (^|/)php[0-9.]*$ ]]; then
+        kill -9 "${d#/proc/}" 2>/dev/null
+        BB_REST=$((BB_REST + 1))
+    fi
+done
+BB_ABOS=0
+for d in /proc/[0-9]*; do
+    read -r c 2>/dev/null < "$d/comm" || continue
+    [ "$c" = "mosquitto_sub" ] || continue
+    mapfile -d '' -t e 2>/dev/null < "$d/environ" || continue
+    for x in "${e[@]}"; do
+        if [ "$x" = "XDG_CONFIG_HOME=$BBDIR/mosquitto" ]; then kill -9 "${d#/proc/}" 2>/dev/null; BB_ABOS=$((BB_ABOS + 1)); fi
+    done
+done
+[ "$BB_REST" -gt 0 ] && echo "<WARNING> Befehlsbruecke: $BB_REST Dienst(e) erst mit kill -9 beendet."
+[ "$BB_ABOS" -gt 0 ] && echo "<WARNING> Befehlsbruecke: $BB_ABOS mosquitto_sub erst mit kill -9 beendet."
+if [ -d "$BBDIR" ]; then
+    for f in "$BBDIR/mosquitto/mosquitto_sub" "$BBDIR/mosquitto/mosquitto_pub"; do
+        if [ -f "$f" ]; then
+            n=$(stat -c %s "$f" 2>/dev/null || echo 64)
+            head -c "$n" /dev/zero > "$f" 2>/dev/null
+        fi
+    done
+    rm -rf "${BBDIR:?}"
+fi
+rm -f "$UN_BASE/data/plugins/$UN_FOLDER/rueckmeldung.json" "$UN_BASE/data/plugins/$UN_FOLDER/rueckmeldung_altweg.json" 2>/dev/null
+if [ -e "$BBDIR/mosquitto/mosquitto_sub" ] || [ -e "$BBDIR/mosquitto/mosquitto_pub" ]; then
+    echo "<WARNING> Befehlsbruecke: Optionsdateien liegen noch unter $BBDIR/mosquitto - von Hand entfernen."
+else
+    echo "<OK> Befehlsbruecke angehalten, ihre Zugangsdaten entfernt."
 fi
 
 # ---------------------------------------------------------------

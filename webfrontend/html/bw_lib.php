@@ -190,6 +190,9 @@ function bw_vorgaben()
         'zonendauer_s' => 240, 'pause_min' => 45,
         'fenster_von' => '22:00', 'fenster_bis' => '08:00', 'max_durchlaeufe' => 8,
         'mqtt_ein' => 1, 'mqtt_topic' => 'bewaesserung',
+        // Gruppe 2 / MQTT (0.9.44): Haken "Befehle ueber MQTT annehmen" der Befehlsbruecke, ab Werk aus
+        // (Entwurf bw E9: auch beim Update nicht von selbst gesetzt).
+        'befehle_mqtt_ein' => 0,
         'aktionstoken' => '', 'takt' => 300,
         // ---- neu in 0.9.7 ----
         'zonendauer_max_s' => 1800,
@@ -971,7 +974,9 @@ function bw_statuszeile()
     /* C2: OK nur, solange der Plan gilt (bw_ok_gilt()). */
     return sprintf('BEWAESSERUNG;OK=%d;ET0=%.2F;GIESSEN=%d;DURCHLAEUFE=%d;NOETIG=%d;REICHT=%d;ALTER=%d;GESPERRT=%d;DECKT=%d;PLANFEST=%d;GEKUERZT=%d',
         (int) bw_ok_gilt($a),
-        isset($a['et0']) && $a['et0'] !== null ? (float) $a['et0'] : 0.0,
+        /* Gruppe 2 (0.9.44, Entwurf bw E4): ohne Verdunstung -1 statt 0 - eine 0 sieht in Loxone aus wie
+         * ein Tag ohne Verdunstung (-1-Regel, auch ueber MQTT). */
+        isset($a['et0']) && $a['et0'] !== null ? (float) $a['et0'] : -1.0,
         (int) ($durchlaeufe > 0),
         $durchlaeufe,
         (int) (isset($plan['noetige_durchlaeufe']) ? $plan['noetige_durchlaeufe'] : 0),
@@ -1718,7 +1723,7 @@ function bw_eingabe_felder($form)
                              'wind_ein', 'regen_ein', 'melden_ein', 'ecowitt_regen',
                              'gardena_ein', 'gardena_token_loeschen'),
         ),
-        'mqtt' => array('text' => array('mqtt_topic'), 'haken' => array('mqtt_ein')),
+        'mqtt' => array('text' => array('mqtt_topic'), 'haken' => array('mqtt_ein', 'befehle_mqtt_ein')),
         'quellen_weg' => array('text' => array('http_url', 'mqtt_thema'), 'haken' => array()),
         'quellen' => array('text' => array('weg', 'thema', 'pfad', 'einheit'), 'haken' => array()),
         'zonen' => array(
@@ -1935,53 +1940,46 @@ function bw_host()
  */
 function bw_baustein_liste($cfg, $token, $seite = 1)
 {
-    /* Welle Bild 6 (0.9.40, Entscheidung A): die Liste ist die im LoxBerry-Plugins
-     * Musterprojekt in Loxone Config gebaute und mit leitungen_setzen.py verbundene
-     * (Musterprojekt/baustein_listen.txt) - eine Zeile = ein Baustein. $cfg und $token
-     * bleiben in der Unterschrift (Aufrufer index.php und bw_test.php).
+    /* Welle Bild 6 (0.9.40, Entscheidung A): die Liste ist die im LoxBerry-Plugins Musterprojekt in Loxone Config
+     * gebaute und mit leitungen_setzen.py verbundene (Musterprojekt/baustein_listen.txt) - eine Zeile = ein Baustein.
+     * Welle Bild 11 VOLL (0.9.41): ZWEI Seiten, $seite 1 = Abschnitt "Bewaesserung", $seite 2 = "Bewaesserung Zonen"
+     * (Beispielzonen Rasen und Beet wie im Musterprojekt). $token bleibt in der Unterschrift (Aufrufer index.php und
+     * bw_test.php).
      *
-     * Welle Bild 11 VOLL (0.9.41, Hausherr 11.10.2026: Vollausstattung, ein Laie soll das
-     * Maximum leicht uebernehmen koennen): ZWEI Seiten, $seite 1 = Abschnitt "Bewaesserung"
-     * (46 Zeilen), $seite 2 = "Bewaesserung Zonen" (18 Zeilen, Beispielzonen Rasen und Beet wie
-     * im Musterprojekt). Ohne $seite die Seite 1 - der Reiter Test vergleicht deren Zeilen
-     * 1 bis 3 mit der Vorlage. Namen aus den Vorlagen der Linie, nicht abgeschrieben: Zeilen
-     * 1 bis 3 und 14 bis 21 aus bw_status_felder() (wie bw_vorlage()), die Zonenwerte aus
-     * bw_zonen_befehl_titel() (wie bw_zonen_vorlage()), die Rueckmeldebefehle aus
-     * bw_rueckmelde_befehl_titel() (wie bw_rueckmelde_vorlage()); die Vorlagentitel im Typ
-     * ebenso. 0.9.42: alle diese Namen fest deutsch, auch unter Englisch (Regeln/07 Abschnitt 4).
-     * Den Ausgang 'Durchlauf fertig' hat der Bewaesserungsbaustein nicht (#7 zaehlt die
-     * fallende Flanke der Pumpe), und einen Eingang fuer die Zahl der Durchlaeufe auch nicht:
-     * MaxP ist ein Regenparameter; ein Start ist ein Durchlauf aller Zonen, #44 bis #46
-     * starten bis zur geplanten Zahl neu. */
-    $f = bw_status_felder();
+     * Gruppe 2 / MQTT (0.9.44; Entwurf bw Abschnitt 9, Musterprojekt nach Nachtrag 2 der Gruppe 1): die Werte kommen
+     * ueber das MQTT-Gateway in einfache Virtuelle Eingaenge. Ihre Namen rechnet bw_mqtt_gateway_name() aus dem
+     * Praefix (Reiter MQTT) - dieselbe Funktion wie Namenstabelle und Hakenliste; im Musterprojekt (Praefix
+     * bewaesserung, Zonen rasen und beet) heissen sie bewaesserung_giessen usw. Die Rueckmeldung geht als zwei
+     * Befehle am gemeinsamen Ausgang "LoxBerry MQTT-Gateway" an die Befehlsbruecke (Nr. 40, 43; Thema aus
+     * bw_rueckmeldung_thema()). Nr. 15 (Alter der Rechnung) entfaellt, Nr. 47 Lebenszeichen und Nr. 48 bis 54
+     * Leersperre sind neu (Entscheidung des Hausherrn 19.10.2026, Punkt 5: Schalter "Leersperre an", ab Werk aus).
+     * Den Ausgang "Durchlauf fertig" hat der Bewaesserungsbaustein nicht (#7 zaehlt die fallende Flanke der Pumpe),
+     * und einen Eingang fuer die Zahl der Durchlaeufe auch nicht: ein Start ist ein Durchlauf aller Zonen, #44 bis
+     * #46 starten bis zur geplanten Zahl neu. */
+    if (!is_array($cfg)) { $cfg = bw_config(false); }
     $t = function ($k) { return bw_t('BAUSTEIN.' . $k); };
-    $s = function ($feld) use ($f) { return $f[$feld][2]; };
-    $vs = sprintf(bw_t('BAUSTEIN.T_VHTTP'), bw_e(bw_vorlage_titel_status()));
-    $vz = array();
-    foreach (array('Rasen', 'Beet') as $name) {
-        $vz[$name] = sprintf(bw_t('BAUSTEIN.T_VHTTP'), bw_e(bw_zonen_vorlage_titel($name)));
-    }
-    $vq = sprintf(bw_t('BAUSTEIN.T_VQ'), bw_e(bw_rueckmelde_titel()));
+    $n = function ($thema) use ($cfg) { return bw_mqtt_gateway_name($thema, $cfg); };
+    $vi = sprintf(bw_t('BAUSTEIN.T_VI_GW'), bw_e(bw_vorlage_titel_status()));
     if ((int) $seite === 2) {
         $aus = array();
         $nr = 0;
-        foreach (array('Rasen' => 'Z9_VERB', 'Beet' => 'Z18_VERB') as $name => $verb) {
+        foreach (array('rasen' => array('Rasen', 'Z9_VERB'), 'beet' => array('Beet', 'Z18_VERB')) as $s => $zz) {
             $i = 0;
-            foreach (array_keys(bw_zonen_felder()) as $feld) {
+            foreach (array('fuellstand', 'dr_mm', 'liter', 'minuten', 'gemessen', 'durchlaeufe', 'sekunden',
+                           'gegossen_mm') as $feld) {
                 $i++;
-                $aus[] = array(++$nr, $vz[$name], bw_zonen_befehl_titel($name, $feld),
-                               $t('Z' . $i . '_PARAM'), $t('STRICH'));
+                $aus[] = array(++$nr, $vi, $n($s . '/' . $feld), $t('Z' . $i . '_PARAM'), $t('STRICH'));
             }
-            $aus[] = array(++$nr, $t('T_STATUS'), sprintf(bw_t('BAUSTEIN.Z_STATUS_NAME'), $name),
-                           $t('Z9_PARAM'), $t($verb));
+            $aus[] = array(++$nr, $t('T_STATUS'), sprintf(bw_t('BAUSTEIN.Z_STATUS_NAME'), $zz[0]),
+                           $t('Z9_PARAM'), $t($zz[1]));
         }
         return $aus;
     }
-    $rm = function ($name) { return bw_rueckmelde_befehl_titel($name); };
+    $vq = $t('T_VQ_GW');
     return array(
-        array(1,  $vs, $s('GIESSEN'),     $t('B1_PARAM'),  $t('B1_VERB')),
-        array(2,  $vs, $s('DURCHLAEUFE'), $t('B2_PARAM'),  $t('B2_VERB')),
-        array(3,  $vs, $s('REICHT'),      $t('B3_PARAM'),  $t('B3_VERB')),
+        array(1,  $vi, $n('giessen'),     $t('B1_PARAM'),  $t('B1_VERB')),
+        array(2,  $vi, $n('durchlaeufe'), $t('B2_PARAM'),  $t('B2_VERB')),
+        array(3,  $vi, $n('reicht'),      $t('B3_PARAM'),  $t('B3_VERB')),
         array(4,  $t('T_BEW'),     $t('B4_NAME'),  $t('B4_PARAM'),  $t('B4_VERB')),
         array(5,  $t('T_SWS'),     $t('B5_NAME'),  $t('B5_PARAM'),  $t('B5_VERB')),
         array(6,  $t('T_NICHT'),   $t('B6_NAME'),  $t('B6_PARAM'),  $t('B6_VERB')),
@@ -1992,14 +1990,14 @@ function bw_baustein_liste($cfg, $token, $seite = 1)
         array(11, $t('T_ODER'),    $t('B11_NAME'), $t('B11_PARAM'), $t('B11_VERB')),
         array(12, $t('T_SWS'),     $t('B12_NAME'), $t('B12_PARAM'), $t('B12_VERB')),
         array(13, $t('T_BENACH'),  $t('B13_NAME'), $t('B13_PARAM'), $t('B13_VERB')),
-        array(14, $vs, $s('OK'),       $t('B14_PARAM'), $t('STRICH')),
-        array(15, $vs, $s('ALTER'),    $t('B15_PARAM'), $t('STRICH')),
-        array(16, $vs, $s('GESPERRT'), $t('B16_PARAM'), $t('STRICH')),
-        array(17, $vs, $s('NOETIG'),   $t('B17_PARAM'), $t('STRICH')),
-        array(18, $vs, $s('PLANFEST'), $t('B18_PARAM'), $t('STRICH')),
-        array(19, $vs, $s('DECKT'),    $t('B19_PARAM'), $t('STRICH')),
-        array(20, $vs, $s('GEKUERZT'), $t('B20_PARAM'), $t('STRICH')),
-        array(21, $vs, $s('ET0'),      $t('B21_PARAM'), $t('STRICH')),
+        array(14, $vi, $n('status/ok'), $t('B14_PARAM'), $t('STRICH')),
+        array(15, $t('T_ENTFAELLT'), $t('B15_NAME'), $t('B15_PARAM'), $t('B15_VERB')),
+        array(16, $vi, $n('gesperrt'),            $t('B16_PARAM'), $t('STRICH')),
+        array(17, $vi, $n('noetige_durchlaeufe'), $t('B17_PARAM'), $t('STRICH')),
+        array(18, $vi, $n('plan_fest'),           $t('B18_PARAM'), $t('STRICH')),
+        array(19, $vi, $n('deckt'),               $t('B19_PARAM'), $t('STRICH')),
+        array(20, $vi, $n('gekuerzt_min'),        $t('B20_PARAM'), $t('STRICH')),
+        array(21, $vi, $n('et0'),                 $t('B21_PARAM'), $t('STRICH')),
         array(22, $t('T_STATUS'),  $t('B22_NAME'), $t('B22_PARAM'), $t('B22_VERB')),
         array(23, $t('T_STATUS'),  $t('B23_NAME'), $t('B23_PARAM'), $t('B23_VERB')),
         array(24, $t('T_STATUS'),  $t('B24_NAME'), $t('B24_PARAM'), $t('B24_VERB')),
@@ -2013,18 +2011,26 @@ function bw_baustein_liste($cfg, $token, $seite = 1)
         array(32, $t('T_SWS'),     $t('B32_NAME'), $t('B32_PARAM'), $t('B32_VERB')),
         array(33, $t('T_ODER'),    $t('B33_NAME'), $t('STRICH'),    $t('B33_VERB')),
         array(34, $t('T_BENACH'),  $t('B34_NAME'), $t('B34_PARAM'), $t('B34_VERB')),
-        array(35, $vz['Rasen'], bw_zonen_befehl_titel('Rasen', 'SEKUNDEN'), $t('B35_PARAM'), $t('STRICH')),
-        array(36, $vz['Beet'],  bw_zonen_befehl_titel('Beet', 'SEKUNDEN'),  $t('B36_PARAM'), $t('STRICH')),
+        array(35, $vi, $n('rasen/sekunden'), $t('B35_PARAM'), $t('STRICH')),
+        array(36, $vi, $n('beet/sekunden'),  $t('B36_PARAM'), $t('STRICH')),
         array(37, $t('T_IMPULS'),  $t('B37_NAME'), $t('B37_PARAM'), $t('STRICH')),
         array(38, $t('T_FLANKE'),  $t('B38_NAME'), $t('B38_PARAM'), $t('B38_VERB')),
         array(39, $t('T_ZAEHLER'), $t('B39_NAME'), $t('STRICH'),    $t('B39_VERB')),
-        array(40, $vq, $rm('Rasen'), $t('B40_PARAM'), $t('B40_VERB')),
+        array(40, $vq, $t('B40_NAME'), sprintf(bw_t('BAUSTEIN.B40_PARAM'), bw_e(bw_rueckmeldung_thema('rasen', $cfg))), $t('B40_VERB')),
         array(41, $t('T_FLANKE'),  $t('B41_NAME'), $t('B41_PARAM'), $t('B41_VERB')),
         array(42, $t('T_ZAEHLER'), $t('B42_NAME'), $t('STRICH'),    $t('B42_VERB')),
-        array(43, $vq, $rm('Beet'),  $t('B43_PARAM'), $t('B43_VERB')),
+        array(43, $vq, $t('B43_NAME'), sprintf(bw_t('BAUSTEIN.B43_PARAM'), bw_e(bw_rueckmeldung_thema('beet', $cfg))), $t('B43_VERB')),
         array(44, $t('T_NICHT'),   $t('B44_NAME'), $t('STRICH'),    $t('B44_VERB')),
         array(45, $t('T_UND'),     $t('B45_NAME'), $t('B45_PARAM'), $t('B45_VERB')),
         array(46, $t('T_ODER'),    $t('B46_NAME'), $t('B46_PARAM'), $t('B46_VERB')),
+        array(47, $vi, $n('status/zaehler'), $t('B47_PARAM'), $t('STRICH')),
+        array(48, $t('T_VI'),      $t('B48_NAME'), $t('B48_PARAM'), $t('STRICH')),
+        array(49, $t('T_VI_SCHALTER'), $t('B49_NAME'), $t('B49_PARAM'), $t('STRICH')),
+        array(50, $t('T_SWS'),     $t('B50_NAME'), $t('B50_PARAM'), $t('B50_VERB')),
+        array(51, $t('T_UND'),     $t('B51_NAME'), $t('B51_PARAM'), $t('B51_VERB')),
+        array(52, $t('T_ODER'),    $t('B52_NAME'), $t('B52_PARAM'), $t('B52_VERB')),
+        array(53, $t('T_EINVERZ'), $t('B53_NAME'), $t('B53_PARAM'), $t('B53_VERB')),
+        array(54, $t('T_BENACH'),  $t('B54_NAME'), $t('B54_PARAM'), $t('B54_VERB')),
     );
 }
 
@@ -2040,7 +2046,8 @@ function bw_vorlage_art($feld)
         return array('false', 'false', '0', '1', '<v.1>');
     }
     switch ($feld) {
-        case 'ET0':         return array('false', 'true', '0', '50', '<v.2> mm');
+        /* Gruppe 2 (0.9.44): -1 = noch unbekannt, also signed und Min -1. */
+        case 'ET0':         return array('true', 'true', '-1', '50', '<v.2> mm');
         case 'DURCHLAEUFE': return array('false', 'true', '0', '24', '<v.1>');
         case 'NOETIG':      return array('false', 'true', '0', '2147483647', '<v.1>');
         case 'ALTER':       return array('true', 'true', '-1', '2147483647', '<v.1> s');
@@ -2244,11 +2251,13 @@ function bw_baustein_seite($seite)
         'schritte' => array(bw_t('BAUSTEIN.A_S1'), bw_t('BAUSTEIN.A_S2'), bw_t('BAUSTEIN.A_S3'),
                             bw_t('BAUSTEIN.A_S4'), bw_t('BAUSTEIN.A_S5'), bw_t('BAUSTEIN.A_S6'),
                             bw_t('BAUSTEIN.A_S7'), bw_t('BAUSTEIN.A_S8'), bw_t('BAUSTEIN.A_S9')),
-        'hinweise' => array(bw_t('BAUSTEIN.A_H1'), bw_t('BAUSTEIN.A_H7'), bw_t('LOX.S3_ERLAEUTERUNG'),
+        /* Gruppe 2 (0.9.44): A_H9 Lebenszeichen und Takt, A_H4/A_H8 Leersperre. */
+        'hinweise' => array(bw_t('BAUSTEIN.A_H1'), bw_t('BAUSTEIN.A_H7'), bw_t('BAUSTEIN.A_H9'),
+                            bw_t('LOX.S3_ERLAEUTERUNG'),
                             bw_t('BAUSTEIN.H_DURCHLAUF'), bw_t('BAUSTEIN.H_OFF'),
                             bw_t('BAUSTEIN.H_IMPULS'), bw_t('BAUSTEIN.A_H6'),
                             bw_t('BAUSTEIN.A_H5'), bw_t('BAUSTEIN.A_H2'),
-                            bw_t('BAUSTEIN.A_H3'), bw_t('BAUSTEIN.A_H4')),
+                            bw_t('BAUSTEIN.A_H3'), bw_t('BAUSTEIN.A_H4'), bw_t('BAUSTEIN.A_H8')),
     );
 }
 
@@ -2568,6 +2577,8 @@ function bw_grenzen()
         /* Nr. 36 b: die beiden Anlass-Haken der Sprachausgabe. */
         'ansage_ende'         => array(0, 1),
         'ansage_ventil'       => array(0, 1),
+        /* Gruppe 2 / MQTT (0.9.44): der Haken der Befehlsbruecke. */
+        'befehle_mqtt_ein'    => array(0, 1),
     );
 }
 
@@ -3206,7 +3217,9 @@ function bw_sicherung_lesen($roh, &$namen = null)
     $fehlend = array();
     foreach (array_keys(bw_vorgaben()) as $fk) {
         /* Gardena-1: das Ventil-Token fehlt in jeder Sicherung mit Absicht. */
-        if ($fk !== 'gardena_token' && !array_key_exists($fk, $daten)) {
+        /* Gruppe 2 (0.9.44): der Haken der Befehlsbruecke fehlt in jeder Sicherung vor 0.9.44 - er bleibt
+         * dann aus (Vorgabe 0), das ist kein Mangel (Entwurf bw 3.3: Sicherung verträglich). */
+        if ($fk !== 'gardena_token' && $fk !== 'befehle_mqtt_ein' && !array_key_exists($fk, $daten)) {
             $fehlend[] = $fk;
         }
     }
@@ -3355,4 +3368,362 @@ function bw_wachposten()
         return bw_t('WACHE.FALSCH');
     }
     return '';
+}
+
+/* ==================================================================
+ * Gruppe 2 / MQTT (0.9.44; Musterprojekt/entwurf_gruppe2_bw.txt, ENTSCHEIDUNGEN_GRUPPE2_MQTT.md)
+ *
+ * Werte gehen ueber das MQTT-Gateway in einfache Virtuelle Eingaenge (Name = Name, den das Gateway vergibt), nicht
+ * mehr in eine Importvorlage (Nachtrag 2 Gruppe 1, Regeln/07 R2_078); die Rueckmeldung aus Loxone kommt ueber die
+ * gemeinsame Befehlsbruecke (bin/befehlsbruecke.php, Tabelle bin/befehle_zuordnung.php). Der HTTP-Weg und der alte
+ * Rueckmeldeweg (giess_thema) bleiben fuer bestehende Anlagen.
+ * ================================================================== */
+
+/** Das Themenpraefix - dieselbe Rechnung wie der Dienst (str(cfg['mqtt_topic'] or 'bewaesserung'), Rand-"/" weg). */
+function bw_mqtt_praefix($cfg = null)
+{
+    if (!is_array($cfg)) { $cfg = bw_config(false); }
+    $t = (isset($cfg['mqtt_topic']) && is_scalar($cfg['mqtt_topic'])) ? trim((string) $cfg['mqtt_topic'], '/') : '';
+    return $t !== '' ? $t : 'bewaesserung';
+}
+
+/** Ein Themenbestandteil wie _mqtt_thema() im Dienst: Leerzeichen, "+" und "#" werden "_". */
+function bw_mqtt_teil($s)
+{
+    $s = trim((string) preg_replace('/[\x00-\x1F\x7F]/', '', (string) $s));
+    $s = str_replace(array(' ', '+', '#'), '_', $s);
+    return $s !== '' ? $s : 'unbenannt';
+}
+
+/** Das volle Thema <praefix>/<thema>, gebaut wie mqtt_senden() im Dienst. */
+function bw_mqtt_thema($thema, $cfg = null)
+{
+    return bw_mqtt_teil(bw_mqtt_praefix($cfg)) . '/' . bw_mqtt_teil($thema);
+}
+
+/**
+ * Der Name, den das MQTT-Gateway (V1 und V2) dem Thema gibt: "/", Leerzeichen und "%" werden "_" (Regeln/07,
+ * mqtt_gateway.py build_vi_name; Gedaechtnis mqtt-gateway-v2-verhalten). EINE Funktion fuer Namenstabelle,
+ * Hakenliste, Baustein-Liste und Selbstpruefung (Regeln/07 "Themennamen aus EINER Funktion").
+ */
+function bw_mqtt_gateway_name($thema, $cfg = null)
+{
+    return str_replace(array('/', ' ', '%'), '_', bw_mqtt_thema($thema, $cfg));
+}
+
+/** Der Teil eines Zonenschluessels in einem Befehlsthema: "-" wird "_" (die Bruecke erlaubt je Ebene nur a-z, 0-9,
+ *  _; Entwurf bw E10). */
+function bw_zone_befehlsteil($schluessel)
+{
+    return str_replace('-', '_', strtolower((string) $schluessel));
+}
+
+/** Das Befehlsthema der Rueckmeldung einer Zone (fuer Reiter Zonen, Einbindung und die Vorlage). */
+function bw_rueckmeldung_thema($schluessel, $cfg = null)
+{
+    return bw_mqtt_teil(bw_mqtt_praefix($cfg)) . '/befehl/rueckmeldung/' . bw_zone_befehlsteil($schluessel);
+}
+
+/**
+ * Die Namen, die das Gateway aus den Themen des Dienstes macht (Entwurf bw 2.4) - EINE Liste fuer die Namenstabelle
+ * (Reiter Einbindung, Schritt 3), die Hakenliste fuer Gateway V2, die Themenliste und die Selbstpruefung.
+ * Je Eintrag array('thema' (ohne Praefix), 'name' (Gateway), 'bedeutung' (Sprachschluessel, bei Zonen mit %s),
+ * 'bereich', 'art' zahl|text, 'gruppe' global|zone|bestand, 'zone' (Name oder ''), 'haken' (V2-Hakenliste),
+ * 'quelle' dienst|bruecke, 'muster' (steht auf einer Musterprojekt-Seite)).
+ * Zahl global 12 (status/befehle sendet die Bruecke), Text 1 (sperrgrund), je Zone 8 -> 13 + 8 x Zonen Haken.
+ * "Weitere Themen fuer bestehende Anlagen" (gruppe bestand) stehen nicht in der Hakenliste.
+ * $zonen: Liste wie bw_zonen() (ohne Angabe die eingerichteten).
+ */
+function bw_mqtt_namen($cfg = null, $zonen = null)
+{
+    if (!is_array($cfg)) { $cfg = bw_config(false); }
+    if (!is_array($zonen)) { $zonen = bw_zonen(); }
+    $muster = array();
+    foreach (array(1, 2) as $bw_s) {
+        foreach (bw_baustein_liste($cfg, '', $bw_s) as $bw_z) { $muster[(string) $bw_z[2]] = true; }
+    }
+    $aus = array();
+    $neu = function ($thema, $bed, $bereich, $art, $gruppe, $zone, $quelle) use (&$aus, $cfg, $muster) {
+        $n = bw_mqtt_gateway_name($thema, $cfg);
+        $aus[] = array('thema' => $thema, 'name' => $n, 'bedeutung' => $bed, 'bereich' => $bereich,
+                       'art' => $art, 'gruppe' => $gruppe, 'zone' => $zone,
+                       'haken' => $gruppe !== 'bestand', 'quelle' => $quelle, 'muster' => isset($muster[$n]));
+    };
+    $neu('status/ok', 'MQTT.B_STATUS_OK', '0/1', 'zahl', 'global', '', 'dienst');
+    $neu('status/zaehler', 'MQTT.B_STATUS_ZAEHLER', '0 … 999', 'zahl', 'global', '', 'dienst');
+    $neu('status/befehle', 'MQTT.B_STATUS_BEFEHLE', '1 / 0 / -1', 'zahl', 'global', '', 'bruecke');
+    $neu('et0', 'MQTT.B_ET0', '-1 … 50 mm', 'zahl', 'global', '', 'dienst');
+    $neu('giessen', 'MQTT.B_GIESSEN', '0/1', 'zahl', 'global', '', 'dienst');
+    $neu('durchlaeufe', 'MQTT.B_DURCHLAEUFE', '0 … 24', 'zahl', 'global', '', 'dienst');
+    $neu('noetige_durchlaeufe', 'MQTT.B_NOETIG', '0 … 2147483647', 'zahl', 'global', '', 'dienst');
+    $neu('reicht', 'MQTT.B_REICHT', '0/1', 'zahl', 'global', '', 'dienst');
+    $neu('gesperrt', 'MQTT.B_GESPERRT', '0/1', 'zahl', 'global', '', 'dienst');
+    $neu('deckt', 'MQTT.B_DECKT', '0/1', 'zahl', 'global', '', 'dienst');
+    $neu('plan_fest', 'MQTT.B_PLANFEST', '0/1', 'zahl', 'global', '', 'dienst');
+    $neu('gekuerzt_min', 'MQTT.B_GEKUERZT', '0 … 1440 min', 'zahl', 'global', '', 'dienst');
+    $neu('sperrgrund', 'MQTT.B_SPERRGRUND', 'sperre_frost / sperre_wind / sperre_regen / -', 'text', 'global', '', 'dienst');
+    foreach ($zonen as $z) {
+        if (!is_array($z) || !isset($z['schluessel']) || (string) $z['schluessel'] === '') { continue; }
+        $s = (string) $z['schluessel'];
+        $name = (isset($z['name']) && trim((string) $z['name']) !== '') ? trim((string) $z['name']) : $s;
+        foreach (array('fuellstand' => array('MQTT.B_ZONE_FUELLSTAND', '0 … 100 %'),
+                       'dr_mm' => array('MQTT.B_ZONE_DR', '0 … 1000 mm'),
+                       'liter' => array('MQTT.B_ZONE_LITER', '0 … 1000000 l'),
+                       'minuten' => array('MQTT.B_ZONE_MINUTEN', '0 … 1440 min'),
+                       'gemessen' => array('MQTT.B_ZONE_GEMESSEN', '0/1'),
+                       'durchlaeufe' => array('MQTT.B_ZONE_DURCHLAEUFE', '0 … 24'),
+                       'sekunden' => array('MQTT.B_ZONE_SEKUNDEN', '0 … 86400 s'),
+                       'gegossen_mm' => array('MQTT.B_ZONE_GEGOSSEN', '0 … 1000 mm')) as $f => $b) {
+            $neu($s . '/' . $f, $b[0], $b[1], 'zahl', 'zone', $name, 'dienst');
+        }
+    }
+    foreach (array('ok' => array('MQTT.B_OK', '0/1'), 'alter' => array('MQTT.B_ALTER', '0 … 2147483647 s'),
+                   'ts' => array('MQTT.B_TS', 's'), 'zaehler' => array('MQTT.B_ZAEHLER', '0 … 999'),
+                   'status/ts' => array('MQTT.B_STATUS_TS', 's')) as $t => $b) {
+        $neu($t, $b[0], $b[1], 'zahl', 'bestand', '', 'dienst');
+    }
+    foreach ($zonen as $z) {
+        if (!is_array($z) || !isset($z['schluessel']) || (string) $z['schluessel'] === '') { continue; }
+        $s = (string) $z['schluessel'];
+        $name = (isset($z['name']) && trim((string) $z['name']) !== '') ? trim((string) $z['name']) : $s;
+        foreach (array('ok' => array('MQTT.B_ZONE_OK', '0/1'), 'defizit_mm' => array('MQTT.B_ZONE_DEFIZIT', 'mm'),
+                       'bedarf_mm' => array('MQTT.B_ZONE_BEDARF', 'mm')) as $f => $b) {
+            $neu($s . '/' . $f, $b[0], $b[1], 'zahl', 'bestand', $name, 'dienst');
+        }
+    }
+    return $aus;
+}
+
+/** Die Bedeutung eines Eintrags aus bw_mqtt_namen() als Klartext (Zonen mit Zonennamen). */
+function bw_mqtt_bedeutung($e)
+{
+    $t = bw_t($e['bedeutung']);
+    return $e['zone'] !== '' ? sprintf($t, $e['zone']) : $t;
+}
+
+/**
+ * Selbstpruefung "Namenstabelle": jeder Name der Tabelle gehoert zu einem Thema, das der Dienst (MQTT_GLOBAL,
+ * MQTT_ZONE in bin/bewaesserung_dienst.py) bzw. die Befehlsbruecke (status/befehle) sendet. Zwei unabhaengige
+ * Stellen: die Tabelle hier gegen die Listen im Python-Quelltext. Rueckgabe array(geprueft, fehlend[]) oder null,
+ * wenn die Listen nicht lesbar sind.
+ */
+function bw_mqtt_namen_pruefen($namen = null)
+{
+    $f = bw_paths()['bindir'] . '/bewaesserung_dienst.py';
+    $t = is_file($f) ? (string) @file_get_contents($f) : '';
+    $lese = function ($name) use ($t) {
+        if (!preg_match('/^' . $name . ' = \((.*?)\)/ms', $t, $m)) { return null; }
+        preg_match_all('/"([a-z0-9_\/]+)"/', $m[1], $mm);
+        return $mm[1] ? $mm[1] : null;
+    };
+    $g = $lese('MQTT_GLOBAL');
+    $zo = $lese('MQTT_ZONE');
+    if ($g === null || $zo === null) { return null; }
+    if (!is_array($namen)) { $namen = bw_mqtt_namen(); }
+    $fehlt = array();
+    foreach ($namen as $e) {
+        if ($e['quelle'] === 'bruecke') {
+            if ($e['thema'] !== 'status/befehle') { $fehlt[] = $e['name']; }
+            continue;
+        }
+        if ($e['zone'] === '') {
+            if (!in_array($e['thema'], $g, true)) { $fehlt[] = $e['name']; }
+        } else {
+            $teil = substr($e['thema'], strrpos($e['thema'], '/') + 1);
+            if (!in_array($teil, $zo, true)) { $fehlt[] = $e['name']; }
+        }
+    }
+    return array(count($namen), $fehlt);
+}
+
+/**
+ * Die Rueckmeldung einer Zone annehmen - Uebergabe der Befehlsbruecke (bin/befehle_zuordnung.php, Befehl
+ * rueckmeldung/{zone}). Keine zweite Logik (Entwurf bw 3.2): geprueft werden nur Zone, Wert und Becherprobe, und
+ * geschrieben wird nur data/plugins/<ordner>/rueckmeldung.json ({schluessel: {wert, ts}}, 0600); verbucht wird wie
+ * bisher im Dienst (giesswerte_einsammeln(): Hoechstalter, gemessene Rate, "Rueckmeldung als", Tageshoechstwert).
+ * $teil: Zonenschluessel mit "_" statt "-" (bw_zone_befehlsteil()); zwei Zonen auf denselben Teil -> ZONE_MEHRDEUTIG.
+ * Ohne gemessene Rate und Lesart nicht "mm" -> BECHERPROBE_FEHLT (dieselbe Bedingung wie im Dienst, dort bisher
+ * still verworfen; E11). Rueckgabe array(bool ok, string grund) - die Form der Bruecke.
+ */
+function bw_rueckmeldung_annehmen($teil, $wert, $quelle = 'mqtt')
+{
+    $teil = (string) $teil;
+    $treffer = array();
+    foreach (bw_zonen() as $z) {
+        if (!is_array($z) || !isset($z['schluessel']) || (string) $z['schluessel'] === '') { continue; }
+        if (bw_zone_befehlsteil($z['schluessel']) === $teil) { $treffer[] = $z; }
+    }
+    if (!$treffer) { return array(false, 'ZONE_UNBEKANNT'); }
+    if (count($treffer) > 1) { return array(false, 'ZONE_MEHRDEUTIG'); }
+    $z = $treffer[0];
+    if (is_bool($wert) || !is_numeric($wert) || (float) $wert < 0 || (float) $wert > 1440) {
+        return array(false, 'WERT_UNGUELTIG');
+    }
+    $art = (isset($z['giess_art']) && is_string($z['giess_art']) && $z['giess_art'] !== '') ? $z['giess_art'] : 'minuten';
+    $rate = isset($z['rate_mmh']) && is_numeric($z['rate_mmh']) ? (float) $z['rate_mmh'] : 0.0;
+    if ($art !== 'mm' && ($rate <= 0 || empty($z['rate_gemessen']))) {
+        return array(false, 'BECHERPROBE_FEHLT');
+    }
+    $p = bw_paths();
+    $s = (string) $z['schluessel'];
+    if (!is_dir($p['datadir']) && !@mkdir($p['datadir'], 0775, true) && !is_dir($p['datadir'])) {
+        return array(false, 'NICHT_GESPEICHERT');
+    }
+    $fp = @fopen($p['datadir'] . '/rueckmeldung.lock', 'c');
+    if ($fp !== false) { @flock($fp, LOCK_EX); }
+    $d = bw_json_lesen($p['datadir'] . '/rueckmeldung.json');
+    $d[$s] = array('wert' => round((float) $wert, 3), 'ts' => time());
+    $ok = bw_json_schreiben($p['datadir'] . '/rueckmeldung.json', $d, 0600);
+    if ($fp !== false) { @flock($fp, LOCK_UN); fclose($fp); }
+    if (!$ok) { return array(false, 'NICHT_GESPEICHERT'); }
+    bw_log(sprintf('Rueckmeldung %s: Zone %s, %s (%s) - wird beim naechsten Rechengang verbucht.',
+        $quelle === 'mqtt' ? 'ueber MQTT (Befehlsbruecke)' : (string) $quelle, $s, rtrim(rtrim(sprintf('%.3F', (float) $wert), '0'), '.'), $art));
+    return array(true, '');
+}
+
+/** Die Rueckmeldungen ueber die Bruecke (data/plugins/<ordner>/rueckmeldung.json): {schluessel: {wert, ts}}. */
+function bw_rueckmeldung_lesen()
+{
+    $d = bw_json_lesen(bw_paths()['datadir'] . '/rueckmeldung.json');
+    return is_array($d) ? $d : array();
+}
+
+/** Wann kam ueber den ALTEN Rueckmeldeweg (giess_thema) zuletzt etwas an? Der Dienst merkt es sich je Zone
+ *  (rueckmeldung_altweg.json, hoechstens einmal je Stunde geschrieben). {schluessel: ts}. */
+function bw_rueckmeldung_altweg()
+{
+    $d = bw_json_lesen(bw_paths()['datadir'] . '/rueckmeldung_altweg.json');
+    return is_array($d) ? $d : array();
+}
+
+/**
+ * Die Befehlsbruecke als Bibliothek laden (BB_NUR_LADEN; Stammfassung Werkzeuge/gemeinsam/befehlsbruecke.php,
+ * byte-gleich unter bin/). Installiert liegt sie unter bin/plugins/<ordner>/, in einem Arbeitsordner unter bin/ neben
+ * webfrontend/. Rueckgabe true, wenn bb_waechter() danach da ist.
+ */
+function bw_bruecke_laden()
+{
+    if (function_exists('bb_waechter')) { return true; }
+    $p = bw_paths();
+    $kand = array();
+    if ($p['home'] !== '') { $kand[] = $p['bindir'] . '/befehlsbruecke.php'; }
+    $kand[] = dirname(dirname(__DIR__)) . '/bin/befehlsbruecke.php';
+    foreach ($kand as $k) {
+        if (is_file($k)) {
+            if (!defined('BB_NUR_LADEN')) { define('BB_NUR_LADEN', true); }
+            require_once $k;
+            return function_exists('bb_waechter');
+        }
+    }
+    return false;
+}
+
+/** Die Befehlsliste der Bruecke (bb_liste(): EINE Quelle fuer Reiter, Vorlage und Musterprojekt). Rueckgabe
+ *  array(Liste oder null, Fehlertext). */
+function bw_bruecke_liste()
+{
+    if (!bw_bruecke_laden()) { return array(null, bw_t('BEFEHL.T_NICHT_DA')); }
+    list($z, $fehler) = bb_zuordnung_laden();
+    if ($z === null) { return array(null, $fehler); }
+    $GLOBALS['bb_zuordnung'] = $z;
+    list($fehl) = bb_zuordnung_pruefen($z);
+    if ($fehl) { return array(null, $fehl[0]); }
+    return array(bb_liste($z, bb_einstellungen($z)), '');
+}
+
+/**
+ * Die Bruecke sofort schalten (Reiter MQTT, nach dem Speichern; wie Ferien fer_bruecke_schalten(), Abfuhrkalender
+ * awm_bruecke_starten()). Soll sie laufen (Haken "Befehle ueber MQTT annehmen" und MQTT an): befehlsbruecke.sh start -
+ * startet nur nach --soll, nie als root, nie waehrend eines Updates, nie zweimal. Soll sie nicht laufen und laeuft sie:
+ * befehlsbruecke.sh stop. Grund: der Waechter startet nach einem Start hoechstens alle 600 s neu (Neustart-Bremse der
+ * Stammfassung). Rueckgabe array(rc oder null = nichts zu tun, 'start'|'stop'|'', Ausgabe).
+ */
+function bw_bruecke_schalten($cfg = null)
+{
+    if (!is_array($cfg)) { $cfg = bw_config(false); }
+    if (!bw_bruecke_laden()) { return array(1, '', bw_t('BEFEHL.T_NICHT_DA')); }
+    $p = bb_pfade();
+    if (!$p) { return array(1, '', 'keine LoxBerry-Installation erkannt'); }
+    if (!empty($cfg['befehle_mqtt_ein']) && !empty($cfg['mqtt_ein'])) {
+        list($rc, $aus) = bb_sh($p, 'start');
+        return array($rc, 'start', $aus);
+    }
+    if (!bb_dienste()) { return array(null, '', ''); }
+    list($rc, $aus) = bb_sh($p, 'stop');
+    return array($rc, 'stop', $aus);
+}
+
+/**
+ * Die Vorlage der MQTT-Befehle: eigener Ausgang "Bewaesserung MQTT-Befehle" an /dev/udp/<LoxBerry>/<Udpinport>, je
+ * eingerichteter Zone ein analoger Befehl "Bewaesserung <Zonenname> Rueckmeldung (MQTT)", Befehl bei Analogwert
+ * "publish <praefix>/befehl/rueckmeldung/<zone> <v.0>". bb_vorlage() der Stammfassung legt fuer ein Muster
+ * ({zone}) nur einen Kommentar an - die Zonen kennt nur die Linie (wie Alexa NG je Geraet, Brueckenbericht 6).
+ * Befehlszeile in der Form von bb_vorlage_befehl(). Rueckgabe array(name, inhalt) oder null (keine Zone, Bruecke
+ * nicht ladbar).
+ */
+function bw_vorlage_befehle()
+{
+    list($l) = bw_bruecke_liste();
+    if ($l === null) { return null; }
+    $cfg = bw_config(false);
+    $z = array();
+    foreach (bw_zonen() as $zone) {
+        if (!is_array($zone) || !isset($zone['schluessel']) || (string) $zone['schluessel'] === '') { continue; }
+        $s = (string) $zone['schluessel'];
+        $name = (isset($zone['name']) && trim((string) $zone['name']) !== '') ? trim((string) $zone['name']) : $s;
+        $z[] = bb_vorlage_befehl("Bew\u{e4}sserung " . $name . " R\u{fc}ckmeldung (MQTT)",
+            bw_kommentar_kurz(sprintf(bw_t('BEFEHL.VQ_KOMMENTAR'), $s)),
+            'publish ' . bw_rueckmeldung_thema($s, $cfg) . ' <v.0>', '', true);
+    }
+    if (!$z) { return null; }
+    $h = bw_host();
+    if (substr_count($h, ':') === 1) { $h = substr($h, 0, strpos($h, ':')); }
+    $bp = bb_pfade();
+    $port = $bp ? bb_broker($bp)['udpin'] : 11884;
+    if (!$bp) {
+        $m = bw_mqtt_zustand();
+        if (!empty($m['udpport'])) { $port = (int) $m['udpport']; }
+    }
+    $x = array('<?xml version="1.0" encoding="utf-8"?>');
+    $x[] = '<VirtualOut HintText="" Title="' . bb_xml("Bew\u{e4}sserung MQTT-Befehle") . '" Comment="'
+         . bb_xml(bw_kommentar_kurz(bw_t('BEFEHL.VQ_KOPF_KOMMENTAR'))) . '" Address="'
+         . bb_xml('/dev/udp/' . $h . '/' . (int) $port) . '" CmdInit="" CloseAfterSend="true" CmdSep="">';
+    $x[] = "\t" . '<Info templateType="3" minVersion="17010727"/>';
+    $x = array_merge($x, $z);
+    $x[] = '</VirtualOut>';
+    return array('VQ_bewaesserung_mqtt.xml', implode("\n", $x) . "\n");
+}
+
+/**
+ * Lage der Befehlsbruecke fuer den Reiter Test (Entwurf gemeinsam 2.11). Gemessen wird das Erzeugnis wie im Waechter:
+ * Dienst laeuft (argumentweise), zustand.json juenger als 180 s, Abo steht. Rueckgabe array(ok true/false/null, Text) -
+ * null heisst "aus" (Haken) und zaehlt nicht als bestanden.
+ */
+function bw_bruecke_lage()
+{
+    if (!bw_bruecke_laden()) { return array(false, bw_t('BEFEHL.T_NICHT_DA')); }
+    list($soll, $grund) = bb_soll_ermitteln();
+    if ($soll === 1) { return array(null, bw_t('BEFEHL.T_AUS')); }
+    if ($soll !== 0) { return array(false, sprintf(bw_t('BEFEHL.T_DEFEKT'), $grund)); }
+    $zu = bb_zustand_lesen();
+    $pids = bb_dienste();
+    $alter = (is_array($zu) && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+    if ($pids && $alter !== null && $alter <= BB_WACHE_GRENZE && !empty($zu['abo'])) {
+        $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+        $txt = sprintf(bw_t('BEFEHL.T_LAEUFT'), implode(' ', $pids),
+            is_string($zu['abo']) ? $zu['abo'] : bw_mqtt_praefix() . '/befehl/#',
+            isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0, isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0);
+        $lz = isset($zu['letzter']) && is_array($zu['letzter']) ? $zu['letzter'] : null;
+        if ($lz !== null && isset($lz['name'])) {
+            $txt .= ' ' . sprintf(bw_t('BEFEHL.T_LETZTER'), (string) $lz['name'],
+                isset($lz['ergebnis']) ? (string) $lz['ergebnis'] : '-',
+                isset($lz['zeit']) ? max(0, time() - (int) $lz['zeit']) : 0);
+        } else {
+            $txt .= ' ' . bw_t('BEFEHL.T_KEINER');
+        }
+        return array(true, $txt);
+    }
+    $wie = !$pids ? 'kein Dienst' : ($alter === null ? 'kein Zustand' : ($alter > BB_WACHE_GRENZE
+        ? 'Zustand ' . $alter . ' s alt' : 'ohne Abo' . (is_array($zu) && !empty($zu['fehler']) ? ': ' . $zu['fehler'] : '')));
+    return array(false, sprintf(bw_t('BEFEHL.T_STEHT'), $wie));
 }

@@ -201,6 +201,19 @@ if ($bw_post && isset($_POST['rueckmeldung_laden'])) {
     $bw_fehler[] = bw_t('LOX.KEINE_ZONE');
     $bw_tab = 'tab-loxone';
 }
+/* Gruppe 2 / MQTT (0.9.44): die Vorlage der MQTT-Befehle (Befehlsbruecke; eigener Ausgang "Bewaesserung
+ * MQTT-Befehle", je Zone ein Befehl, bw_vorlage_befehle()). Liest nur. */
+if ($bw_post && isset($_POST['befehle_vorlage_laden'])) {
+    $bw_zdatei = bw_vorlage_befehle();
+    if (is_array($bw_zdatei)) {
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $bw_zdatei[0] . '"');
+        echo $bw_zdatei[1];
+        exit;
+    }
+    $bw_fehler[] = bw_t('BEFEHL.FEHLER_VORLAGE');
+    $bw_tab = 'tab-loxone';
+}
 
 /* ---------------- Einstellungen ---------------- */
 if ($bw_post && isset($_POST['speichern'])) {
@@ -435,6 +448,8 @@ if ($bw_post && isset($_POST['speichern'])) {
 if ($bw_post && isset($_POST['save_mqtt'])) {
     $bw_mcfg = bw_config();
     $bw_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    /* Gruppe 2 / MQTT (0.9.44): der Haken der Befehlsbruecke wohnt in diesem Formular (Entwurf gemeinsam 2.11). */
+    $bw_mcfg['befehle_mqtt_ein'] = isset($_POST['befehle_mqtt_ein']) ? 1 : 0;
     $bw_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
         (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
     if ($bw_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $bw_mtopic)) {
@@ -447,6 +462,18 @@ if ($bw_post && isset($_POST['save_mqtt'])) {
     if (!$bw_fehler) {
         if (bw_config_speichern($bw_mcfg)) {
             $bw_meldungen[] = bw_t('EINST.GESPEICHERT');
+            /* Gruppe 2 / MQTT (0.9.44): die Befehlsbruecke sofort schalten (bw_bruecke_schalten()) - der Waechter
+             * im Minutentakt startet nach einem Start hoechstens alle 600 s neu (Stammfassung). */
+            list($bw_brc, $bw_bart, $bw_baus) = bw_bruecke_schalten($bw_mcfg);
+            if ($bw_bart === 'start') {
+                if ($bw_brc === 0) { $bw_meldungen[] = bw_t('BEFEHL.M_EIN'); }
+                else { $bw_misserfolg[] = sprintf(bw_t('BEFEHL.M_START_FEHL'), bw_e($bw_baus)); }
+            } elseif ($bw_bart === 'stop') {
+                if ($bw_brc === 0) { $bw_meldungen[] = bw_t('BEFEHL.M_AUS'); }
+                else { $bw_misserfolg[] = sprintf(bw_t('BEFEHL.M_STOP_FEHL'), bw_e($bw_baus)); }
+            } elseif ($bw_brc === 1 && !empty($bw_mcfg['befehle_mqtt_ein'])) {
+                $bw_misserfolg[] = sprintf(bw_t('BEFEHL.M_START_FEHL'), bw_e($bw_baus));
+            }
         } else {
             $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'),
                                    bw_e($bw_p['config']));
@@ -1356,6 +1383,9 @@ if ($bw_rahmen) {
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
 .sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+/* Gruppe 2 (0.9.44): Kopierknopf der Namenstabelle, zugeklappte Abschnitte. */
+.sm-wrap button.sm-kopier { font-size: 0.8em; padding: 1px 6px; margin-left: 4px; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; color: #333; cursor: pointer; }
+.sm-wrap details > summary { cursor: pointer; font-weight: 600; color: #4f7d17; margin: 18px 0 6px; }
 </style>
 
 <div class="sm-wrap">
@@ -2058,6 +2088,16 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 </table>
 </div>
 <p class="sm-hilfe"><?= bw_t('ZONE.FEIN_FUSSNOTE') ?></p>
+<?php /* Gruppe 2 / MQTT (0.9.44, Entwurf bw 3.3): das Thema der Rueckmeldung ueber die Befehlsbruecke je Zone;
+         das Feld davor ist das alte Rueckmeldethema (wird weiter angenommen, E8). */ ?>
+<p class="sm-hilfe"><?= bw_e(bw_t('ZONE.RM_NEU_H')) ?></p>
+<?php if ($bw_zonen) { ?>
+<ul class="sm-hilfe">
+<?php foreach ($bw_zonen as $bw_zr) { if (!is_array($bw_zr) || !isset($bw_zr['schluessel']) || (string) $bw_zr['schluessel'] === '') { continue; } ?>
+<li><?= bw_e(!empty($bw_zr['name']) ? $bw_zr['name'] : $bw_zr['schluessel']) ?>: <span class="sm-mono"><?= bw_e(bw_rueckmeldung_thema($bw_zr['schluessel'], $bw_cfg)) ?></span></li>
+<?php } ?>
+</ul>
+<?php } ?>
 
 <?php /* Gardena-1 (Verbesserungsbau 01.10.2026): Ausgabe je Zone - ab Werk
          ueber Loxone. Der Geraetename kommt aus der GARDENA-App; die
@@ -2275,6 +2315,10 @@ if (!$bw_vt) { ?>
   <label for="mqtt_topic"><?= bw_e(bw_t('EINST.L_MQTT_TOPIC')) ?></label>
   <input data-role="none" type="text" name="mqtt_topic" id="mqtt_topic" value="<?= bw_e(bw_eingabe('mqtt', 'mqtt_topic', $bw_cfg['mqtt_topic'])) ?>"<?= bw_markierung('mqtt_topic') ?>>
 </div>
+<?php /* Gruppe 2 / MQTT (0.9.44, Entwurf gemeinsam 2.11): ab Werk aus, mit dem Satz zum offenen UDP-Eingang. */ ?>
+<label><input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1"<?= bw_eingabe_an('mqtt', 'befehle_mqtt_ein', !empty($bw_cfg['befehle_mqtt_ein'])) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('MQTT.L_BEFEHLE_EIN')) ?></label>
+<p class="sm-hilfe"><?= bw_e(bw_t('MQTT.BEFEHLE_H')) ?></p>
 <?php /* Schreibweise wie im uebrigen Plugin: die Knopf-Grundklasse dieser
          Linie ist die kurze Form, und die Legendenpunkte bekommen ihre
          Groesse aus '.sm-legende span' und ihre Farbe unmittelbar aus dem
@@ -2318,6 +2362,16 @@ $bw_ret_zone = $bw_rt['zone'];
 <div class="sm-breit">
 <table class="sm-tabelle">
 <tr><th><?= bw_e(bw_t('MQTT.T_THEMA')) ?></th><th><?= bw_e(bw_t('MQTT.T_BEDEUTUNG')) ?></th><th><?= bw_e(bw_t('MQTT.T_RETAIN')) ?></th></tr>
+<?php /* Gruppe 2 (0.9.44): dazu das Lebenszeichen status/ok, status/ts, status/zaehler, status/befehle (sendet
+         die Befehlsbruecke) und je Zone gemessen; "Bestand" heisst: fuer bestehende Anlagen weiter gesendet. */
+$bw_bestand = array('ok', 'alter', 'ts', 'zaehler');
+$bw_bestand_z = array('ok', 'defizit_mm', 'bedarf_mm');
+$bw_bestand_t = ' <span class="sm-hilfe">(' . bw_e(bw_t('MQTT.BESTAND')) . ')</span>';
+foreach (array('status/ok' => 'MQTT.B_STATUS_OK', 'status/zaehler' => 'MQTT.B_STATUS_ZAEHLER',
+               'status/ts' => 'MQTT.B_STATUS_TS', 'status/befehle' => 'MQTT.B_STATUS_BEFEHLE') as $bw_k => $bw_v) { ?>
+<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?></td>
+    <td><span class="sm-hilfe"><?= bw_e(bw_t('MQTT.RETAIN_NEIN')) ?></span></td></tr>
+<?php } ?>
 <?php foreach (array('ok' => 'MQTT.B_OK', 'et0' => 'MQTT.B_ET0', 'giessen' => 'MQTT.B_GIESSEN',
                      'durchlaeufe' => 'MQTT.B_DURCHLAEUFE', 'noetige_durchlaeufe' => 'MQTT.B_NOETIG',
                      'reicht' => 'MQTT.B_REICHT', 'deckt' => 'MQTT.B_DECKT',
@@ -2326,7 +2380,7 @@ $bw_ret_zone = $bw_rt['zone'];
                      'gesperrt' => 'MQTT.B_GESPERRT', 'sperrgrund' => 'MQTT.B_SPERRGRUND',
                      'plan_fest' => 'MQTT.B_PLANFEST',
                      'gekuerzt_min' => 'MQTT.B_GEKUERZT') as $bw_k => $bw_v) { ?>
-<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?></td>
+<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?><?= in_array($bw_k, $bw_bestand, true) ? $bw_bestand_t : '' ?></td>
     <td><?= in_array($bw_k, $bw_ret, true) ? bw_e(bw_t('MQTT.RETAIN_JA')) : '<span class="sm-hilfe">' . bw_e(bw_t('MQTT.RETAIN_NEIN')) . '</span>' ?></td></tr>
 <?php } ?>
 <?php foreach ($bw_zonen as $bw_z) { $bw_s = bw_e($bw_z['schluessel']);
@@ -2336,12 +2390,14 @@ $bw_ret_zone = $bw_rt['zone'];
                    'liter' => 'MQTT.B_ZONE_LITER', 'minuten' => 'MQTT.B_ZONE_MINUTEN',
                    'sekunden' => 'MQTT.B_ZONE_SEKUNDEN',
                    'durchlaeufe' => 'MQTT.B_ZONE_DURCHLAEUFE',
-                   'gegossen_mm' => 'MQTT.B_ZONE_GEGOSSEN') as $bw_zk => $bw_zv) { ?>
-<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/<?= $bw_s ?>/<?= bw_e($bw_zk) ?></td><td><?= sprintf(bw_t($bw_zv), bw_e($bw_z['name'])) ?></td>
+                   'gegossen_mm' => 'MQTT.B_ZONE_GEGOSSEN',
+                   'gemessen' => 'MQTT.B_ZONE_GEMESSEN') as $bw_zk => $bw_zv) { ?>
+<tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic']) ?>/<?= $bw_s ?>/<?= bw_e($bw_zk) ?></td><td><?= sprintf(bw_t($bw_zv), bw_e($bw_z['name'])) ?><?= in_array($bw_zk, $bw_bestand_z, true) ? $bw_bestand_t : '' ?></td>
     <td><?= in_array($bw_zk, $bw_ret_zone, true) ? bw_e(bw_t('MQTT.RETAIN_JA')) : '<span class="sm-hilfe">' . bw_e(bw_t('MQTT.RETAIN_NEIN')) . '</span>' ?></td></tr>
 <?php } } ?>
 </table>
 </div>
+<p class="sm-hilfe"><?= bw_e(bw_t('MQTT.BESTAND_H')) ?></p>
 </div>
 
 <!-- ============ Einbindung in Loxone ============ -->
@@ -2352,76 +2408,151 @@ $bw_ret_zone = $bw_rt['zone'];
   <span class="sm-b-aktion"></span><?= bw_t('LEGENDE.AKTION') ?>
 </div>
 <p class="sm-hilfe"><?= bw_t('LOX.EINLEITUNG') ?></p>
+<?php
+/* Gruppe 2 / MQTT (0.9.44; Entwurf bw 2.5, Nachtrag 2 Gruppe 1): MQTT ist der Weg des Musterprojekts (Schritt 1-7);
+ * der bisherige HTTP-Weg steht zugeklappt unter "Bestehende Anlagen". Alle Namen kommen aus derselben Rechnung wie
+ * der Dienst (bw_mqtt_praefix(), bw_mqtt_gateway_name()); Namenstabelle und Hakenliste aus bw_mqtt_namen(); die
+ * Befehle aus bb_liste() der Befehlsbruecke (bw_bruecke_liste()). */
+$bw_eb_pf = bw_mqtt_praefix($bw_cfg);
+$bw_eb_m = bw_mqtt_zustand();
+$bw_eb_gw = isset($bw_eb_m['fassung']) ? (int) $bw_eb_m['fassung'] : 0;
+$bw_eb_nt = bw_mqtt_namen($bw_cfg);
+$bw_eb_takt = max(60, min(3600, (int) (is_numeric($bw_cfg['takt']) ? $bw_cfg['takt'] : 300)));
+list($bw_eb_bl, $bw_eb_bl_fehl) = bw_bruecke_liste(); ?>
 
-<div class="sm-step">
-<h3><?= bw_e(bw_t('LOX.S1_TITEL')) ?></h3>
-<p class="sm-hilfe"><?= bw_t('LOX.S1_TEXT') ?></p>
-<table class="sm-tabelle">
-<tr><th><?= bw_e(bw_t('LOX.T_TITEL')) ?></th><th><?= bw_e(bw_t('LOX.T_BEFEHL')) ?></th><th><?= bw_e(bw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
-<?php foreach (bw_status_felder() as $bw_feld => $bw_info) { ?>
-<?php /* Titel UND Suchmuster kommen aus derselben Quelle wie die
-         Importvorlage - bw_status_felder() und bw_check().
-
-         Bis 0.9.21 stand hier beides von Hand: als Titel "BEW_<FELD>",
-         waehrend die Vorlage laengst "Bewaesserung heute Nacht giessen"
-         anlegt, und als Muster eines OHNE das fuehrende Semikolon,
-         waehrend die Baustein-Liste zwei Absaetze weiter unten eines
-         MIT Semikolon zeigt. Die beiden Muster stehen hier absichtlich
-         NICHT woertlich: die Pruefzeile im Reiter Test sucht genau
-         diese Zeichenfolge, und ein Kommentar darf nicht enthalten,
-         wonach ein Werkzeug sucht. Gemessen an der gerenderten Seite:
-         0 von 10 Mustern der Tabelle trugen das Trennzeichen, 4 von 4 der
-         Liste. Wer abschrieb, baute etwas anderes als das Plugin
-         dokumentiert - und wer beides tat, hatte zwei Eingaenge auf
-         derselben Adresse. */ ?>
-<tr><td class="sm-mono"><?= bw_e($bw_info[2]) ?></td><td class="sm-mono"><?= bw_e(bw_check($bw_feld)) ?></td>
-    <td><?= bw_t($bw_info[1]) ?><?= $bw_info[0] !== '' ? ' [' . bw_e($bw_info[0]) . ']' : '' ?></td></tr>
-<?php } ?>
-</table>
-<p class="sm-hilfe sm-mono">http://<?= bw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'loxberry') ?>/plugins/<?= bw_e($bw_p['plugin']) ?>/index.php?token=<?= bw_e($bw_token) ?>&amp;aktion=status</p>
-<form action="index.php" method="post" style="display:inline">
-  <?php echo bw_fmt(); ?>
-  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-  <?php /* Grau: Vorlage-Knoepfe im Reiter "Einbindung in Loxone" sind
-           technische Auskunft, nicht "liest nur" (Regeln/04). */ ?>
-  <button data-role="none" class="sm-b sm-b-technik" name="vorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_VORLAGE')) ?></button>
-</form>
-<?php /* Der Satz gehoert sichtbar in den Reiter, nicht nur in die Hilfe:
-         zweimal importiert heisst doppelte Objekte (Regeln/04). Bis 0.9.21
-         stand er in keiner der beiden Sprachdateien. */ ?>
-<p class="sm-hilfe"><?= bw_t('LOX.IMPORT_HINWEIS') ?></p>
-<?php /* Welle Bild 11 VOLL (0.9.41): Vorlage je Zone (mit Auswahl) und
-         Rueckmeldevorlage - nur, wenn es Zonen gibt. Grau wie der Knopf
-         darueber (technische Auskunft, Regeln/04). */
-$bw_lz = bw_zonen(); ?>
-<?php if ($bw_lz) { ?>
-<p class="sm-hilfe"><?= bw_t('LOX.ERKLAERUNG_ZONE') ?></p>
-<form action="index.php" method="post" style="display:inline">
-  <?php echo bw_fmt(); ?>
-  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-  <label for="bw_vorlage_zone"><?= bw_e(bw_t('LOX.L_ZONE')) ?></label>
-  <select data-role="none" name="zone" id="bw_vorlage_zone">
-  <?php foreach ($bw_lz as $bw_lzz) { if (!is_array($bw_lzz) || !isset($bw_lzz['schluessel'])) { continue; } ?>
-    <option value="<?= bw_e($bw_lzz['schluessel']) ?>"><?= bw_e((isset($bw_lzz['name']) ? $bw_lzz['name'] : '') . ' (' . $bw_lzz['schluessel'] . ')') ?></option>
-  <?php } ?>
-  </select>
-  <button data-role="none" class="sm-b sm-b-technik" name="zonenvorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_ZONENVORLAGE')) ?></button>
-</form>
-<p class="sm-hilfe"><?= bw_t('LOX.ERKLAERUNG_RM') ?></p>
-<form action="index.php" method="post" style="display:inline">
-  <?php echo bw_fmt(); ?>
-  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-  <button data-role="none" class="sm-b sm-b-technik" name="rueckmeldung_laden" value="1"><?= bw_e(bw_t('LOX.K_RUECKMELDUNG')) ?></button>
-</form>
+<div class="sm-step" id="eb-mqtt">
+<h3><?= bw_e(bw_t('LOX.MQ_S1_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_e(bw_t('LOX.MQ_S1_TEXT')) ?></p>
+<?php if (!empty($bw_cfg['mqtt_ein'])) { ?>
+<p class="sm-hilfe" id="eb-mqtt-ein"><?= bw_e(sprintf(bw_t('LOX.MQ_S1_EIN'), $bw_eb_pf)) ?></p>
 <?php } else { ?>
-<p class="sm-hilfe"><?= bw_t('LOX.KEINE_ZONE') ?></p>
+<div class="sm-fehler" id="eb-mqtt-aus"><b><?= bw_e(bw_t('LOX.MQ_S1_AUS')) ?></b></div>
 <?php } ?>
 </div>
 
-<div class="sm-step">
-<h3><?= bw_e(bw_t('LOX.S2_TITEL')) ?></h3>
-<p class="sm-hilfe"><?= bw_t('LOX.S2_TEXT') ?></p>
-<div class="sm-hinweis"><?= bw_t('LOX.S2_HINWEIS') ?></div>
+<div class="sm-step" id="eb-gateway">
+<h3><?= bw_e(bw_t('LOX.MQ_S2_TITEL')) ?></h3>
+<?php if ($bw_eb_gw < 2) { ?>
+<div class="sm-warnung"><?= bw_abo_text() ?></div>
+<?php } ?>
+<?php if ($bw_eb_gw <= 0 || $bw_eb_gw >= 2) {
+    $bw_eb_haken = array();
+    $bw_eb_seite = 0;
+    foreach ($bw_eb_nt as $bw_e3) {
+        if (!$bw_e3['haken']) { continue; }
+        $bw_eb_haken[] = $bw_e3;
+        if ($bw_e3['muster']) { $bw_eb_seite++; }
+    } ?>
+<p class="sm-hilfe" id="eb-v2"><?= bw_e(sprintf(bw_t('LOX.MQ_S2_V2'), $bw_eb_pf)) ?></p>
+<div class="sm-breit"><table class="sm-tabelle" id="eb-hakenliste">
+<tr><th>#</th><th><?= bw_e(bw_t('LOX.HAKEN_SP_THEMA')) ?></th><th><?= bw_e(bw_t('LOX.HAKEN_SP_NAME')) ?></th><th><?= bw_e(bw_t('LOX.HAKEN_SP_SEITE')) ?></th></tr>
+<?php foreach ($bw_eb_haken as $bw_hi => $bw_h) { ?>
+<tr><td><?= (int) $bw_hi + 1 ?></td><td class="sm-mono"><?= bw_e(bw_mqtt_thema($bw_h['thema'], $bw_cfg)) ?></td><td class="sm-mono"><?= bw_e($bw_h['name']) ?></td><td><?= $bw_h['muster'] ? bw_e(bw_t('LOX.HAKEN_JA')) : '&ndash;' ?></td></tr>
+<?php } ?>
+</table></div>
+<p class="sm-hilfe"><?= bw_e(sprintf(bw_t('LOX.HAKEN_ZAHL'), count($bw_eb_haken), $bw_eb_seite)) ?> <?= bw_e(bw_t('LOX.HAKEN_RESET')) ?></p>
+<?php } ?>
+<p class="sm-hilfe" id="eb-reconnect"><?= bw_e(bw_t('LOX.RECONNECT')) ?></p>
+</div>
+
+<?php /* Keine Importvorlage fuer die Werte (Entscheidung des Hausherrn 19.10.2026): je Zahl ein Virtueller Eingang,
+   fuer sperrgrund ein Virtueller Texteingang, Name exakt (Kopierknopf). Der Kopierknopf braucht kein
+   navigator.clipboard (LoxBerry laeuft ueber http, dort fehlt es): er markiert den Namen in einem Hilfsfeld und
+   kopiert mit execCommand; geht beides nicht, steht danach der Name auf dem Knopf. */ ?>
+<div class="sm-step" id="eb-eingaenge">
+<h3><?= bw_e(bw_t('LOX.MQ_S3_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_e(bw_t('LOX.MQ_S3_TEXT')) ?></p>
+<ul class="sm-hilfe">
+<li><?= bw_e(bw_t('LOX.MQ_S3_DIGITAL')) ?></li>
+<li><?= bw_e(bw_t('LOX.MQ_S3_RECHTE')) ?></li>
+<li><?= bw_e(bw_t('LOX.MQ_S3_MUSTER')) ?></li>
+<li><?= bw_e(bw_t('LOX.MQ_S3_ZONE')) ?></li>
+</ul>
+<?php if (!$bw_zonen) { ?>
+<p class="sm-hilfe"><?= bw_e(bw_t('LOX.NT_KEINE_ZONE')) ?></p>
+<?php } ?>
+<div class="sm-breit"><table class="sm-tabelle" id="eb-namen">
+<tr><th><?= bw_e(bw_t('LOX.NT_NAME')) ?></th><th><?= bw_e(bw_t('LOX.NT_BEDEUTUNG')) ?></th><th><?= bw_e(bw_t('LOX.NT_BEREICH')) ?></th><th><?= bw_e(bw_t('LOX.NT_ART')) ?></th></tr>
+<?php foreach ($bw_eb_nt as $bw_ne) { if ($bw_ne['gruppe'] === 'bestand') { continue; } ?>
+<tr><td style="white-space:nowrap"><span class="sm-mono"><?= bw_e($bw_ne['name']) ?></span> <button data-role="none" type="button" class="sm-kopier" data-name="<?= bw_e($bw_ne['name']) ?>" title="<?= bw_e(bw_t('LOX.NT_KOPIEREN')) ?>"><?= bw_e(bw_t('LOX.NT_KOPIEREN')) ?></button></td>
+<td><?= bw_e(bw_mqtt_bedeutung($bw_ne)) ?><?php if ($bw_ne['muster']) { ?> <span class="sm-hilfe">(<?= bw_e(bw_t('LOX.NT_SEITE')) ?>)</span><?php } ?></td>
+<td class="sm-hilfe"><?= bw_e($bw_ne['bereich']) ?></td>
+<td><?= bw_e(bw_t($bw_ne['art'] === 'text' ? 'LOX.NT_TEXT' : 'LOX.NT_ZAHL')) ?></td></tr>
+<?php } ?>
+</table></div>
+<details>
+<summary><?= bw_e(bw_t('LOX.NT_BESTAND_TITEL')) ?></summary>
+<p class="sm-hilfe"><?= bw_e(bw_t('LOX.NT_BESTAND_TEXT')) ?></p>
+<div class="sm-breit"><table class="sm-tabelle" id="eb-namen-bestand">
+<tr><th><?= bw_e(bw_t('LOX.NT_NAME')) ?></th><th><?= bw_e(bw_t('LOX.NT_BEDEUTUNG')) ?></th><th><?= bw_e(bw_t('LOX.NT_BEREICH')) ?></th></tr>
+<?php foreach ($bw_eb_nt as $bw_ne) { if ($bw_ne['gruppe'] !== 'bestand') { continue; } ?>
+<tr><td class="sm-mono"><?= bw_e($bw_ne['name']) ?></td><td><?= bw_e(bw_mqtt_bedeutung($bw_ne)) ?></td><td class="sm-hilfe"><?= bw_e($bw_ne['bereich']) ?></td></tr>
+<?php } ?>
+</table></div>
+</details>
+<script>
+(function () {
+  var knoepfe = document.querySelectorAll('#eb-namen button.sm-kopier');
+  for (var i = 0; i < knoepfe.length; i++) {
+    knoepfe[i].addEventListener('click', function () {
+      var f = document.createElement('textarea');
+      f.value = this.getAttribute('data-name');
+      f.setAttribute('readonly', '');
+      f.style.position = 'absolute'; f.style.left = '-9999px';
+      document.body.appendChild(f);
+      f.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(f);
+      this.textContent = ok ? '✓' : this.getAttribute('data-name');
+    });
+  }
+})();
+</script>
+</div>
+
+<div class="sm-step" id="eb-ausfall">
+<h3><?= bw_e(bw_t('LOX.MQ_S4_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_e(sprintf(bw_t('LOX.MQ_S4_TEXT'), bw_mqtt_gateway_name('status/zaehler', $bw_cfg), 5 * $bw_eb_takt, $bw_eb_takt, bw_mqtt_gateway_name('status/ok', $bw_cfg))) ?></p>
+</div>
+
+<div class="sm-step" id="eb-befehle">
+<h3><?= bw_e(bw_t('BEFEHL.TITEL')) ?></h3>
+<?php if ($bw_eb_bl === null) { ?>
+<div class="sm-fehler"><?= bw_e(sprintf(bw_t('BEFEHL.NICHT_LADBAR'), $bw_eb_bl_fehl)) ?></div>
+<?php } else {
+    $bw_eb_bp = function_exists('bb_pfade') ? bb_pfade() : array();
+    $bw_eb_port = $bw_eb_bp ? bb_broker($bw_eb_bp)['udpin'] : (!empty($bw_eb_m['udpport']) ? (int) $bw_eb_m['udpport'] : 11884); ?>
+<p class="sm-hilfe"><?= bw_e(sprintf(bw_t('BEFEHL.TEXT'), (int) $bw_eb_port)) ?></p>
+<div class="<?= !empty($bw_cfg['befehle_mqtt_ein']) ? 'sm-hinweis' : 'sm-warnung' ?>" id="eb-befehle-haken"><?= bw_e(bw_t(!empty($bw_cfg['befehle_mqtt_ein']) ? 'BEFEHL.HAKEN_AN' : 'BEFEHL.HAKEN_AUS')) ?></div>
+<?php if (!$bw_zonen) { ?>
+<p class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.KEINE_ZONE')) ?></p>
+<?php } else {
+    $bw_eb_b = $bw_eb_bl['befehle'][0]; ?>
+<div class="sm-breit"><table class="sm-tabelle" id="eb-befehlsliste">
+<tr><th><?= bw_e(bw_t('BEFEHL.SP_ZONE')) ?></th><th><?= bw_e(bw_t('BEFEHL.SP_TITEL')) ?></th><th><?= bw_e(bw_t('BEFEHL.SP_BEFEHL')) ?></th><th><?= bw_e(bw_t('BEFEHL.SP_SPERRE')) ?></th><th><?= bw_e(bw_t('BEFEHL.SP_QUITTUNG')) ?></th></tr>
+<?php foreach ($bw_zonen as $bw_bz3) {
+    if (!is_array($bw_bz3) || !isset($bw_bz3['schluessel']) || (string) $bw_bz3['schluessel'] === '') { continue; }
+    $bw_bn3 = (isset($bw_bz3['name']) && trim((string) $bw_bz3['name']) !== '') ? trim((string) $bw_bz3['name']) : (string) $bw_bz3['schluessel']; ?>
+<tr><td><?= bw_e($bw_bn3) ?></td>
+<td><?= bw_e("Bew\u{e4}sserung " . $bw_bn3 . " R\u{fc}ckmeldung (MQTT)") ?><div class="sm-hilfe"><?= bw_e(bw_t($bw_eb_b['kachel'])) ?></div></td>
+<td class="sm-mono"><?= bw_e('publish ' . bw_rueckmeldung_thema($bw_bz3['schluessel'], $bw_cfg) . ' <v.0>') ?></td>
+<td class="sm-hilfe"><?= bw_e(sprintf(bw_t('BEFEHL.SPERRE'), (int) $bw_eb_b['sperre_s'])) ?></td>
+<td><?= bw_e(bw_t($bw_eb_b['quittung'] === 'uebergeben' ? 'BEFEHL.QUITTUNG_UEBERGEBEN' : 'BEFEHL.QUITTUNG_AUSGEFUEHRT')) ?></td></tr>
+<?php } ?>
+</table></div>
+<p class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.ZONEN_H')) ?></p>
+<?php } ?>
+<p class="sm-hilfe"><?= sprintf(bw_t('BEFEHL.QUITTUNG_H'), bw_e($bw_eb_bl['lebenszeichen'])) ?></p>
+<?php if ($bw_zonen) { ?>
+<form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <button data-role="none" class="sm-b sm-b-technik" name="befehle_vorlage_laden" value="1"><?= bw_e(bw_t('BEFEHL.K_VORLAGE')) ?></button>
+</form>
+<p class="sm-hilfe"><?= bw_t('BEFEHL.VORLAGE_H') ?></p>
+<?php } ?>
+<?php } ?>
 </div>
 
 <div class="sm-step">
@@ -2429,11 +2560,10 @@ $bw_lz = bw_zonen(); ?>
 <p class="sm-hilfe"><?= bw_t('LOX.S3_TEXT') ?></p>
 <?php
 /* O12 (Durchgang 30.09.2026): die Listen kommen aus bw_baustein_liste()
- * (bw_lib.php) - die Seite 1 vergleicht der Reiter Test mit der erzeugten
- * Vorlage. Welle Bild 6 (0.9.40): die Liste des Musterprojekts.
- * Welle Bild 11 VOLL (0.9.41): zwei Seiten, je Ueberschrift, Kasten "So
+ * (bw_lib.php). Welle Bild 11 VOLL (0.9.41): zwei Seiten, je Ueberschrift, Kasten "So
  * uebernehmen Sie diese Seite", Tabelle, Hinweise, Bild und Link
- * (bw_baustein_seite()); jeder Abschnitt immer sichtbar. */
+ * (bw_baustein_seite()); jeder Abschnitt immer sichtbar. Gruppe 2 (0.9.44): die Namen
+ * der Eingaenge sind die des MQTT-Gateways (bw_mqtt_gateway_name()). */
 foreach (array(1, 2) as $bw_ls) {
     $bw_lk = bw_baustein_seite($bw_ls); ?>
 <h3><?= bw_e($bw_lk['titel']) ?></h3>
@@ -2469,6 +2599,72 @@ foreach (array(1, 2) as $bw_ls) {
 <p class="sm-hilfe"><?= bw_t('LOX.S3_ANSAGE') ?></p>
 </div>
 
+<div class="sm-step" id="eb-gegenprobe">
+<h3><?= bw_e(bw_t('LOX.MQ_S7_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_e(sprintf(bw_t('LOX.MQ_S7_TEXT'), bw_mqtt_gateway_name('status/zaehler', $bw_cfg), $bw_eb_takt)) ?></p>
+</div>
+
+<?php /* Gruppe 2 (0.9.44): der bisherige Weg ueber HTTP, zugeklappt - fuer bestehende Anlagen unveraendert (Vorlagen,
+   Adresse mit Token, Token, Ausfallerkennung ueber ALTER, Gegenprobe, alte Rueckmeldevorlage). */ ?>
+<details id="eb-http">
+<summary><?= bw_e(bw_t('LOX.HTTP_TITEL')) ?></summary>
+<p class="sm-hilfe"><?= bw_e(bw_t('LOX.HTTP_TEXT')) ?></p>
+
+<div class="sm-step">
+<h3><?= bw_e(bw_t('LOX.S1_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('LOX.S1_TEXT') ?></p>
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('LOX.T_TITEL')) ?></th><th><?= bw_e(bw_t('LOX.T_BEFEHL')) ?></th><th><?= bw_e(bw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
+<?php foreach (bw_status_felder() as $bw_feld => $bw_info) { ?>
+<?php /* Titel UND Suchmuster kommen aus derselben Quelle wie die
+         Importvorlage - bw_status_felder() und bw_check(). Die Muster stehen
+         hier absichtlich NICHT woertlich: die Pruefzeile im Reiter Test sucht
+         genau diese Zeichenfolge, und ein Kommentar darf nicht enthalten,
+         wonach ein Werkzeug sucht. */ ?>
+<tr><td class="sm-mono"><?= bw_e($bw_info[2]) ?></td><td class="sm-mono"><?= bw_e(bw_check($bw_feld)) ?></td>
+    <td><?= bw_t($bw_info[1]) ?><?= $bw_info[0] !== '' ? ' [' . bw_e($bw_info[0]) . ']' : '' ?></td></tr>
+<?php } ?>
+</table>
+<p class="sm-hilfe sm-mono">http://<?= bw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'loxberry') ?>/plugins/<?= bw_e($bw_p['plugin']) ?>/index.php?token=<?= bw_e($bw_token) ?>&amp;aktion=status</p>
+<form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <?php /* Grau: Vorlage-Knoepfe im Reiter "Einbindung in Loxone" sind
+           technische Auskunft, nicht "liest nur" (Regeln/04). */ ?>
+  <button data-role="none" class="sm-b sm-b-technik" name="vorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_VORLAGE')) ?></button>
+</form>
+<p class="sm-hilfe"><?= bw_t('LOX.IMPORT_HINWEIS') ?></p>
+<?php $bw_lz = bw_zonen(); ?>
+<?php if ($bw_lz) { ?>
+<p class="sm-hilfe"><?= bw_t('LOX.ERKLAERUNG_ZONE') ?></p>
+<form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <label for="bw_vorlage_zone"><?= bw_e(bw_t('LOX.L_ZONE')) ?></label>
+  <select data-role="none" name="zone" id="bw_vorlage_zone">
+  <?php foreach ($bw_lz as $bw_lzz) { if (!is_array($bw_lzz) || !isset($bw_lzz['schluessel'])) { continue; } ?>
+    <option value="<?= bw_e($bw_lzz['schluessel']) ?>"><?= bw_e((isset($bw_lzz['name']) ? $bw_lzz['name'] : '') . ' (' . $bw_lzz['schluessel'] . ')') ?></option>
+  <?php } ?>
+  </select>
+  <button data-role="none" class="sm-b sm-b-technik" name="zonenvorlage_laden" value="1"><?= bw_e(bw_t('LOX.K_ZONENVORLAGE')) ?></button>
+</form>
+<p class="sm-hilfe"><?= bw_t('LOX.ERKLAERUNG_RM') ?></p>
+<form action="index.php" method="post" style="display:inline">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <button data-role="none" class="sm-b sm-b-technik" name="rueckmeldung_laden" value="1"><?= bw_e(bw_t('LOX.K_RUECKMELDUNG')) ?></button>
+</form>
+<?php } else { ?>
+<p class="sm-hilfe"><?= bw_t('LOX.KEINE_ZONE') ?></p>
+<?php } ?>
+</div>
+
+<div class="sm-step">
+<h3><?= bw_e(bw_t('LOX.S2_TITEL')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('LOX.S2_TEXT') ?></p>
+<div class="sm-hinweis"><?= bw_t('LOX.S2_HINWEIS') ?></div>
+</div>
+
 <div class="sm-step">
 <h3><?= bw_e(bw_t('LOX.S4_TITEL')) ?></h3>
 <p class="sm-hilfe"><?= bw_t('LOX.S4_TEXT') ?></p>
@@ -2481,15 +2677,9 @@ foreach (array(1, 2) as $bw_ls) {
 </form>
 </div>
 
-<?php /* Schritt 5 und 6 sind seit 0.9.22 dabei. Der Hausstandard verlangt
-         sieben Schritte, dieser Reiter hatte vier: es fehlten die
-         AUSFALLERKENNUNG (das Feld ALTER liefert die Zahl - nirgends stand,
-         wie man daraus in Loxone eine Meldung baut) und die GEGENPROBE. */ ?>
 <div class="sm-step">
 <h3><?= bw_e(bw_t('LOX.S5_TITEL')) ?></h3>
-<?php /* O13 (Durchgang 30.09.2026): die Verzoegerung aus 3 x max(600,
-         takt) - bis 0.9.34 fest 30 Minuten, bei einem Takt ueber 1800 s
-         ein Fehlalarm in jedem Takt (Befund 13). */ ?>
+<?php /* O13 (Durchgang 30.09.2026): die Verzoegerung aus 3 x max(600, takt). */ ?>
 <p class="sm-hilfe"><?= sprintf(bw_t('LOX.S5_TEXT'), (int) ceil(bw_ok_grenze($bw_cfg) / 60)) ?></p>
 </div>
 
@@ -2498,6 +2688,7 @@ foreach (array(1, 2) as $bw_ls) {
 <p class="sm-hilfe"><?= bw_t('LOX.S6_TEXT') ?></p>
 <p class="sm-hilfe sm-mono">http://<?= bw_e(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'loxberry') ?>/plugins/<?= bw_e($bw_p['plugin']) ?>/index.php?token=<?= bw_e($bw_token) ?>&amp;selftest=1</p>
 </div>
+</details>
 </div>
 
 <!-- ============ Test ============ -->

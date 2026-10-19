@@ -830,11 +830,22 @@ function bw_pruefungen()
 
     // Rueckmeldung der ausgebrachten Menge - die Voraussetzung dafuer, dass
     // die Bilanz ueberhaupt stimmen kann.
-    $mit = 0; $ohne = array(); $imz = 0;
+    /* Gruppe 2 / MQTT (0.9.44; Entwurf bw 3.3): zwei Wege. Eine Zone meldet zurueck, wenn sie ein altes
+     * Rueckmeldethema traegt (giess_thema, weiter angenommen) ODER ueber die Befehlsbruecke in den letzten
+     * 48 Stunden etwas kam (rueckmeldung.json). Kam ueber den alten Weg in den letzten 7 Tagen noch etwas, sagt eine
+     * eigene Zeile, dass Loxone auf die Befehlsbruecke umzustellen ist (Merker des Dienstes, rueckmeldung_altweg.json). */
+    $bw_rm = bw_rueckmeldung_lesen();
+    $bw_aw = bw_rueckmeldung_altweg();
+    $mit = 0; $ohne = array(); $imz = 0; $bw_alt = array();
     foreach (bw_zonen() as $z) {
         if (empty($z['im_zyklus'])) { continue; }
         $imz++;
-        if (!empty($z['giess_thema'])) { $mit++; } else { $ohne[] = (string) $z['name']; }
+        $bw_s = isset($z['schluessel']) ? (string) $z['schluessel'] : '';
+        $bw_neu = isset($bw_rm[$bw_s]['ts']) && time() - (int) $bw_rm[$bw_s]['ts'] <= 172800;
+        if (!empty($z['giess_thema']) || $bw_neu) { $mit++; } else { $ohne[] = (string) $z['name']; }
+        if (isset($bw_aw[$bw_s]) && time() - (int) $bw_aw[$bw_s] <= 604800) {
+            $bw_alt[] = (string) $z['name'] . ' (' . (isset($z['giess_thema']) ? (string) $z['giess_thema'] : '') . ')';
+        }
     }
     if ($imz === 0) {
         /* Keine Zone im Zyklus heisst nicht 'der Rueckkanal fehlt',
@@ -852,6 +863,10 @@ function bw_pruefungen()
     } else {
         $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_RUECKKANAL'),
             sprintf(bw_t('TEST.A_RUECKKANAL_OK'), $mit));
+    }
+    if ($bw_alt) {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_RUECKKANAL'),
+            sprintf(bw_t('TEST.A_RUECKKANAL_ALTWEG'), bw_e(implode(', ', $bw_alt))));
     }
 
     // Luecken im Verlauf.
@@ -1277,24 +1292,40 @@ function bw_pruefungen()
      * mehr, Zeile 4 ist der Bewaesserungsbaustein. Die Zeilen 1 bis 3 gegen
      * die Titel der Befehle, und der Titel des Eingangs muss in ihrem Typ
      * stehen ("Vorlage ..."). */
-    list($bw_vn, $bw_vx) = bw_vorlage();
-    $bw_dek = function ($s) { return html_entity_decode($s, ENT_QUOTES | ENT_XML1, 'UTF-8'); };
-    preg_match_all('/<VirtualInHttpCmd Title="([^"]*)"/', $bw_vx, $bw_vt);
-    $bw_titel = array_map($bw_dek, $bw_vt[1]);
-    $bw_kopf = preg_match('/<VirtualInHttp [^>]*Title="([^"]*)"/', $bw_vx, $bw_vk)
-        ? $bw_dek($bw_vk[1]) : '';
+    /* Gruppe 2 / MQTT (0.9.44; Entwurf bw 2.6): die Eingaenge der beiden Listen gegen die Namenstabelle
+     * (bw_mqtt_namen()) mit den Beispielzonen des Musterprojekts (rasen, beet). Bis 0.9.43 standen hier die
+     * Zeilen 1 bis 3 gegen die Titel der HTTP-Importvorlage - die Liste fuehrt seit 0.9.44 Virtuelle Eingaenge mit
+     * den Namen des MQTT-Gateways, die Vorlage bleibt nur fuer bestehende Anlagen. */
+    $bw_vi_typ = sprintf(bw_t('BAUSTEIN.T_VI_GW'), bw_e(bw_vorlage_titel_status()));
+    $bw_nt_muster = array();
+    foreach (bw_mqtt_namen($cfg, array(array('schluessel' => 'rasen', 'name' => 'Rasen'),
+                                       array('schluessel' => 'beet', 'name' => 'Beet'))) as $bw_ntm) {
+        if ($bw_ntm['gruppe'] !== 'bestand') { $bw_nt_muster[$bw_ntm['name']] = true; }
+    }
     $bw_paare = array();
     $bw_un = array();
-    foreach (bw_baustein_liste($cfg, bw_token()) as $bw_bz) {
-        if ($bw_bz[0] < 1 || $bw_bz[0] > 3) { continue; }
-        $bw_paare[] = $bw_bz[0];
-        $bw_ok = in_array($bw_bz[2], $bw_titel, true)
-                 && $bw_kopf !== '' && strpos($bw_bz[1], bw_e($bw_kopf)) !== false;
-        if (!$bw_ok) { $bw_un[] = '#' . $bw_bz[0]; }
+    foreach (array(1, 2) as $bw_ls) {
+        foreach (bw_baustein_liste($cfg, '', $bw_ls) as $bw_bz) {
+            if ($bw_bz[1] !== $bw_vi_typ) { continue; }
+            $bw_paare[] = $bw_bz[2];
+            if (!isset($bw_nt_muster[$bw_bz[2]])) { $bw_un[] = ($bw_ls === 2 ? 'Z' : '') . '#' . $bw_bz[0]; }
+        }
     }
-    $zeilen[] = bw_pruefzeile($bw_un ? 0 : 1, bw_t('TEST.F_NAMEN'),
+    $zeilen[] = bw_pruefzeile($bw_un || !$bw_paare ? 0 : 1, bw_t('TEST.F_NAMEN'),
         $bw_un ? sprintf(bw_t('TEST.A_NAMEN_FEHL'), bw_e(implode(', ', $bw_un)))
                : sprintf(bw_t('TEST.A_NAMEN_OK'), count($bw_paare)));
+
+    /* Gruppe 2 / MQTT (0.9.44): sendet der Dienst jedes Thema der Namenstabelle? Die Tabelle (bw_lib.php) gegen
+     * MQTT_GLOBAL/MQTT_ZONE im Python-Quelltext - zwei unabhaengige Stellen; status/befehle sendet die
+     * Befehlsbruecke. */
+    $bw_np = bw_mqtt_namen_pruefen();
+    if ($bw_np === null) {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_NAMENSTABELLE'), bw_t('TEST.A_NAMENSTABELLE_UNLESBAR'));
+    } else {
+        $zeilen[] = bw_pruefzeile($bw_np[1] ? 0 : 1, bw_t('TEST.F_NAMENSTABELLE'),
+            $bw_np[1] ? sprintf(bw_t('TEST.A_NAMENSTABELLE_FEHL'), bw_e(implode(', ', $bw_np[1])))
+                      : sprintf(bw_t('TEST.A_NAMENSTABELLE_OK'), (int) $bw_np[0]));
+    }
 
     /* --- Neu in 0.9.22: liefern die eingerichteten Messgroessen? ---
      *
@@ -1387,6 +1418,11 @@ function bw_pruefungen()
         $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_MQTT'),
             sprintf(bw_t('TEST.A_MQTT_OK'), (int) $g['udpport']));
     }
+    /* Gruppe 2 / MQTT (0.9.44): die Befehlsbruecke (Rueckmeldung aus Loxone), gemessen am Erzeugnis wie im
+     * Waechter. Aus (Haken) ist ein Punkt, kein Kreuz. */
+    list($bw_bl_ok, $bw_bl_text) = bw_bruecke_lage();
+    $zeilen[] = bw_pruefzeile($bw_bl_ok === true ? 1 : ($bw_bl_ok === null ? -1 : 0), bw_t('TEST.F_BRUECKE'),
+                              bw_e($bw_bl_text));
     return $zeilen;
 }
 

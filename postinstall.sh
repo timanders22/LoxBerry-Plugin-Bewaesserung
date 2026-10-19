@@ -403,6 +403,23 @@ if [ "$UPGRADE" = 1 ] && [ -f "$MERKER" ]; then
     fi
 fi
 
+# ---------- Befehlsbruecke (Gruppe 2 / MQTT, 0.9.44) ----------
+# Erst die Marke weg (befehlsbruecke.sh startet nicht, solange eine frische Marke liegt), dann starten - die
+# Bruecke startet nur mit dem Haken "Befehle ueber MQTT annehmen" (ab Werk aus) und misst danach, ob sie laeuft.
+# Ein Sollmerker ist nicht noetig: ob sie laufen soll, sagt allein die Konfiguration. Der Dienst des Plugins ist
+# hier schon gestartet (Ausnahme BW_START_TROTZ_MARKE); gegen einen Doppelstart aus dem Minutentakt schuetzen
+# ihn seit 0.9.35 seine eigenen Sperren (bin/dienst.sh, dienst.lock). Muster: Ferien und Feiertage 1.2.27.
+bw_marke_weg
+BBSH="$PBIN/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    BB_AUS=$(timeout 40 bash "$BBSH" start 2>&1 | head -n 1)
+    case "$BB_AUS" in
+        *gestartet*|*laeuft*) echo "<OK> Befehlsbruecke: $BB_AUS" ;;
+        "Haken aus - kein Start.") echo "<INFO> Befehlsbruecke: aus (Reiter MQTT, Haken 'Befehle ueber MQTT annehmen')." ;;
+        *) echo "<WARNING> Befehlsbruecke: $BB_AUS - der Minutentakt versucht es erneut." ;;
+    esac
+fi
+
 # ---------- Abschluss: Erstanleitung nur ohne eingerichtete Konfiguration ----------
 #
 # Dieses Skript laeuft bei der Erstinstallation UND bei jedem Upgrade;
