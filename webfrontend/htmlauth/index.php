@@ -423,8 +423,9 @@ if ($bw_post && isset($_POST['speichern'])) {
     }
     $bw_tmangel = array();
     $bw_tbean = array();
+    $bw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $bw_cfg['tts'] = ansage_formular_lesen($_POST, bw_tts($bw_cfg), $bw_tmangel, $bw_tbean,
-                                           bw_ansage_opt(), bw_ansage_k());
+        array('modi' => bw_ansage_modi(), 'ziele' => bw_mit_zielen()), bw_ansage_k(), $bw_thinw);
     foreach ($bw_tmangel as $bw_tm) { $bw_fehler[] = bw_e($bw_tm['text']); }
     foreach ($bw_tbean as $bw_tb) { $bw_beanstandet[] = $bw_tb; }
     $bw_n0 = count($bw_fehler);
@@ -433,7 +434,10 @@ if ($bw_post && isset($_POST['speichern'])) {
     }
 
     if (!$bw_fehler) {
-        if (bw_config_speichern($bw_cfg)) { $bw_meldungen[] = bw_t('EINST.GESPEICHERT'); }
+        if (bw_config_speichern($bw_cfg)) {
+            $bw_meldungen[] = bw_t('EINST.GESPEICHERT');
+            foreach ($bw_thinw as $bw_th) { $bw_meldungen[] = $bw_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
+        }
         else { $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['config'])); }
     }
     $bw_tab = 'tab-settings';
@@ -1110,18 +1114,27 @@ if ($bw_post && isset($_POST['selbsttest'])) {
 }
 /* Nr. 36 b: die Testansage. Ins Protokoll nur die Kurzform ohne Text und Token;
  * die Meldung reist mit der Einmalmeldung, F5 spricht nicht erneut (PRG). */
-if ($bw_post && isset($_POST['ansage_test'])) {
-    $bw_ak = bw_ansage_k();
-    $bw_ar = ansage_testansage(bw_tts(bw_config()), $bw_ak);
-    bw_log('Testansage: ' . ansage_kurz($bw_ar));
-    if ($bw_ar['stand'] === 1) {
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
+ * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+if ($bw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    $bw_tk = bw_ansage_k();
+    $bw_tnur = (isset($_POST['ansage_test_ziel']) && bw_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $bw_tnur === 0) {
+        $bw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($bw_tnur >= 1) {
+        $bw_tr = ansage_testansage(bw_tts(bw_config()), $bw_tk, $bw_tnur);
+    } else {
+        $bw_tr = ansage_testansage(bw_tts(bw_config()), $bw_tk);
+    }
+    bw_log('Testansage' . ($bw_tnur >= 1 ? ' an Ziel ' . $bw_tnur : '') . ': ' . ansage_kurz($bw_tr));
+    if ($bw_tr['stand'] === 1) {
         $bw_meldungen[] = bw_e(bw_t('TEST.M_ANSAGE_TEST_OK'));
-    } elseif ($bw_ar['stand'] === -1) {
+    } elseif ($bw_tr['stand'] === -1) {
         $bw_meldungen[] = sprintf(bw_e(bw_t('TEST.M_ANSAGE_TEST_NICHTS')),
-                                  bw_e(ansage_kennung_text($bw_ar['kennung'], $bw_ak)));
+                                  bw_e(ansage_kennung_text($bw_tr['kennung'], $bw_tk)));
     } else {
         $bw_misserfolg[] = sprintf(bw_e(bw_t('TEST.M_ANSAGE_TEST_FEHL')),
-                                   bw_e(ansage_kennung_text($bw_ar['kennung'], $bw_ak)));
+                                   bw_e(ansage_kennung_text($bw_tr['kennung'], $bw_tk)));
     }
     $bw_tab = 'tab-test';
 }
@@ -1204,8 +1217,12 @@ if ($bw_post && isset($_POST['bw_zurueck'])) {
             $bw_neu['tts'] = ansage_sicherung_tokens_behalten(
                 (isset($bw_neu['tts']) && is_array($bw_neu['tts'])) ? $bw_neu['tts'] : ansage_vorgaben('aus'),
                 (isset($bw_altcfg['tts']) && is_array($bw_altcfg['tts'])) ? $bw_altcfg['tts'] : array());
+            /* Welle Mehrfach-Ziele (0.9.45): fehlt die Liste der weiteren Ziele in der Sicherung (aeltere Fassung),
+             * gelten die jetzigen weiteren Ziele (bw_sicherung_spaet(), genannt im Hinweis). */
+            list($bw_neu, $bw_spaet) = bw_sicherung_spaet($bw_neu, $bw_altcfg);
             if (bw_config_speichern($bw_neu)) {
                 $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
+                if ($bw_spaet) { $bw_meldungen[] = sprintf(bw_t('EINST.SICH_SPAET'), bw_e(implode(', ', $bw_spaet))); }
                 /* Die beiden anderen Teile, jeder mit gelesenem
                  * Rueckgabewert. Sie sind zu diesem Zeitpunkt bereits
                  * geprueft - bw_sicherung_lesen() haette sonst null
@@ -1360,7 +1377,8 @@ if ($bw_rahmen) {
 .sm-breit .sm-tabelle { margin: 0; min-width: 760px; }
 .sm-tabelle th, .sm-tabelle td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
 .sm-tabelle th { background: #f5f5f5; font-weight: 600; }
-.sm-b { border: 0; border-radius: 6px; padding: 9px 18px; font-size: 0.93em; cursor: pointer; color: #fff; margin: 4px 6px 4px 0; }
+/* Welle Mehrfach-Ziele (0.9.45): die Knoepfe "Testansage an Ziel n" tragen die Hausklasse sm-btn (gemeinsames Stueck). */
+.sm-b, .sm-btn { border: 0; border-radius: 6px; padding: 9px 18px; font-size: 0.93em; cursor: pointer; color: #fff; margin: 4px 6px 4px 0; }
 /* Die drei verbindlichen Hausfarben (Regeln/04, "Farblegende der Knoepfe").
    Bis 0.9.21 standen hier #4f7d17 / #6b7280 / #d97706 - gemessen am
    06.09.2026 fuehrten 173 Pluginordner des Bestands #6dac20, und diese
@@ -1617,7 +1635,10 @@ if ($bw_rahmen) {
     'w' => function ($n, $g) { return bw_eingabe('settings', $n, $g); },
     'm' => function ($n) { return bw_markierung($n); },
     'c' => function ($n, $g) { return bw_eingabe_an('settings', $n, $g); },
-    'modi' => bw_ansage_modi()), bw_ansage_k()) ?>
+    'modi' => bw_ansage_modi(),
+    /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
+    'ziele' => bw_mit_zielen(),
+    'ziele_post' => bw_eingaben_aktiv() === 'settings' ? bw_ziele_x2_post(bw_eingaben_setzen()['werte']) : null), bw_ansage_k()); ?>
 <?php foreach (bw_ansage_anlaesse() as $bw_ak => $bw_as) { ?>
 <label><input data-role="none" type="checkbox" name="<?= bw_e($bw_ak) ?>" value="1"<?= bw_eingabe_an('settings', $bw_ak, !empty($bw_cfg[$bw_ak])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_ANSAGE_' . $bw_as)) ?></label><br>
@@ -2445,9 +2466,9 @@ list($bw_eb_bl, $bw_eb_bl_fehl) = bw_bruecke_liste(); ?>
     } ?>
 <p class="sm-hilfe" id="eb-v2"><?= bw_e(sprintf(bw_t('LOX.MQ_S2_V2'), $bw_eb_pf)) ?></p>
 <div class="sm-breit"><table class="sm-tabelle" id="eb-hakenliste">
-<tr><th>#</th><th><?= bw_e(bw_t('LOX.HAKEN_SP_THEMA')) ?></th><th><?= bw_e(bw_t('LOX.HAKEN_SP_NAME')) ?></th><th><?= bw_e(bw_t('LOX.HAKEN_SP_SEITE')) ?></th></tr>
+<tr><th>#</th><th><?= bw_e(bw_t('LOX.HAKEN_SP_THEMA')) ?></th><th><?= bw_e(bw_t('LOX.HAKEN_SP_NAME')) ?></th><th><?= bw_e(bw_t('LOX.HAKEN_SP_SEITE')) ?></th><th><?= bw_e(bw_t('LOX.HAKEN_SP_NC')) ?></th></tr>
 <?php foreach ($bw_eb_haken as $bw_hi => $bw_h) { ?>
-<tr><td><?= (int) $bw_hi + 1 ?></td><td class="sm-mono"><?= bw_e(bw_mqtt_thema($bw_h['thema'], $bw_cfg)) ?></td><td class="sm-mono"><?= bw_e($bw_h['name']) ?></td><td><?= $bw_h['muster'] ? bw_e(bw_t('LOX.HAKEN_JA')) : '&ndash;' ?></td></tr>
+<tr><td><?= (int) $bw_hi + 1 ?></td><td class="sm-mono"><?= bw_e(bw_mqtt_thema($bw_h['thema'], $bw_cfg)) ?></td><td class="sm-mono"><?= bw_e($bw_h['name']) ?></td><td><?= $bw_h['muster'] ? bw_e(bw_t('LOX.HAKEN_JA')) : '&ndash;' ?></td><td><?= !empty($bw_h['noncached']) ? bw_e(bw_t('LOX.HAKEN_JA')) : '&ndash;' ?></td></tr>
 <?php } ?>
 </table></div>
 <p class="sm-hilfe"><?= bw_e(sprintf(bw_t('LOX.HAKEN_ZAHL'), count($bw_eb_haken), $bw_eb_seite)) ?> <?= bw_e(bw_t('LOX.HAKEN_RESET')) ?></p>
@@ -2739,6 +2760,9 @@ foreach (array(1, 2) as $bw_ls) {
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-test">
   <button data-role="none" class="sm-b sm-b-aktion" name="ansage_test" value="1"><?= bw_e(bw_t('TEST.K_ANSAGE_TEST')) ?></button>
+<?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
+   ohne weitere Ziele nichts. */
+if (bw_mit_zielen()) { echo ansage_testknoepfe_html(bw_tts($bw_cfg), bw_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
 </form>
 <p class="sm-hilfe"><?= bw_t('TEST.ANSAGE_TEST_HILFE') ?></p>
 <?php if ($bw_ausgabe !== '') { ?>

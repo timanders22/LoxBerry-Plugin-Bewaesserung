@@ -5,12 +5,41 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.44 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.45 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.45
+
+Pflegefassung der Nachtwelle (29.10.2026) mit der Welle Mehrfach-Ziele, ohne Änderung an Rechnung, Werten oder Befehlen:
+
+* **Befehlsbrücke 1.0.2** (gemeinsame Stammfassung, bisher 1.0.0): die Vorlagen der MQTT-Befehle kommen wie die
+  Ausfuhren der Loxone Config mit Windows-Zeilenenden (CRLF); Titel, Adresse und Befehle sind unverändert, ein Neuimport
+  ist nicht nötig. `stop` legt als root nichts mehr an, `befehle_start.log` wird gekappt, der Befehlsordner ist nur für
+  das Plugin lesbar (0700).
+* **Gemeinsame Sprachausgabe 1.2.1** (bisher 1.1.2), dazu die Ausgabearten **Sonos4Lox** und **SonoX** (ab Werk nicht
+  gewählt, ungemessen – kein Sonos im Haus). Das Formular zeigt Zone bzw. Raum, Lautstärke und (SonoX) Sprache; der
+  Reiter Test prüft Installation und Zone bzw. Raum. **SonoX schickt den Ansagetext an Google** und antwortet erst nach
+  der Wiedergabe. Jede Ansage dauert höchstens 15 s – seit 1.2.1 auch mit einem einzigen Ziel und mit Sonos (bisher
+  bis 30 s); der Dienst wartet höchstens 20 s.
+* **Mehrere Lautsprecher gleichzeitig (Sprachmodul 1.2.1):** Unter der Ausgabeart (jetzt „Ziel 1“) nimmt die Tabelle
+  *Weitere Ausgabeziele (gleichzeitig)* bis zu fünf weitere Ziele auf – etwa Google-Lautsprecher (Chromecast 4 Lox NG)
+  in einem Raum und Amazon Echo (Alexa-NG) in einem anderen neben dem Loxone Music Server. Die Ansage geht an alle
+  eingeschalteten Ziele zugleich (eine Ansage dauert so lange wie das langsamste Ziel, höchstens 15 s);
+  scheitert eines, sprechen die anderen. Protokoll und Reiter Test nennen jedes Ziel, im Reiter Test gibt es je Ziel
+  eine Testansage. Die bestehende Einstellung ist unverändert Ziel 1; ohne weitere Ziele verhält sich alles wie in
+  0.9.44. Antwort an Loxone, MQTT-Themen und Brückenbefehl `ansage` bleiben, wie sie sind.
+* **Vor einem Zurückgehen** auf 0.9.44 oder älter die weiteren Ziele entfernen: ältere Fassungen kennen die Liste nicht
+  und fielen beim Laden auf die Werkseinstellung der Sprachausgabe zurück.
+* **Reiter Test, neue Zeile „Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?“** Unter MQTT-Gateway V2
+  liest das Plugin `config/system/subscriptions.json` und nennt jeden Datenpunkt der Hakenliste (Reiter *Einbindung in
+  Loxone*, Schritt 2), der dort nicht angehakt ist, und jeden, bei dem „Noncached“ nicht stimmt. Unter Gateway V1 und
+  bei ausgeschalteter MQTT-Veröffentlichung heißt die Zeile „trifft nicht zu“.
+* **Noncached:** Die Hakenliste hat eine Spalte *Noncached*. Nötig ist es für `status/ok` und `status/befehle`
+  (Gateway V2 unterdrückt einen gleichen Wert; ohne den Haken fehlten beide nach einem Neustart des Miniservers).
 
 ## Neu in 0.9.44
 

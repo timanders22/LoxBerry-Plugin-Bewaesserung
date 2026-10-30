@@ -94,7 +94,12 @@ if ($bw_text === '') {
     echo "ANSAGE;STAND=0;KENNUNG=AUFRUF\n";
     exit(2);
 }
+/* Nachtwelle N9 (0.9.45, Entwurf Sprachmodul 1.2.0 E-E7 [V], N3): der Dienst beendet diese Bruecke nach
+ * ANSAGE_ZEITGRENZE_S = 20 s (bin/bewaesserung_dienst.py); jede Einzelfrist des Moduls (10 s, Sonos4Lox/SonoX
+ * 30 s) wird deshalb auf 20 - 5 = 15 s gekappt. Seit Stamm 1.2.1 (Welle Mehrfach-Ziele, Befund B3) gilt 'frist' in
+ * jedem Weg - mit EINEM Ziel und mit den weiteren Zielen der Tabelle, die gleichzeitig sprechen. Die Antwortzeile
+ * traegt dann zusaetzlich ;ZIELE=x/y; der Dienst nimmt nur Rueckgabewert und Zeile (B8). */
 list($bw_rc, $bw_zeile) = ansage_cli(json_encode(array('text' => $bw_text)), bw_tts(bw_config(false)),
-                                     bw_ansage_k());
+                                     array_merge(bw_ansage_k(), array('frist' => 15)));
 echo $bw_zeile, "\n";
 exit($bw_rc);

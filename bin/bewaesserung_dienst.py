@@ -2216,7 +2216,7 @@ def ventil_lesen() -> tuple:
 #           Stoerung), spricht die naechste wieder.
 # Die Bruecke laeuft in einem eigenen Faden mit Zeitgrenze, damit ein haengendes
 # Alexa-NG den GARDENA-Lauf nicht aufhaelt; es laeuft hoechstens eine zugleich.
-ANSAGE_ZEITGRENZE_S = 20.0      # die Sprachausgabe selbst gibt nach 10 s auf
+ANSAGE_ZEITGRENZE_S = 20.0      # die Bruecke kappt jede Ansage auf 15 s ('frist', bin/bw_ansage.php; B2)
 ANSAGE_HOECHSTENS_WARTEND = 4
 ANSAGE_HAKEN = {"ende": "ansage_ende", "ventil": "ansage_ventil"}
 _ANSAGE_SCHLOSS = threading.Lock()

@@ -1423,6 +1423,11 @@ function bw_pruefungen()
     list($bw_bl_ok, $bw_bl_text) = bw_bruecke_lage();
     $zeilen[] = bw_pruefzeile($bw_bl_ok === true ? 1 : ($bw_bl_ok === null ? -1 : 0), bw_t('TEST.F_BRUECKE'),
                               bw_e($bw_bl_text));
+    /* Nachtwelle N9 (0.9.45): stehen unter MQTT-Gateway V2 die Haken der Hakenliste (Einbindung in Loxone, Schritt 2)
+     * mit dem richtigen Noncached? Liest config/system/subscriptions.json; unter V1 und bei ausgeschaltetem MQTT ein
+     * Punkt. */
+    list($bw_v2s, $bw_v2t) = bw_v2_haken_lage($cfg);
+    $zeilen[] = bw_pruefzeile($bw_v2s === 2 ? -1 : $bw_v2s, bw_t('TEST.F_V2_HAKEN'), bw_e($bw_v2t));
     return $zeilen;
 }
 
