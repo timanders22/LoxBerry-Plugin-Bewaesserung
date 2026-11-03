@@ -425,7 +425,8 @@ if ($bw_post && isset($_POST['speichern'])) {
     $bw_tbean = array();
     $bw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $bw_cfg['tts'] = ansage_formular_lesen($_POST, bw_tts($bw_cfg), $bw_tmangel, $bw_tbean,
-        array('modi' => bw_ansage_modi(), 'ziele' => bw_mit_zielen()), bw_ansage_k(), $bw_thinw);
+        array('modi' => bw_ansage_modi(), 'ziele' => bw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), bw_ansage_k(), $bw_thinw);
+    list($bw_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, bw_ansage_regeln($bw_cfg), array(), $bw_tmangel, $bw_tbean, bw_ansage_k());     // S2: Wann gesprochen wird (Stamm)
     foreach ($bw_tmangel as $bw_tm) { $bw_fehler[] = bw_e($bw_tm['text']); }
     foreach ($bw_tbean as $bw_tb) { $bw_beanstandet[] = $bw_tb; }
     $bw_n0 = count($bw_fehler);
@@ -1122,9 +1123,9 @@ if ($bw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel'
     if (isset($_POST['ansage_test_ziel']) && $bw_tnur === 0) {
         $bw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
     } elseif ($bw_tnur >= 1) {
-        $bw_tr = ansage_testansage(bw_tts(bw_config()), $bw_tk, $bw_tnur);
+        $bw_tr = ansage_testansage(bw_ansage_vor_ort(), $bw_tk, $bw_tnur);
     } else {
-        $bw_tr = ansage_testansage(bw_tts(bw_config()), $bw_tk);
+        $bw_tr = ansage_testansage(bw_ansage_vor_ort(), $bw_tk);
     }
     bw_log('Testansage' . ($bw_tnur >= 1 ? ' an Ziel ' . $bw_tnur : '') . ': ' . ansage_kurz($bw_tr));
     if ($bw_tr['stand'] === 1) {
@@ -1639,6 +1640,11 @@ if ($bw_rahmen) {
     /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
     'ziele' => bw_mit_zielen(),
     'ziele_post' => bw_eingaben_aktiv() === 'settings' ? bw_ziele_x2_post(bw_eingaben_setzen()['werte']) : null), bw_ansage_k()); ?>
+<?= ansage_regeln_html(bw_ansage_regeln($bw_cfg), array(), array(), array(
+    'w' => function ($n, $g) { return bw_eingabe('settings', $n, $g); },
+    'm' => function ($n) { return bw_markierung($n); },
+    'c' => function ($n, $g) { return bw_eingabe_an('settings', $n, $g); },
+    'token_vor_ort' => true), bw_ansage_k()) ?>
 <?php foreach (bw_ansage_anlaesse() as $bw_ak => $bw_as) { ?>
 <label><input data-role="none" type="checkbox" name="<?= bw_e($bw_ak) ?>" value="1"<?= bw_eingabe_an('settings', $bw_ak, !empty($bw_cfg[$bw_ak])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_ANSAGE_' . $bw_as)) ?></label><br>
@@ -2764,6 +2770,7 @@ foreach (array(1, 2) as $bw_ls) {
    ohne weitere Ziele nichts. */
 if (bw_mit_zielen()) { echo ansage_testknoepfe_html(bw_tts($bw_cfg), bw_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
 </form>
+<?= bw_ansage_lage_html() ?>
 <p class="sm-hilfe"><?= bw_t('TEST.ANSAGE_TEST_HILFE') ?></p>
 <?php if ($bw_ausgabe !== '') { ?>
 <div class="sm-log"><?= bw_e($bw_ausgabe) ?></div>

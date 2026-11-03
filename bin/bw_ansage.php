@@ -99,7 +99,15 @@ if ($bw_text === '') {
  * 30 s) wird deshalb auf 20 - 5 = 15 s gekappt. Seit Stamm 1.2.1 (Welle Mehrfach-Ziele, Befund B3) gilt 'frist' in
  * jedem Weg - mit EINEM Ziel und mit den weiteren Zielen der Tabelle, die gleichzeitig sprechen. Die Antwortzeile
  * traegt dann zusaetzlich ;ZIELE=x/y; der Dienst nimmt nur Rueckgabewert und Zeile (B8). */
-list($bw_rc, $bw_zeile) = ansage_cli(json_encode(array('text' => $bw_text)), bw_tts(bw_config(false)),
-                                     array_merge(bw_ansage_k(), array('frist' => 15)));
-echo $bw_zeile, "\n";
-exit($bw_rc);
+/* 0.9.46: Nachtruhe, Sperre und Schalter stehen im Stamm; gesprochen wird in einem eigenen Vorgang (bw_ansage_senden()). Ein gestoertes Ventil spricht auch nachts. */
+$bw_cf = bw_config(false);
+if (bw_tts($bw_cf)['mode'] === 'aus') {
+    echo "ANSAGE;STAND=-2;KENNUNG=AUS\n";
+    exit(3);
+}
+$bw_anl = (string) $bw_auftrag['anlass'];
+bw_ansage_token_pflegen($bw_cf);
+bw_ansage_legen(array(array('schluessel' => $bw_anl . ($bw_anl === 'ventil' ? '|' . (isset($bw_auftrag['ventil']) ? (string) $bw_auftrag['ventil'] : '') . '|' . (isset($bw_auftrag['befehl']) ? (string) $bw_auftrag['befehl'] : '') : ''),
+                              'text' => $bw_text, 'dringend' => $bw_anl === 'ventil')));
+echo "ANSAGE;STAND=1;KENNUNG=GELEGT\n";
+exit(0);

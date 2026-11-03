@@ -17,10 +17,15 @@
 # Leeren der Ramdisk ging die Fehlerausgabe verloren, und die Logwartung
 # raeumte die Datei als alt ab.
 mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
-touch "REPLACELBPLOGDIR/cron.err" 2>/dev/null
-"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"
+ERR="REPLACELBPLOGDIR/cron.err"
+touch "$ERR" 2>/dev/null
+# 0.9.46 (Nachzug 01.11.2026, Bauart Renault NG 2.1.23): ist die Fehlerdatei nicht schreibbar, braeche die
+# Umlenkung den Befehl ab, BEVOR er startet - bis 0.9.45 kein Lauf und keine Spur. Dann geht die Fehlerausgabe
+# nach /dev/null, und der Lauf findet statt.
+[ -f "$ERR" ] && [ -w "$ERR" ] || ERR=/dev/null
+"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"$ERR"
 # Gruppe 2 / MQTT (0.9.44): Waechter der Befehlsbruecke (gemeinsame Stammfassung). Diese Linie hat keinen
 # PHP-Minutentakt, also hier (Bauvorschrift Gruppe 1, Nachtrag 19.10.2026). Er startet die Bruecke nur mit dem
 # Haken "Befehle ueber MQTT annehmen", haelt sie sonst an und sendet <praefix>/status/befehle (nie retained).
 # Aufruf ueber bash (das Skript ist bash, nicht sh); stdout weg, Fehler ins Protokoll wie oben.
-bash "REPLACELBPBINDIR/befehlsbruecke.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"
+bash "REPLACELBPBINDIR/befehlsbruecke.sh" waechter >/dev/null 2>>"$ERR"

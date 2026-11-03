@@ -277,12 +277,12 @@ VORGABEN = {
     "gardena_max_min": 60,
     #
     # Nr. 36 b (Stufe 2, seit 0.9.38): Sprachausgabe ueber die gemeinsame Sprachausgabe der
-    # Plugins (PHP, Bruecke bin/bw_ansage.php). Die Ausgabe selbst ist ab Werk AUS (Block
-    # tts, Ausgabeart "aus"); seine Vorgaben stehen nur in PHP (ansage_vorgaben()), der
+    # Plugins (PHP, Bruecke bin/bw_ansage.php). Die Ausgabe selbst ist seit 0.9.46 ab Werk AN (Block
+    # tts); seine Vorgaben stehen nur in PHP (ansage_werk_block()), der
     # Dienst liest ihn nie und fuehrt hier nur den Namen. Die beiden Haken waehlen die
     # Anlaesse einzeln ab und stehen ab Werk an - wer die Ausgabe einschaltet, hoert sofort.
     "ansage_ende": 1, "ansage_ventil": 1,
-    "tts": None,
+    "tts": None, "ansage_regeln": None, "ansage_token_herkunft": None,
     #
     # Gruppe 2 / MQTT (0.9.44): der Haken "Befehle ueber MQTT annehmen" der gemeinsamen Befehlsbruecke
     # (PHP, bin/befehlsbruecke.php). AUS ab Werk. Der Dienst liest ihn nie; er steht hier, damit beide

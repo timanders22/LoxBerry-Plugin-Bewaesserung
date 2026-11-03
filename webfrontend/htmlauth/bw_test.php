@@ -546,7 +546,7 @@ function bw_gardena_lauf_zeile()
 function bw_ansage_zeile($cfg)
 {
     $tts = bw_tts($cfg);
-    list($st, $text) = ansage_pruefzeile($tts, true, bw_ansage_k());
+    list($st, $text) = ansage_pruefzeile(bw_ansage_pruefblock($cfg), true, bw_ansage_k());
     if ($tts['mode'] !== 'aus') {
         $an = array();
         foreach (bw_ansage_anlaesse() as $bw_ak => $bw_as) {
