@@ -166,6 +166,7 @@ $bw_kommazahl = function ($s) {
 /* ---------------- Loxone-Vorlage ---------------- */
 if ($bw_post && isset($_POST['vorlage_laden'])) {
     list($bw_name, $bw_xml) = bw_vorlage();
+    while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: application/xml; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $bw_name . '"');
     echo $bw_xml;
@@ -182,6 +183,7 @@ if ($bw_post && isset($_POST['zonenvorlage_laden'])) {
     $bw_zwahl = (isset($_POST['zone']) && is_string($_POST['zone'])) ? $_POST['zone'] : '';
     $bw_zdatei = bw_zonen_vorlage($bw_zwahl);
     if (is_array($bw_zdatei)) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/xml; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $bw_zdatei[0] . '"');
         echo $bw_zdatei[1];
@@ -193,6 +195,7 @@ if ($bw_post && isset($_POST['zonenvorlage_laden'])) {
 if ($bw_post && isset($_POST['rueckmeldung_laden'])) {
     $bw_zdatei = bw_rueckmelde_vorlage();
     if (is_array($bw_zdatei)) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/xml; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $bw_zdatei[0] . '"');
         echo $bw_zdatei[1];
@@ -206,6 +209,7 @@ if ($bw_post && isset($_POST['rueckmeldung_laden'])) {
 if ($bw_post && isset($_POST['befehle_vorlage_laden'])) {
     $bw_zdatei = bw_vorlage_befehle();
     if (is_array($bw_zdatei)) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/xml; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $bw_zdatei[0] . '"');
         echo $bw_zdatei[1];
@@ -1159,6 +1163,7 @@ if ($bw_post && isset($_POST['bw_sichern'])) {
     $bw_js = json_encode($bw_sich,
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($bw_js !== false) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="bewaesserung_einstellungen_'
                . date('Ymd_His') . '.json"');
