@@ -601,6 +601,13 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     _t = ([30, 40, 45, 30], 0.6, 1.15, 0.8)
     pruefe("Kc Tomate Tag 50 von Hand", kc_phase_tag(50, *_t)[0], 0.875, 0.0001)
     pruefe("Kc Tomate Tag 130 von Hand", kc_phase_tag(130, *_t)[0], 0.975, 0.0001)
+    # 0.9.50, von Hand: Moehren 30/40/60/20, 0,7/1,05/0,95. Tag 50: 0,7 + 20/40 * 0,35 = 0,875.
+    # Tag 140: 1,05 + 10/20 * (-0,1) = 1,0. Kohl 20/30/20/10. Tag 35: 0,7 + 15/30 * 0,35 = 0,875.
+    _m = ([30, 40, 60, 20], 0.7, 1.05, 0.95)
+    _k = ([20, 30, 20, 10], 0.7, 1.05, 0.95)
+    pruefe("Kc Moehren Tag 50 von Hand", kc_phase_tag(50, *_m)[0], 0.875, 0.0001)
+    pruefe("Kc Moehren Tag 140 von Hand", kc_phase_tag(140, *_m)[0], 1.0, 0.0001)
+    pruefe("Kc Kohl Tag 35 von Hand", kc_phase_tag(35, *_k)[0], 0.875, 0.0001)
     e.append(([kc_phase_tag(i, *_t)[1] for i in (0, 1, 30, 31, 70, 71, 115, 116, 145, 146)]
               == ["vor", "anfang", "anfang", "entwicklung", "entwicklung", "mitte",
                   "mitte", "ende", "ende", "durch"],

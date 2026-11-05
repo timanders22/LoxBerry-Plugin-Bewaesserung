@@ -5,18 +5,23 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.49 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.50 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
 
+## Neu in 0.9.50
+
+- **Möhren und Kohl als eigene Bepflanzung:** mit Wachstumsphasen nach FAO-56 (Tabelle 11 und 12, https://www.fao.org/4/x0490e/x0490e0b.htm): Möhren 150 Tage (30/40/60/20, Aussaat Feb/März, Mittelmeerraum), Kohl 80 Tage (20/30/20/10, Crucifers, April, Mittelmeerraum), Kc 0,7/1,05/0,95. Die Tabelle nennt für andere Sorten und Termine 100 bis 200 bzw. 80 bis 195 Tage und hat keine Zeile für Mitteleuropa. Zr und p aus Tabelle 22 (Möhren 0,75 m/0,35, Kohl 0,65 m/0,45). „Gemüse, kleinwüchsig“ bleibt und rechnet wie bisher; eine Zone mit dieser Bepflanzung ändert sich nicht von selbst.
+- **Formular:** Ein beanstandeter Tafel- oder HomePod-Name bleibt zur Korrektur im Feld stehen. Bis 0.9.49 mussten Sie ihn neu eintragen.
+
 ## Neu in 0.9.49
 
 - **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
 - **Ansage bei Frost- oder Sturmsperre (neu, ab Werk an):** Greift eine von Ihnen eingeschaltete Frost- oder Sturmsperre für die kommende Nacht, sagt die Bewässerung das einmal je Nacht und Grund an, zum Beispiel „Achtung, Frostsperre. Die Bewässerung pausiert heute Nacht.“ Nachts schweigt sie: Wird die Sperre in der Nachtruhe erkannt, fällt die Ansage beim ersten Rechengang danach, wenn die Sperre dann noch gilt. Der neue Haken im Abschnitt Sprachausgabe schaltet nur die Ansage ab, nie die Sperre. Regensperre und „Anlage am Limit“ sagen nichts an.
-- **Wachstumsphasen nach FAO-56 (neu, freiwillig):** Im Reiter Zonen gibt es für Tomaten und kleinwüchsiges Gemüse das Feld „Aussaat/Pflanzung“. Mit Datum läuft der Pflanzenbeiwert Kc je Tag durch Anfang, Entwicklung, Mitte und Ende (FAO-56, Tabelle 11 und 12, Gleichung 66), auch rückwirkend in der Wasserbilanz und in der Vorschau. Ohne Datum rechnet die Zone genau wie bisher. Die Tabelle „Stand der Zonen“ zeigt Kc und Phase und sagt, wenn eine Kultur laut Rechnung durch ist. MQTT-Themen ändern sich nicht.
+- **Wachstumsphasen nach FAO-56 (neu, freiwillig):** Im Reiter Zonen gibt es für Tomaten und kleinwüchsiges Gemüse (seit 0.9.50 auch Möhren und Kohl) das Feld „Aussaat/Pflanzung“. Mit Datum läuft der Pflanzenbeiwert Kc je Tag durch Anfang, Entwicklung, Mitte und Ende (FAO-56, Tabelle 11 und 12, Gleichung 66), auch rückwirkend in der Wasserbilanz und in der Vorschau. Ohne Datum rechnet die Zone genau wie bisher. Die Tabelle „Stand der Zonen“ zeigt Kc und Phase und sagt, wenn eine Kultur laut Rechnung durch ist. MQTT-Themen ändern sich nicht.
 - **Reiter Test:** Ein Klick auf den Reiter zeigt jetzt die Prüfzeilen. Bisher stand dort nur der Hinweissatz, außer die Seite wurde direkt mit `form=test` geöffnet.
 - **Zeile „Vorgaben“:** Das rote Kreuz seit 0.9.46 ist weg. Es war ein Fehler der Liste, kein Fehler Ihrer Anlage.
 - **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.

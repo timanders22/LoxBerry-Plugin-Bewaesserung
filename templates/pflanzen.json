@@ -22,7 +22,12 @@
     "[FAO-56, Tabelle 11]; kc_ini, kc_mid, kc_end [FAO-56, Tabelle 12]. Sie wirken nur, wenn die Zone",
     "ein Datum Aussaat/Pflanzung traegt; dann gilt Kc je Tag nach Gl. 66. Quelle:",
     "https://www.fao.org/4/x0490e/x0490e0b.htm (FAO-56, Kapitel 6). Rasen, Mehrjaehriges, Erdbeeren",
-    "(in Tabelle 11 nicht enthalten) und die geschaetzten Bepflanzungen tragen keine Phasen."
+    "(in Tabelle 11 nicht enthalten) und die geschaetzten Bepflanzungen tragen keine Phasen.",
+    "",
+    "Moehren und Kohl (0.9.50): eigene Eintraege. Tabelle 11 nennt je Kultur mehrere Zeilen; genommen ist die",
+    "mit Fruehjahrsaussaat, wie bei der Tomate (Moehren Feb/Mar Mediterranean, Crucifers April Mediterranean).",
+    "Zr ist die Mitte der Spanne aus Tabelle 22, p ihr Wert (FAO-56, Kapitel 8, x0490e0e.htm).",
+    "Sorten weichen stark ab: Tabelle 11 nennt fuer Moehren 100 bis 200 und fuer Crucifers 80 bis 195 Tage."
   ],
   "bepflanzung": {
     "_quelle": "FAO-56, Tabelle 12 (Kc) und Tabelle 22 (Zr, p)",
@@ -52,12 +57,12 @@
       "text_en": "Lawn, watered sparingly (accepts summer browning)"
     },
     "gemuese_klein": {
-      "text": "Gemüse, kleinwüchsig (Salat, Kohl, Möhren)",
+      "text": "Gemüse, kleinwüchsig (z. B. Salat)",
       "kc": 1.05,
       "zr": 0.4,
       "p": 0.35,
       "quelle": "FAO-56 Tab. 12 (Small Vegetables 0,7/1,05/0,95), Tab. 22 (Kohl p 0,45, Salat p 0,30)",
-      "text_en": "Vegetables, low growing (lettuce, cabbage, carrots)",
+      "text_en": "Vegetables, low growing (e.g. lettuce)",
       "phasen": {
         "tage": [
           20,
@@ -68,7 +73,47 @@
         "kc_ini": 0.7,
         "kc_mid": 1.05,
         "kc_end": 0.95,
-        "quelle": "FAO-56 Kap. 6 (x0490e0b.htm): Tab. 11 Lettuce, April, Mediterranean 20/30/15/10 = 75 Tage; Tab. 12 Gruppe a. Small Vegetables 0,7/1,05/0,95. Tab. 11 hat keine Zeile fuer die Gruppe; die Dauern sind die von Salat. Moehren (100 bis 200 Tage) und Kohl (165 Tage) brauchen laenger."
+        "quelle": "FAO-56 Kap. 6 (x0490e0b.htm): Tab. 11 Lettuce, April, Mediterranean 20/30/15/10 = 75 Tage; Tab. 12 Gruppe a. Small Vegetables 0,7/1,05/0,95. Tab. 11 hat keine Zeile fuer die Gruppe; die Dauern sind die von Salat. Moehren und Kohl haben seit 0.9.50 eigene Eintraege."
+      }
+    },
+    "moehren": {
+      "text": "Möhren",
+      "kc": 1.05,
+      "zr": 0.75,
+      "p": 0.35,
+      "quelle": "FAO-56 Tab. 12 (Carrots, Kc mid 1,05), Tab. 22 (Carrots Zr 0,5-1,0 m, hier die Mitte; p 0,35)",
+      "text_en": "Carrots",
+      "phasen": {
+        "tage": [
+          30,
+          40,
+          60,
+          20
+        ],
+        "kc_ini": 0.7,
+        "kc_mid": 1.05,
+        "kc_end": 0.95,
+        "quelle": "FAO-56 Kap. 6 (x0490e0b.htm): Tab. 11 Carrots, Feb/Mar, Mediterranean 30/40/60/20 = 150 Tage; Tab. 12 Gruppe a. Small Vegetables Kc ini 0,7, Carrots Kc mid 1,05, Kc end 0,95."
+      }
+    },
+    "kohl": {
+      "text": "Kohl (Kopfkohl, Blumenkohl, Brokkoli, Rosenkohl)",
+      "kc": 1.05,
+      "zr": 0.65,
+      "p": 0.45,
+      "quelle": "FAO-56 Tab. 12 (Cabbage, Kc mid 1,05), Tab. 22 (Cabbage Zr 0,5-0,8 m, hier die Mitte; p 0,45)",
+      "text_en": "Cabbage family (cabbage, cauliflower, broccoli, Brussels sprouts)",
+      "phasen": {
+        "tage": [
+          20,
+          30,
+          20,
+          10
+        ],
+        "kc_ini": 0.7,
+        "kc_mid": 1.05,
+        "kc_end": 0.95,
+        "quelle": "FAO-56 Kap. 6 (x0490e0b.htm): Tab. 11 Crucifers, April, Mediterranean 20/30/20/10 = 80 Tage (Crucifers: Kohl, Blumenkohl, Brokkoli, Rosenkohl); Tab. 12 Gruppe a. Small Vegetables Kc ini 0,7, Cabbage Kc mid 1,05, Kc end 0,95. Andere Zeilen: Cabbage Sept, Calif. Desert 165 Tage, Crucifers Oct/Nov 195 Tage."
       }
     },
     "tomate": {

@@ -3713,6 +3713,24 @@ def selbsttest() -> int:
         for ok, text in modul.selbstpruefung():
             print(("  [OK]   " if ok else "  [FEHL] ") + text)
             fehlt += 0 if ok else 1
+    # 0.9.50: die Tabellenwerte der Saisonkulturen in pflanzen.json, gegen FAO-56 Tabelle 11, 12 und 22.
+    print("Pflanzenliste (FAO-56):")
+    _bep = pflanzen().get("bepflanzung") or {}
+    _lesbar = [k for k, v in _bep.items() if isinstance(v, dict) and "phasen" in v and fao56.phasen_lesen(v["phasen"])]
+    for _ok, _text in (
+            (sorted(_lesbar) == ["gemuese_klein", "kohl", "moehren", "tomate"],
+             "Vier Saisonkulturen tragen lesbare Phasen"),
+            ((_bep.get("moehren") or {}).get("phasen", {}).get("tage") == [30, 40, 60, 20]
+             and (_bep.get("moehren") or {}).get("p") == 0.35,
+             "Moehren: Tab. 11 Feb/Mar 30/40/60/20, Tab. 22 p 0,35"),
+            ((_bep.get("kohl") or {}).get("phasen", {}).get("tage") == [20, 30, 20, 10]
+             and (_bep.get("kohl") or {}).get("p") == 0.45,
+             "Kohl: Tab. 11 Crucifers April 20/30/20/10, Tab. 22 p 0,45"),
+            (all(((_bep.get(k) or {}).get("phasen", {}).get(s) == w)
+                 for k in ("moehren", "kohl") for s, w in (("kc_ini", 0.7), ("kc_mid", 1.05), ("kc_end", 0.95))),
+             "Moehren und Kohl: Tab. 12 Small Vegetables 0,7/1,05/0,95")):
+        print(("  [OK]   " if _ok else "  [FEHL] ") + _text)
+        fehlt += 0 if _ok else 1
     print("Lebenszeichen und Rueckmeldung (Gruppe 2):")
     for ok, text in lebenszeichen_selbstpruefung():
         print(("  [OK]   " if ok else "  [FEHL] ") + text)
