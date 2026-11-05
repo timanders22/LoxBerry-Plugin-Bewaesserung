@@ -27,6 +27,7 @@ Drei Gedanken bestimmen den Entwurf:
 
 from __future__ import annotations
 
+import datetime
 import math
 from typing import Any
 
@@ -37,17 +38,51 @@ import fao56
 # Eine Zone rechnen
 # --------------------------------------------------------------------------
 
+def _datum_oder_none(wert) -> datetime.date | None:
+    """Ein Datum JJJJ-MM-TT lesen; alles andere ergibt None (0.9.49)."""
+    if not isinstance(wert, str) or len(wert) != 10:
+        return None
+    try:
+        return datetime.date.fromisoformat(wert)
+    except ValueError:
+        return None
+
+
+def pflanzdatum_lesen(wert, heute: datetime.date) -> datetime.date | None:
+    """Das Datum Aussaat/Pflanzung einer Zone (0.9.49): JJJJ-MM-TT, hoechstens
+    ein Jahr in der Zukunft (dieselbe Regel wie bw_pflanzdatum_pruefen() im
+    Formular). Alles andere gilt als leer."""
+    d = _datum_oder_none(wert)
+    if d is None or (d - heute).days > 366:
+        return None
+    return d
+
+
+def pflanzdatum_ungueltig(wert, heute: datetime.date) -> bool:
+    """Steht etwas im Feld, das nicht gilt? Leer ist kein Fehler (0.9.49)."""
+    return wert not in (None, "") and pflanzdatum_lesen(wert, heute) is None
+
+
 def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
-                 cfg: dict, wetter: dict | None = None) -> dict:
+                 cfg: dict, wetter: dict | None = None,
+                 heute: datetime.date | None = None) -> dict:
     """Wasserhaushalt einer Zone fortschreiben und den Bedarf bestimmen.
 
-    'verlauf'  Tage der Vergangenheit, je dict mit et0, regen, [bewaesserung]
-    'vorschau' kommende Tage, je dict mit et0, regen, [regen_wahrsch]
+    'verlauf'  Tage der Vergangenheit, je dict mit et0, regen, [bewaesserung],
+               [datum]
+    'vorschau' kommende Tage, je dict mit et0, regen, [regen_wahrsch], [datum]
     'wetter'   freiwillig: u2 und rh_min des Tages fuer die Klimaanpassung
                des Pflanzenbeiwerts [FAO-56, Gl. 62]. Fehlt es, bleibt Kc
                der Tabellenwert - also genau das, was bis 0.9.6 galt.
+    'heute'    freiwillig (0.9.49): das Datum, zu dem der Kc der Zone gilt.
+
+    0.9.49: traegt die Zone 'pflanzdatum' und 'phasen', gilt Kc je Tag nach
+    FAO-56 Gl. 66. Das Ergebnis traegt dann 'kc_phase', 'kc_tag_nr', 'kc_durch';
+    'kc' und 'kc_tabelle' sind die Werte von heute.
     """
     kc = float(zone.get("kc") or 1.0)
+    # 0.9.49: 'heute' braucht nur eine Zone mit Datum Aussaat/Pflanzung.
+    heute = heute or datetime.date.today()
     # --- Klimaanpassung des Pflanzenbeiwerts (neu in 0.9.7) ---------------
     #
     # Sie greift NUR, wenn die Zone eine Pflanzenhoehe traegt UND Wind und
@@ -70,6 +105,36 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
         if u2 is not None and rh_min is not None:
             kc = fao56.kc_klimaanpassung(kc, float(u2), float(rh_min), h_pflanze)
             kc_klima = 1
+    # --- Wachstumsphasen (neu in 0.9.49) ----------------------------------
+    #
+    # Nur mit gueltigem Datum UND Phasen der Bepflanzung. Sonst bleibt kc_tag
+    # None, jeder Tag rechnet mit dem festen kc von oben, und das Ergebnis
+    # traegt nicht einmal neue Schluessel: zahlengleich zu 0.9.48.
+    kc_tag = None
+    kc_heute_phase = None
+    start = pflanzdatum_lesen(zone.get("pflanzdatum"), heute)
+    phasen = fao56.phasen_lesen(zone.get("phasen")) if start else None
+    if phasen:
+        # Gl. 62 und 65 nur fuer Mitte und Ende; Kc Anfang bleibt der
+        # Tabellenwert, die Interpolation laeuft zwischen den angepassten Werten.
+        # Wie oben gilt das Wetter des Tages, nicht das Mittel der Phase.
+        kc_mid, kc_end = phasen["kc_mid"], phasen["kc_end"]
+        if h_pflanze > 0 and wetter and wetter.get("u2") is not None \
+                and wetter.get("rh_min") is not None:
+            kc_mid = fao56.kc_klimaanpassung(kc_mid, float(wetter["u2"]),
+                                             float(wetter["rh_min"]), h_pflanze)
+            kc_end = fao56.kc_klima_end(kc_end, float(wetter["u2"]),
+                                        float(wetter["rh_min"]), h_pflanze)
+
+        def kc_tag(datum: datetime.date) -> float:
+            return fao56.kc_phase_tag((datum - start).days + 1, phasen["tage"],
+                                      phasen["kc_ini"], kc_mid, kc_end)[0]
+
+        kc = kc_tag(heute)
+        kc_tabelle, kc_heute_phase = fao56.kc_phase_tag(
+            (heute - start).days + 1, phasen["tage"], phasen["kc_ini"],
+            phasen["kc_mid"], phasen["kc_end"])
+        kc_klima = 1 if kc != kc_tabelle else 0
     zr = float(zone.get("zr") or 0.5)
     # Mikroklima-Faktor (ab 0.9.1).
     #
@@ -129,10 +194,17 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
     etc_letzter = 0.0
     for tag in verlauf:
         et0 = max(0.0, float(tag.get("et0") or 0.0))
+        # 0.9.49: jeder Tag mit dem Kc SEINES Datums. Traegt ein Eintrag kein
+        # lesbares Datum, gilt der Kc von heute.
+        kc_t = kc
+        if kc_tag is not None:
+            d_t = _datum_oder_none(tag.get("datum"))
+            if d_t is not None:
+                kc_t = kc_tag(d_t)
         # Der Faktor greift an ETc, nicht an ET0: ET0 ist die Verdunstung der
         # Grasreferenz AM STANDORT und fuer alle Zonen dieselbe Zahl. Sie je
         # Zone zu verbiegen waere eine Falschaussage ueber das Wetter.
-        etc_moeglich = kc * et0 * mikro
+        etc_moeglich = kc_t * et0 * mikro
         # Trockenstress bremst die Verdunstung [FAO-56, Gl. 84]. Ohne das
         # waere der Bedarf in einer laengeren Trockenheit zu hoch gerechnet.
         p = fao56.p_angepasst(p_tab, etc_moeglich)
@@ -174,9 +246,16 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
     tage = max(1, min(7, int(cfg.get("vorschautage") or 2)))
     anteil = max(0.0, min(1.0, float(cfg.get("regen_anteil") or 0.7)))
     et0_kommend = 0.0
+    etc_kommend = 0.0
     regen_kommend = 0.0
-    for tag in vorschau[:tage]:
-        et0_kommend += max(0.0, float(tag.get("et0") or 0.0))
+    for nr, tag in enumerate(vorschau[:tage]):
+        et0_t = max(0.0, float(tag.get("et0") or 0.0))
+        et0_kommend += et0_t
+        if kc_tag is not None:
+            # 0.9.49: auch die kommenden Tage mit dem Kc ihres Datums. Ohne Datum
+            # im Eintrag: heute + 1, + 2, ... wie die Liste sortiert ist.
+            d_t = _datum_oder_none(tag.get("datum")) or heute + datetime.timedelta(days=nr + 1)
+            etc_kommend += kc_tag(d_t) * et0_t * mikro
         r = max(0.0, float(tag.get("regen") or 0.0))
         w = tag.get("regen_wahrsch")
         if w is not None:
@@ -184,7 +263,8 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
             # Wahrscheinlichkeit gewichtet, bevor sie angerechnet wird.
             r = r * max(0.0, min(1.0, float(w) / 100.0))
         regen_kommend += r
-    etc_kommend = kc * et0_kommend * mikro
+    if kc_tag is None:
+        etc_kommend = kc * et0_kommend * mikro
     regen_angerechnet = regen_kommend * anteil
 
     # --- Bedarf ---
@@ -200,7 +280,7 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
 
     noetig = dr >= raw_mm or bedarf_mm > 0.5
 
-    return {
+    ergebnis = {
         # Kein Verlauf UND kein fortgeschriebenes Defizit heisst: es ist
         # nichts bekannt. Bis 0.9.18 kam dabei "Fuellstand 100 %, Bedarf 0"
         # heraus - "ich weiss nichts" war von "der Boden ist voll" nicht zu
@@ -224,6 +304,12 @@ def zone_rechnen(zone: dict, verlauf: list[dict], vorschau: list[dict],
         "sensor_benutzt": 1 if sensor is not None else 0,
         "sensor_hinweis": sensor_hinweis,
     }
+    # 0.9.49: nur mit Phasen, damit eine Zone ohne Datum unveraendert bleibt.
+    if kc_heute_phase is not None:
+        ergebnis["kc_phase"] = kc_heute_phase
+        ergebnis["kc_tag_nr"] = (heute - start).days + 1
+        ergebnis["kc_durch"] = 1 if kc_heute_phase == "durch" else 0
+    return ergebnis
 
 
 # --------------------------------------------------------------------------
@@ -1057,6 +1143,46 @@ def selbstpruefung() -> list[tuple[bool, str]]:
               and mit_h["dr"] > ohne_h["dr"],
               "Mit Hoehe und trockener Luft: Kc %.3f statt %.3f, Defizit %.1f statt %.1f mm"
               % (mit_h["kc"], mit_h["kc_tabelle"], mit_h["dr"], ohne_h["dr"])))
+
+    # --- Wachstumsphasen (0.9.49) ---
+    ph = {"tage": [30, 40, 45, 30], "kc_ini": 0.6, "kc_mid": 1.15, "kc_end": 0.8}
+    tag0 = datetime.date(2026, 6, 15)
+    # Nur et0 2 mm je Tag, ohne Regen: Tag der Kultur 29 bis 32 (zwei Tage
+    # Anfang, zwei Entwicklung). Von Hand: 2*(0,6 + 0,6 + 0,61375 + 0,6275) = 4,8825 mm.
+    v4 = [{"et0": 2.0, "regen": 0.0, "datum": (tag0 + datetime.timedelta(days=i)).isoformat()}
+          for i in range(28, 32)]
+    z_ph = dict(zone, kc=1.15, zr=1.0, theta_fc=0.27, theta_wp=0.13, dr=0.0,
+                pflanzdatum=tag0.isoformat(), phasen=ph)
+    r_ph = zone_rechnen(z_ph, v4, [], cfg, None, tag0 + datetime.timedelta(days=31))
+    p("Kc je Tag in der Bilanz, Tag 29 bis 32 (von Hand)", r_ph["dr"], 4.8825, 0.0001)
+    e.append((r_ph["kc_phase"] == "entwicklung" and r_ph["kc_tag_nr"] == 32
+              and abs(r_ph["kc"] - 0.6275) < 1e-9,
+              "Zone zeigt Phase und Kc von heute (%s, %.4f)" % (r_ph["kc_phase"], r_ph["kc"])))
+    # Vorschau: Tag 71 und 72 sind Mitte, heute (Tag 70) noch Entwicklung-Ende.
+    r_vs = zone_rechnen(z_ph, [{"et0": 0.0, "regen": 0.0}], [{"et0": 4.0}, {"et0": 4.0}],
+                        cfg, None, tag0 + datetime.timedelta(days=69))
+    p("etc_kommend mit Kc des kommenden Datums", r_vs["etc_kommend"], 9.2, 0.0001)
+    # Ohne Datum, mit kaputtem Datum und ohne Phasen: das alte Ergebnis, Schluessel fuer Schluessel.
+    z_alt = dict(zone, dr=0.0)
+    r_alt = zone_rechnen(z_alt, vor7, [], cfg)
+    e.append((zone_rechnen(dict(z_alt, pflanzdatum="", phasen=ph), vor7, [], cfg) == r_alt
+              and zone_rechnen(dict(z_alt, pflanzdatum="2026-02-30", phasen=ph), vor7, [], cfg) == r_alt
+              and zone_rechnen(dict(z_alt, pflanzdatum=tag0.isoformat()), vor7, [], cfg) == r_alt,
+              "Leeres oder ungueltiges Datum und Bepflanzung ohne Phasen: Ergebnis unveraendert"))
+    # Gl. 62 nicht in der Anfangsphase, wohl aber in der Mitte.
+    w62 = {"u2": 3.0, "rh_min": 25.0}
+    z62 = dict(z_ph, hoehe_pflanze=0.6)
+    r_a = zone_rechnen(z62, [], [], cfg, w62, tag0 + datetime.timedelta(days=4))
+    r_m = zone_rechnen(z62, [], [], cfg, w62, tag0 + datetime.timedelta(days=80))
+    e.append((r_a["kc"] == 0.6 and r_a["kc_klima"] == 0
+              and abs(r_m["kc"] - 1.224) < 0.002 and r_m["kc_klima"] == 1
+              and r_m["kc_tabelle"] == 1.15,
+              "Gl. 62 nur fuer Mitte und Ende: Anfang %.3f, Mitte %.3f" % (r_a["kc"], r_m["kc"])))
+    e.append((pflanzdatum_lesen("2027-06-01", tag0) is not None
+              and pflanzdatum_lesen("2027-06-17", tag0) is None
+              and pflanzdatum_ungueltig("31.12.2026", tag0)
+              and not pflanzdatum_ungueltig("", tag0),
+              "Datum: bis ein Jahr voraus gilt, weiter oder unlesbar nicht"))
 
     # C6 (Durchgang 30.09.2026): Fenster 30 min, drei Zonen - die Summe aus
     # Ventilzeiten und Pausen bleibt im Fenster.

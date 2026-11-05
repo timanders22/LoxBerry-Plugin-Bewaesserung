@@ -7,6 +7,17 @@
 # gestartet, kommt dort ueberall Leerstring zurueck - das Skript werkelt dann
 # gegen /-Pfade und meldet trotzdem Erfolg.
 
+# 0.9.49: geerbte Deskriptoren schliessen, wie bin/befehlsbruecke.sh - der langlebige Dienst haelt sonst Sperren
+# und Rohre des Aufrufers offen.
+BW_EIGEN=$(readlink -f "$0" 2>/dev/null)
+for fd in /proc/$$/fd/*; do
+    n=${fd##*/}
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    [ "$n" -gt 2 ] || continue
+    [ "$(readlink "$fd" 2>/dev/null)" = "$BW_EIGEN" ] && continue   # bash liest das Skript ueber diesen
+    eval "exec $n>&-" 2>/dev/null
+done
+
 # readlink -f loest Symlinks auf, BEVOR das Verzeichnis bestimmt wird.
 #
 # LoxBerry legt Daemons als Symlink unter system/daemons/plugins/ ab. Von dort

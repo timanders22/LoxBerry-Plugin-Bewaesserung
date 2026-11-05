@@ -23,6 +23,11 @@ touch "$ERR" 2>/dev/null
 # Umlenkung den Befehl ab, BEVOR er startet - bis 0.9.45 kein Lauf und keine Spur. Dann geht die Fehlerausgabe
 # nach /dev/null, und der Lauf findet statt.
 [ -f "$ERR" ] && [ -w "$ERR" ] || ERR=/dev/null
+# 0.9.49: auf der Ramdisk gekappt wie befehle_start.log (256 kB, letzte 300 Zeilen, Regeln/06).
+if [ "$ERR" != /dev/null ] && [ "$(wc -c < "$ERR" 2>/dev/null || echo 0)" -gt 262144 ]; then
+    tail -n 300 "$ERR" > "$ERR.tmp.$$" 2>/dev/null && mv -f "$ERR.tmp.$$" "$ERR" 2>/dev/null
+    rm -f "$ERR.tmp.$$" 2>/dev/null
+fi
 "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"$ERR"
 # Gruppe 2 / MQTT (0.9.44): Waechter der Befehlsbruecke (gemeinsame Stammfassung). Diese Linie hat keinen
 # PHP-Minutentakt, also hier (Bauvorschrift Gruppe 1, Nachtrag 19.10.2026). Er startet die Bruecke nur mit dem

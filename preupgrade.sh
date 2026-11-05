@@ -8,6 +8,10 @@
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bewaesserung}"
+# 0.9.49: dieselbe Pruefung wie preinstall.sh - ein Ordnername mit "/" waere ein Pfad hinaus (Bauart MGiSmart).
+case "$PFOLDER" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$PFOLDER' - nichts angelegt."; exit 2 ;;
+esac
 BASE="${ARGV5:-$LBHOMEDIR}"
 # Ohne diese Rueckfallebene arbeitet das Skript bei leerem $BASE als root
 # auf /data/plugins/... - es legte Verzeichnisse im Wurzelverzeichnis an,
@@ -53,12 +57,16 @@ fi
 # NEBEN dem Datenordner - darin loeschte purge_installation sie mit.
 mkdir -p "$BASE/data/plugins" 2>/dev/null
 BW_MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
-date +%s > "$BW_MARKE" 2>/dev/null
-if [ -s "$BW_MARKE" ]; then
+# 0.9.49: ohne Marke haelt preinstall.sh das Update fuer eine Neuinstallation und postinstall.sh spielt nichts zurueck.
+# Deshalb Abbruch mit rc 2, VOR purge_installation. Bis 0.9.48 stand hier nur eine Warnung.
+{ date +%s > "$BW_MARKE"; } 2>/dev/null
+if grep -qx '[0-9][0-9]*' "$BW_MARKE" 2>/dev/null; then
     echo "<OK> Dienststart bis zum Ende der Aktualisierung gesperrt."
 else
-    echo "<WARNING> Die Marke $BW_MARKE liess sich nicht anlegen - der Dienst"
-    echo "<WARNING> koennte waehrend der Aktualisierung anlaufen."
+    rm -f "$BW_MARKE" 2>/dev/null
+    echo "<FAIL> Die Marke $BW_MARKE liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
 fi
 
 # Gruppe 2 / MQTT (0.9.44): die Befehlsbruecke vor dem Austausch der Dateien anhalten. Die Marke liegt schon -
@@ -230,14 +238,14 @@ sys.exit(0 if json.load(open(sys.argv[1])) else 1)' "$2" >/dev/null 2>&1 ;;
     return 0
 }
 bw_sichern() {   # $1 Dateiname, $2 Quelle, $3 Zweitschrift
-    rm -f "$3.neu" 2>/dev/null
-    if cp -p "$2" "$3.neu" 2>/dev/null && cmp -s "$2" "$3.neu" && bw_inhalt "$1" "$3.neu"; then
-        # 0600: cp -p erbt die Rechte der Quelle, und in bewaesserung.json
-        # steht das Aktionstoken.
-        chmod 600 "$3.neu" 2>/dev/null
-        mv -f "$3.neu" "$3" && return 0
+    # 05.11.2026: Rechte vor Inhalt und .neu.<pid> (Bauart Govee 0.9.34); bis hierher trug die Kopie kurz die Rechte der Quelle.
+    bw_neu="$3.neu.$$"
+    rm -f "$bw_neu" 2>/dev/null
+    if { : > "$bw_neu"; } 2>/dev/null && chmod 600 "$bw_neu" 2>/dev/null \
+       && cp "$2" "$bw_neu" 2>/dev/null && cmp -s "$2" "$bw_neu" && bw_inhalt "$1" "$bw_neu"; then
+        mv -f "$bw_neu" "$3" && return 0
     fi
-    rm -f "$3.neu" 2>/dev/null
+    rm -f "$bw_neu" 2>/dev/null
     return 1
 }
 BW_FEHLT=""

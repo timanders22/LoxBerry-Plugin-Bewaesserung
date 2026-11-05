@@ -317,6 +317,75 @@ def kc_klimaanpassung(kc_tabelle: float, u2: float, rh_min: float,
     return kc_tabelle + (0.04 * (u - 2.0) - 0.004 * (r - 45.0)) * (h / 3.0) ** 0.3
 
 
+# 0.9.49: die Wachstumsphasen einer Saisonkultur [F, Kapitel 6, Tab. 11 und 12].
+KC_PHASEN = ("anfang", "entwicklung", "mitte", "ende")
+
+
+def phasen_lesen(phasen) -> dict | None:
+    """Einen Eintrag 'phasen' aus pflanzen.json pruefen (0.9.49).
+
+    Rueckgabe: {tage: [vier ganze Zahlen > 0], kc_ini, kc_mid, kc_end} oder
+    None. Ein kaputter Eintrag heisst "keine Phasen", nie eine geratene Kurve.
+    """
+    if not isinstance(phasen, dict):
+        return None
+    tage = phasen.get("tage")
+    if not isinstance(tage, (list, tuple)) or len(tage) != 4:
+        return None
+    aus = {}
+    for t in tage:
+        if isinstance(t, bool) or not isinstance(t, int) or t <= 0:
+            return None
+    aus["tage"] = list(tage)
+    for k in ("kc_ini", "kc_mid", "kc_end"):
+        w = phasen.get(k)
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or not 0 < w <= 3:
+            return None
+        aus[k] = float(w)
+    return aus
+
+
+def kc_phase_tag(tag_nr: int, tage, kc_ini: float, kc_mid: float,
+                 kc_end: float) -> tuple[float, str]:
+    """Kc am Tag 'tag_nr' der Kultur. [F, Gl. 66] (0.9.49)
+
+        Kc_i = Kc_vor + [(i - Summe(L_vor)) / L_Phase] (Kc_nach - Kc_vor)
+
+    Tag 1 ist das Datum der Aussaat oder Pflanzung. In Anfang und Mitte ist Kc
+    konstant, in Entwicklung und Ende laeuft er linear. Eine reine Funktion:
+    kein Datum, keine Datei.
+
+    Rueckgabe: (Kc, Phase). Phase ist eine aus KC_PHASEN, dazu 'vor' (vor dem
+    Datum: Kc Anfang) und 'durch' (die Kultur ist laut Rechnung durch: Kc Ende).
+    """
+    l_ini, l_ent, l_mit, l_end = tage
+    if tag_nr < 1:
+        return kc_ini, "vor"
+    if tag_nr <= l_ini:
+        return kc_ini, "anfang"
+    if tag_nr <= l_ini + l_ent:
+        return kc_ini + (tag_nr - l_ini) / l_ent * (kc_mid - kc_ini), "entwicklung"
+    if tag_nr <= l_ini + l_ent + l_mit:
+        return kc_mid, "mitte"
+    if tag_nr <= l_ini + l_ent + l_mit + l_end:
+        return kc_mid + (tag_nr - l_ini - l_ent - l_mit) / l_end * (kc_end - kc_mid), "ende"
+    return kc_end, "durch"
+
+
+def kc_klima_end(kc_end_tabelle: float, u2: float, rh_min: float,
+                 hoehe_pflanze_m: float) -> float:
+    """Kc Ende an Klima anpassen. [F, Gl. 65] (0.9.49)
+
+    Dieselbe Form wie Gl. 62, aber [F] wendet sie nur an, wenn der Tabellenwert
+    ueber 0,45 liegt: reif und trocken geerntete Kulturen haengen kaum an Wind
+    und Luftfeuchte. Kc Anfang wird nicht angepasst, Gl. 62 und 65 gelten nur
+    fuer Mitte und Ende.
+    """
+    if kc_end_tabelle <= 0.45:
+        return kc_end_tabelle
+    return kc_klimaanpassung(kc_end_tabelle, u2, rh_min, hoehe_pflanze_m)
+
+
 def taw(theta_fc: float, theta_wp: float, zr_m: float) -> float:
     """Nutzbare Feldkapazitaet im Wurzelraum [mm]. [F, Gl. 82]"""
     return 1000.0 * (theta_fc - theta_wp) * zr_m
@@ -517,6 +586,38 @@ def selbstpruefung() -> list[tuple[bool, str]]:
     e.append((kc_klimaanpassung(1.0, 20.0, 5.0, 0.60)
               == kc_klimaanpassung(1.0, 6.0, 20.0, 0.60),
               "Ausserhalb 1-6 m/s und 20-80 % wird begrenzt, nicht extrapoliert"))
+
+    # --- Kc je Tag (0.9.49) [F, Gl. 66] ---
+    # Beispiel 28 aus [F], Kapitel 6: Trockenbohne, 25/25/30/20 Tage,
+    # Kc 0,15 / 1,19 / 0,35. Tag 40: 0,15 + 15/25 * 1,04 = 0,774 (F: 0,77);
+    # Tag 95: 1,19 + 15/20 * (-0,84) = 0,56.
+    _b = ([25, 25, 30, 20], 0.15, 1.19, 0.35)
+    pruefe("Kc Tag 20, Anfang [Beispiel 28]", kc_phase_tag(20, *_b)[0], 0.15, 0.0001)
+    pruefe("Kc Tag 40, Entwicklung [Beispiel 28]", kc_phase_tag(40, *_b)[0], 0.774, 0.0001)
+    pruefe("Kc Tag 70, Mitte [Beispiel 28]", kc_phase_tag(70, *_b)[0], 1.19, 0.0001)
+    pruefe("Kc Tag 95, Ende [Beispiel 28]", kc_phase_tag(95, *_b)[0], 0.56, 0.0001)
+    # Von Hand: Tomate 30/40/45/30, 0,6/1,15/0,8. Tag 50: 0,6 + 20/40 * 0,55 = 0,875.
+    # Tag 130: 1,15 + 15/30 * (-0,35) = 0,975.
+    _t = ([30, 40, 45, 30], 0.6, 1.15, 0.8)
+    pruefe("Kc Tomate Tag 50 von Hand", kc_phase_tag(50, *_t)[0], 0.875, 0.0001)
+    pruefe("Kc Tomate Tag 130 von Hand", kc_phase_tag(130, *_t)[0], 0.975, 0.0001)
+    e.append(([kc_phase_tag(i, *_t)[1] for i in (0, 1, 30, 31, 70, 71, 115, 116, 145, 146)]
+              == ["vor", "anfang", "anfang", "entwicklung", "entwicklung", "mitte",
+                  "mitte", "ende", "ende", "durch"],
+              "Phasengrenzen Tomate: Tag 30/31, 70/71, 115/116, 145/146"))
+    e.append((kc_phase_tag(70, *_t)[0] == 1.15 and kc_phase_tag(145, *_t)[0] == 0.8
+              and kc_phase_tag(-5, *_t)[0] == 0.6 and kc_phase_tag(999, *_t)[0] == 0.8,
+              "Letzter Tag der Phase trifft den Zielwert; vorher Kc Anfang, danach Kc Ende"))
+    e.append((kc_klima_end(0.35, 5.0, 20.0, 0.6) == 0.35
+              and kc_klima_end(0.8, 5.0, 20.0, 0.6) > 0.8,
+              "Gl. 65 greift nur ueber Kc Ende 0,45"))
+    e.append((phasen_lesen({"tage": [1, 2, 3, 4], "kc_ini": 0.5, "kc_mid": 1, "kc_end": 0.7})
+              is not None
+              and phasen_lesen({"tage": [1, 2, 3], "kc_ini": 0.5, "kc_mid": 1, "kc_end": 0.7}) is None
+              and phasen_lesen({"tage": [1, 2, 3, 0], "kc_ini": 0.5, "kc_mid": 1, "kc_end": 0.7}) is None
+              and phasen_lesen({"tage": [1, 2, 3, 4], "kc_ini": "x", "kc_mid": 1, "kc_end": 0.7}) is None
+              and phasen_lesen(None) is None,
+              "Ein kaputter Eintrag 'phasen' heisst: keine Phasen"))
 
     # --- Boden: Beispiel aus [F], Kapitel 8 ---
     t = taw(0.32, 0.12, 0.8)

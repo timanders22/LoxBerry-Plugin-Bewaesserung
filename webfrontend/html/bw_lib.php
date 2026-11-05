@@ -217,7 +217,7 @@ function bw_vorgaben()
         // Die Ausgabe ist ab Werk aus (tts.mode 'aus'); die beiden Haken waehlen die Anlaesse
         // einzeln ab und stehen ab Werk an - wer die Ausgabe einschaltet, hoert sofort etwas.
         // Der Dienst fuehrt 'tts' nur als Namen (seine Vorgaben stehen nur hier).
-        'ansage_ende' => 1, 'ansage_ventil' => 1,
+        'ansage_ende' => 1, 'ansage_ventil' => 1, 'ansage_sperre' => 1,     // ansage_sperre: 0.9.49
         'tts' => ansage_werk_block(),
     );
 }
@@ -252,8 +252,12 @@ function bw_json_schreiben($pfad, $daten, $rechte = null)
         return false;
     }
     $tmp = $pfad . '.tmp.' . getmypid() . '.' . bin2hex(random_bytes(4));
+    // 0.9.49: erst die Rechte, dann der Inhalt - in der Konfiguration stehen Token (Bauart ansage_letzte_merken()).
+    if ($rechte !== null) {
+        if (@file_put_contents($tmp, '') === false) { return false; }
+        @chmod($tmp, $rechte);
+    }
     if (@file_put_contents($tmp, $j) !== strlen($j)) { @unlink($tmp); return false; }
-    if ($rechte !== null) { @chmod($tmp, $rechte); }
     if (!@rename($tmp, $pfad)) { @unlink($tmp); return false; }
     return true;
 }
@@ -1728,7 +1732,7 @@ function bw_eingabe_felder($form)
         'quellen' => array('text' => array('weg', 'thema', 'pfad', 'einheit'), 'haken' => array()),
         'zonen' => array(
             'text'  => array('z_name', 'z_schluessel', 'z_flaeche', 'z_bepflanzung', 'z_boden',
-                             'z_rate', 'z_regner', 'z_mikroklima', 'z_feuchte', 'z_dauer',
+                             'z_rate', 'z_regner', 'z_mikroklima', 'z_pflanzdatum', 'z_feuchte', 'z_dauer',
                              'z_hoehe_pflanze', 'z_abfluss', 'z_sensor_gewicht', 'z_theta_fc',
                              'z_theta_wp', 'z_giess_thema', 'z_giess_art',
                              'z_ausgabe', 'z_gardena_ventil'),
@@ -1738,7 +1742,10 @@ function bw_eingabe_felder($form)
     );
     /* Nr. 36 b: die Felder der Sprachausgabe (ansage_x2_felder(), nie die Sprechtoken) und
      * die beiden Anlass-Haken gehoeren zum Formular Einstellungen. */
-    foreach (ansage_regeln_x2_felder() as $bw_xf) { $felder['settings'][$bw_xf === 'ansage_ruhe_ein' ? 'haken' : 'text'][] = $bw_xf; }     // 0.9.46
+    // 0.9.46; 0.9.49: Tafel und HomePod dazu. ansage_regeln_formular() beanstandet sie, ohne Eintrag hier ging die Beanstandung samt Eingaben verloren.
+    foreach (array_merge(ansage_regeln_x2_felder(), array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet')) as $bw_xf) {
+        $felder['settings'][in_array($bw_xf, array('ansage_ruhe_ein', 'ansage_tafel_ein', 'ansage_homepod_ein'), true) ? 'haken' : 'text'][] = $bw_xf;
+    }
     foreach (ansage_x2_felder(bw_ansage_opt()) as $bw_xf) {
         $felder['settings'][substr($bw_xf, -9) === '_loeschen' ? 'haken' : 'text'][] = $bw_xf;
     }
@@ -2131,6 +2138,46 @@ function bw_zonen_pflicht()
                  'kc', 'zr', 'p', 'theta_fc', 'theta_wp');
 }
 
+/**
+ * 0.9.49: das Datum Aussaat/Pflanzung lesen. Nimmt TT.MM.JJJJ und JJJJ-MM-TT,
+ * Rueckgabe JJJJ-MM-TT oder null (kein Kalendertag, oder mehr als ein Jahr in der
+ * Zukunft: 366 Tage, dieselbe Regel wie giessplan.pflanzdatum_lesen() im Dienst).
+ */
+function bw_pflanzdatum_lesen($roh, $jetzt = null)
+{
+    $roh = trim((string) $roh);
+    if (preg_match('/^([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})$/', $roh, $m)) {
+        list($j, $mo, $t) = array((int) $m[3], (int) $m[2], (int) $m[1]);
+    } elseif (preg_match('/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/', $roh, $m)) {
+        list($j, $mo, $t) = array((int) $m[1], (int) $m[2], (int) $m[3]);
+    } else {
+        return null;
+    }
+    if ($j < 1900 || !checkdate($mo, $t, $j)) { return null; }
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    /* In UTC und auf Tagen gerechnet: eine Zeitumstellung verschiebt die Grenze nicht. */
+    $tage = (int) floor((gmmktime(0, 0, 0, $mo, $t, $j) - gmmktime(0, 0, 0, (int) date('n', $jetzt), (int) date('j', $jetzt), (int) date('Y', $jetzt))) / 86400);
+    if ($tage > 366) { return null; }
+    return sprintf('%04d-%02d-%02d', $j, $mo, $t);
+}
+
+/* 0.9.49: traegt diese Bepflanzung Wachstumsphasen? (pflanzen.json) */
+function bw_bepflanzung_hat_phasen($bep)
+{
+    $pf = bw_pflanzen();
+    return isset($pf['bepflanzung'][$bep]['phasen']) && is_array($pf['bepflanzung'][$bep]['phasen']);
+}
+
+/* 0.9.49: das gespeicherte Datum fuer das Formular; deutsch TT.MM.JJJJ, sonst wie gespeichert. */
+function bw_pflanzdatum_anzeige($iso)
+{
+    $iso = (string) $iso;
+    if (bw_sprache() === 'de' && preg_match('/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/', $iso, $m)) {
+        return $m[3] . '.' . $m[2] . '.' . $m[1];
+    }
+    return $iso;
+}
+
 /* Die Textfelder einer Zone gegen die Regeln des Formulars; Rueckgabe
  * true, wenn der Wert taugt. */
 function bw_zonen_text_taugt($k, $w)
@@ -2152,6 +2199,8 @@ function bw_zonen_text_taugt($k, $w)
             return in_array($w, array('minuten', 'durchlaeufe', 'mm'), true);
         case 'rate_gemessen_am':
             return $w === '' || preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $w) === 1;
+        case 'pflanzdatum':     // 0.9.49
+            return $w === '' || (preg_match('/^[0-9]{4}-/', $w) === 1 && bw_pflanzdatum_lesen($w) !== null);
         case 'feuchte_thema':
         case 'giess_thema':
             return strpos($w, "'") === false;
@@ -2584,9 +2633,10 @@ function bw_grenzen()
         'gardena_ein'         => array(0, 1),
         /* Hoechstdauer je Oeffnen, wie in GARDENA (1-180 min, Entscheidung 10). */
         'gardena_max_min'     => array(1, 180),
-        /* Nr. 36 b: die beiden Anlass-Haken der Sprachausgabe. */
+        /* Nr. 36 b: die Anlass-Haken der Sprachausgabe (ansage_sperre: 0.9.49). */
         'ansage_ende'         => array(0, 1),
         'ansage_ventil'       => array(0, 1),
+        'ansage_sperre'       => array(0, 1),
         /* Gruppe 2 / MQTT (0.9.44): der Haken der Befehlsbruecke. */
         'befehle_mqtt_ein'    => array(0, 1),
     );
@@ -2679,6 +2729,7 @@ function bw_zonen_schluessel()
         'hoehe_pflanze' => 'zahl', 'abfluss' => 'zahl',
         'giess_thema' => 'text', 'giess_art' => 'text',
         'rate_gemessen_am' => 'text',
+        'pflanzdatum' => 'text',     // 0.9.49: Aussaat/Pflanzung, JJJJ-MM-TT oder leer
         /* Gardena-1: Ausgabeart (fehlt = ueber Loxone) und Geraetename. */
         'ausgabe' => 'text', 'gardena_ventil' => 'text',
     );
@@ -2784,6 +2835,13 @@ function bw_zonen_pruefen($liste, &$namen = null)
                                     htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
                 $namen[] = 'zonen[' . (int) $i . '].' . $pk;
             }
+        }
+        /* 0.9.49: wie im Formular - ein Datum nur bei einer Bepflanzung mit Phasen. */
+        if (isset($neu['pflanzdatum']) && $neu['pflanzdatum'] !== ''
+            && isset($neu['bepflanzung']) && !bw_bepflanzung_hat_phasen($neu['bepflanzung'])) {
+            $mangel[] = sprintf(bw_t('EINST.SICH_ZONE_BEREICH'), 'pflanzdatum',
+                                htmlspecialchars($s, ENT_QUOTES, 'UTF-8'));
+            $namen[] = 'zonen[' . (int) $i . '].pflanzdatum';
         }
         /* Gardena-1: eine Zone mit Ausgabeart GARDENA braucht den
          * Geraetenamen - sonst haette sie weder Loxone noch ein Ventil. */
@@ -3150,16 +3208,16 @@ function bw_ansage_senden($jetzt = null)
 
 function bw_ansage_anlaesse()
 {
-    return array('ansage_ende' => 'ENDE', 'ansage_ventil' => 'VENTIL');
+    return array('ansage_ende' => 'ENDE', 'ansage_ventil' => 'VENTIL', 'ansage_sperre' => 'SPERRE');     // SPERRE: 0.9.49
 }
 
-/** Der Block tts, vervollstaendigt (ab Werk 'aus'). Fehlt er (Aktualisierungsfall),
- *  gelten die Vorgaben des Moduls. */
+/** Der Block tts. Nie gesetzt: ab Werk (ansage_werk_block(), wie bw_vorgaben()). Gespeichert: geprueft und
+ *  vervollstaendigt; ein ungueltiger gilt als 'aus' und schaltet nie etwas ein (0.9.49, Stamm). */
 function bw_tts($cfg = null)
 {
     if (!is_array($cfg)) { $cfg = bw_config(false); }
-    list($t) = ansage_vervollstaendigen(isset($cfg['tts']) && is_array($cfg['tts']) ? $cfg['tts'] : array(), 'aus');
-    return $t;
+    if (!array_key_exists('tts', $cfg)) { return ansage_werk_block(); }
+    return ansage_block_oder_aus($cfg['tts'], bw_ansage_modi());
 }
 
 /** Der Kontext des Moduls: Webport, Kopfzeile, Ordner fuer <art>_letzte.json, Texte. */
@@ -3194,6 +3252,7 @@ function bw_ansage_name($w)
  * (Abschnitt SPRECHEN). '' fuer einen unbekannten oder unvollstaendigen Auftrag.
  *   ende:   zonen (Zahl der fertig gegossenen Zonen), vollstaendig (0/1)
  *   ventil: zone, ventil (Ersatz, wenn die Zone keinen Namen hat), befehl oeffnen|schliessen
+ *   sperre: grund frost|wind|beide (0.9.49)
  */
 function bw_ansage_text($d)
 {
@@ -3211,6 +3270,10 @@ function bw_ansage_text($d)
         $b = isset($d['befehl']) ? $d['befehl'] : '';
         if ($z === '' || !in_array($b, array('oeffnen', 'schliessen'), true)) { return ''; }
         return sprintf(bw_t($b === 'oeffnen' ? 'SPRECHEN.VENTIL_AUF' : 'SPRECHEN.VENTIL_ZU'), $z);
+    }
+    if ($d['anlass'] === 'sperre') {     // 0.9.49
+        $g = array('frost' => 'SPRECHEN.SPERRE_FROST', 'wind' => 'SPRECHEN.SPERRE_WIND', 'beide' => 'SPRECHEN.SPERRE_BEIDE');
+        return (isset($d['grund']) && is_string($d['grund']) && isset($g[$d['grund']])) ? bw_t($g[$d['grund']]) : '';
     }
     return '';
 }
@@ -3351,9 +3414,13 @@ function bw_sicherung_lesen($roh, &$namen = null)
         if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
             $s2_g = '';
             $s2_r = ansage_regeln_wert($w, $s2_g);
-            if ($s2_r === null) {  continue; }
+            if ($s2_r === null) {     // 0.9.49: bis 0.9.48 stillschweigend uebergangen, die Datei galt als heil
+                $mangel[] = sprintf(bw_t('EINST.SICH_TTS'),
+                    htmlspecialchars(ansage_kennung_text($s2_g !== '' ? $s2_g : 'M_R_BLOCK', bw_ansage_k()), ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'config.ansage_regeln';
+                continue;
+            }
             $neu['ansage_regeln'] = $s2_r;
-            
             continue;
         }
         if ($k === 'tts') {
@@ -3551,6 +3618,8 @@ function bw_merkwort()
      * andere gerade fuellt. */
     $tmp = $datei . '.tmp.' . getmypid() . '.' . bin2hex(random_bytes(4));
     $steht = false;
+    @file_put_contents($tmp, '');     // 0.9.49: erst die Rechte, dann der Inhalt
+    @chmod($tmp, 0600);
     if (@file_put_contents($tmp, $neu) !== false) {
         @chmod($tmp, 0600);
         if (@rename($tmp, $datei)) { $steht = true; }
@@ -4077,7 +4146,7 @@ function bw_vorlage_befehle()
     $x[] = "\t" . '<Info templateType="3" minVersion="17010727"/>';
     $x = array_merge($x, $z);
     $x[] = '</VirtualOut>';
-    return array('VQ_bewaesserung_mqtt.xml', implode("\n", $x) . "\n");
+    return array('VQ_bewaesserung_mqtt.xml', implode("\r\n", $x) . "\r\n");     // 0.9.49: CRLF wie die Ausfuhren der Config (Regeln/07)
 }
 
 /**

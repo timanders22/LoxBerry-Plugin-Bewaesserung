@@ -431,6 +431,8 @@ if ($bw_post && isset($_POST['speichern'])) {
     $bw_cfg['tts'] = ansage_formular_lesen($_POST, bw_tts($bw_cfg), $bw_tmangel, $bw_tbean,
         array('modi' => bw_ansage_modi(), 'ziele' => bw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), bw_ansage_k(), $bw_thinw);
     list($bw_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, bw_ansage_regeln($bw_cfg), array(), $bw_tmangel, $bw_tbean, bw_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 0.9.49: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 0.9.48 ueberschrieb es der naechste Abgleich.
+    $bw_cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($bw_cfg['ansage_token_herkunft']) ? $bw_cfg['ansage_token_herkunft'] : array());
     foreach ($bw_tmangel as $bw_tm) { $bw_fehler[] = bw_e($bw_tm['text']); }
     foreach ($bw_tbean as $bw_tb) { $bw_beanstandet[] = $bw_tb; }
     $bw_n0 = count($bw_fehler);
@@ -865,6 +867,22 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             $bw_beanstandet[] = 'z_mikroklima[' . $bw_i . ']';
             continue;
         }
+        /* 0.9.49: Datum Aussaat/Pflanzung, roh geprueft ($bw_hol wuerde ein Komma umschreiben). Leer heisst fester Kc. */
+        $bw_pd_roh = (isset($_POST['z_pflanzdatum'][$bw_i]) && is_string($_POST['z_pflanzdatum'][$bw_i]))
+            ? trim($_POST['z_pflanzdatum'][$bw_i]) : '';
+        $bw_pd = $bw_pd_roh === '' ? '' : bw_pflanzdatum_lesen($bw_pd_roh);
+        if ($bw_pd === null) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_PFLANZDATUM'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_pflanzdatum[' . $bw_i . ']';
+            continue;
+        }
+        if ($bw_pd !== '' && !bw_bepflanzung_hat_phasen($bw_bep)) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_PFLANZDATUM_OHNE_PHASEN'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_pflanzdatum[' . $bw_i . ']';
+            continue;
+        }
         $bw_alt = bw_zone($bw_s);
 
         /* ---- neu in 0.9.7; O2 (Durchgang 30.09.2026): ABWEISEN ----
@@ -995,6 +1013,7 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             'theta_wp_eigen' => $bw_twp !== null ? $bw_twp : 0.0,
             'rate_mmh'     => $bw_rate !== '' ? (float) $bw_rate : 0.0,
             'mikroklima'   => $bw_mk !== '' ? (float) $bw_mk : 1.0,
+            'pflanzdatum'  => $bw_pd,     // 0.9.49
             /* Wer die Rate leert, nimmt die Becherprobe zurueck. Das
              * Merkmal aus $bw_alt zu uebernehmen ist richtig (es steht
              * in keinem Formularfeld) - aber nicht fuer eine Rate von
@@ -2013,6 +2032,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
     <th><?= bw_e(bw_t('ZONE.T_FLAECHE')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEPFLANZUNG')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_BODEN')) ?></th><th><?= bw_e(bw_t('ZONE.T_RATE')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_MIKRO')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_PFLANZDATUM')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_FEUCHTE')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_LOESCHEN')) ?></th></tr>
 <?php /* Acht Zeilen sind die Vorgabe, aber NIE weniger, als es Zonen
@@ -2057,6 +2077,9 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
   <td><input data-role="none" type="text" name="z_mikroklima[<?= $bw_i ?>]" size="4"
              value="<?= bw_e(bw_eingabe('zonen', 'z_mikroklima[' . $bw_i . ']', isset($bw_z['mikroklima']) && (float) $bw_z['mikroklima'] != 1.0
                              ? $bw_z['mikroklima'] : '')) ?>" placeholder="1,0"<?= bw_markierung('z_mikroklima[' . $bw_i . ']') ?>></td>
+  <td><input data-role="none" type="text" name="z_pflanzdatum[<?= $bw_i ?>]" size="10"
+             value="<?= bw_e(bw_eingabe('zonen', 'z_pflanzdatum[' . $bw_i . ']', bw_pflanzdatum_anzeige(isset($bw_z['pflanzdatum']) ? $bw_z['pflanzdatum'] : ''))) ?>"
+             placeholder="<?= bw_e(bw_t('ZONE.P_PFLANZDATUM')) ?>"<?= bw_markierung('z_pflanzdatum[' . $bw_i . ']') ?>></td>
   <td><input data-role="none" type="text" name="z_feuchte[<?= $bw_i ?>]" size="16"
              value="<?= bw_e(bw_eingabe('zonen', 'z_feuchte[' . $bw_i . ']', isset($bw_z['feuchte_thema']) ? $bw_z['feuchte_thema'] : '')) ?>"
              placeholder="<?= bw_e(bw_t('ZONE.P_FEUCHTE')) ?>"></td>
@@ -2067,6 +2090,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 </div>
 <p class="sm-hilfe"><?= bw_t('ZONE.FUSSNOTE') ?></p>
 <p class="sm-hilfe"><?= bw_t('ZONE.HILFE_MIKRO') ?></p>
+<p class="sm-hilfe"><?= bw_t('ZONE.HILFE_PFLANZDATUM') ?></p>
 
 <h3><?= bw_e(bw_t('ZONE.H_FEIN')) ?></h3>
 <p class="sm-hilfe"><?= bw_t('ZONE.FEIN_ERKLAERUNG') ?></p>
@@ -2192,7 +2216,7 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 
 <?php if ($bw_a && !empty($bw_a['zonen'])) { ?>
 <h2><?= bw_e(bw_t('ZONE.H_STAND')) ?></h2>
-<?php /* Acht Spalten - sie gehoert in sm-breit (Regeln/04: mehr als sechs
+<?php /* Neun Spalten (0.9.49: Kc und Phase) - sie gehoert in sm-breit (Regeln/04: mehr als sechs
          Spalten oder Eingabefelder). Ohne Ueberlauf macht
          .sm-tabelle{width:100%} in einem .sm-wrap mit max-width:980px die
          rechten Spalten unerreichbar; genau das ist dieser Linie am
@@ -2203,11 +2227,14 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 <tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_FUELLSTAND')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_DEFIZIT')) ?></th><th><?= bw_e(bw_t('ZONE.T_BEDARF')) ?></th>
     <th><?= bw_e(bw_t('ZONE.T_LITER')) ?></th><th><?= bw_e(bw_t('ZONE.T_MINUTEN')) ?></th>
-    <th><?= bw_e(bw_t('ZONE.T_VENTILZEIT')) ?></th><th><?= bw_e(bw_t('ZONE.T_GEGOSSEN')) ?></th></tr>
-<?php foreach ($bw_zonen as $bw_z) {
+    <th><?= bw_e(bw_t('ZONE.T_VENTILZEIT')) ?></th><th><?= bw_e(bw_t('ZONE.T_GEGOSSEN')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_KC')) ?></th></tr>
+<?php $bw_kc_durch = array();     // 0.9.49: Zonen, deren Kultur laut Rechnung durch ist
+foreach ($bw_zonen as $bw_z) {
     $bw_s = (string) $bw_z['schluessel'];
     $bw_e = isset($bw_a['zonen'][$bw_s]) ? $bw_a['zonen'][$bw_s] : null;
     if (!is_array($bw_e) || empty($bw_e['ok'])) { continue; }
+    if (!empty($bw_e['kc_durch'])) { $bw_kc_durch[] = (string) $bw_z['name']; }
     $bw_ges = empty($bw_z['rate_gemessen']); ?>
 <tr><td><?= bw_e($bw_z['name']) ?></td>
     <td><div class="sm-balken"><i style="width:<?= (int) $bw_e['fuellstand'] ?>%"></i></div>
@@ -2235,10 +2262,15 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
         if ($bw_ged) { echo ' <span class="sm-aus">' . bw_e(bw_t('ZONE.GEDECKELT')) . '</span>'; } ?></td>
     <td><?= isset($bw_e['gegossen_mm']) && $bw_e['gegossen_mm'] !== null
         ? number_format((float) $bw_e['gegossen_mm'], 1, ',', '.') . ' mm'
-        : '<span class="sm-hilfe">&mdash;</span>' ?></td></tr>
+        : '<span class="sm-hilfe">&mdash;</span>' ?></td>
+    <td><?= isset($bw_e['kc']) ? number_format((float) $bw_e['kc'], 2, ',', '.') : '&mdash;' ?><?php
+        if (isset($bw_e['kc_phase']) && is_string($bw_e['kc_phase']) && preg_match('/^[a-z]+$/', $bw_e['kc_phase'])) {
+            echo '<br><span class="sm-hilfe">' . bw_e(bw_t('ZONE.PHASE_' . strtoupper($bw_e['kc_phase']))) . '</span>';
+        } ?></td></tr>
 <?php } ?>
 </table>
 </div>
+<?php if ($bw_kc_durch) { ?><p class="sm-aus"><?= sprintf(bw_t('ZONE.KC_DURCH'), bw_e(implode(', ', $bw_kc_durch))) ?></p><?php } ?>
 <p class="sm-hilfe"><?= bw_t('ZONE.STAND_FUSSNOTE') ?></p>
 <?php
 /* Die Zonen ohne Niederschlagsrate BENENNEN.
@@ -2822,6 +2854,8 @@ if (!$bw_zeilen) { ?>
 		if (history.replaceState) { history.replaceState(null, '', 'index.php?form=' + id.replace('tab-', '')); }
 	}
 	reiter.forEach(function (r) {
+		// 0.9.49: die Pruefzeilen rechnet nur ein echter Abruf des Reiters. Bis 0.9.48 zeigte der Klick nur den Hinweissatz.
+		if (r.dataset.ziel === 'tab-test') { return; }
 		r.addEventListener('click', function (e) { e.preventDefault(); zeige(r.dataset.ziel); });
 	});
 	zeige(<?= json_encode($bw_tab) ?>);

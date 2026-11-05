@@ -45,7 +45,7 @@ function bw_endpunkt_probe()
     if ($token === '') {
         return array(0, 'KEIN_TOKEN', '');
     }
-    $url = 'http://127.0.0.1/plugins/' . rawurlencode($p['plugin'])
+    $url = 'http://127.0.0.1:' . bw_webport() . '/plugins/' . rawurlencode($p['plugin'])     // 0.9.49: Port wie die Gardena-Zeile
          . '/index.php?selftest=1&token=' . rawurlencode($token);
     $ctx = stream_context_create(array('http' => array(
         'method' => 'GET', 'timeout' => 5,

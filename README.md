@@ -5,12 +5,25 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.48 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.49 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.49
+
+- **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
+- **Ansage bei Frost- oder Sturmsperre (neu, ab Werk an):** Greift eine von Ihnen eingeschaltete Frost- oder Sturmsperre für die kommende Nacht, sagt die Bewässerung das einmal je Nacht und Grund an, zum Beispiel „Achtung, Frostsperre. Die Bewässerung pausiert heute Nacht.“ Nachts schweigt sie: Wird die Sperre in der Nachtruhe erkannt, fällt die Ansage beim ersten Rechengang danach, wenn die Sperre dann noch gilt. Der neue Haken im Abschnitt Sprachausgabe schaltet nur die Ansage ab, nie die Sperre. Regensperre und „Anlage am Limit“ sagen nichts an.
+- **Wachstumsphasen nach FAO-56 (neu, freiwillig):** Im Reiter Zonen gibt es für Tomaten und kleinwüchsiges Gemüse das Feld „Aussaat/Pflanzung“. Mit Datum läuft der Pflanzenbeiwert Kc je Tag durch Anfang, Entwicklung, Mitte und Ende (FAO-56, Tabelle 11 und 12, Gleichung 66), auch rückwirkend in der Wasserbilanz und in der Vorschau. Ohne Datum rechnet die Zone genau wie bisher. Die Tabelle „Stand der Zonen“ zeigt Kc und Phase und sagt, wenn eine Kultur laut Rechnung durch ist. MQTT-Themen ändern sich nicht.
+- **Reiter Test:** Ein Klick auf den Reiter zeigt jetzt die Prüfzeilen. Bisher stand dort nur der Hinweissatz, außer die Seite wurde direkt mit `form=test` geöffnet.
+- **Zeile „Vorgaben“:** Das rote Kreuz seit 0.9.46 ist weg. Es war ein Fehler der Liste, kein Fehler Ihrer Anlage.
+- **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.
+- **Sicherung zurückspielen:** Ungültige Regeln der Sprachausgabe in der Datei werden jetzt gemeldet und die Datei wird abgewiesen, statt sie still zu übergehen.
+- **Formular Einstellungen:** Ein beanstandeter Tafelname oder HomePod-Name wird rot markiert, und Ihre übrigen Eingaben bleiben stehen. Den beanstandeten Namen selbst tragen Sie neu ein.
+- **Update:** Lässt sich die Marke für die Aktualisierung nicht anlegen, bricht das Update ab und die bisherige Fassung bleibt. Einstellungen gehen dabei nicht verloren.
+- **Kleinere Korrekturen:** Selbstprüfung des Endpunkts auf dem eingestellten Webport, Zeitgrenze für `pip`, Rechte vor dem Schreiben der Token, `cron.err` wird bei 256 kB gekürzt, unbekannte Schalter starten den Dienst nicht mehr, der Dienst erbt keine offenen Dateien des Aufrufers, CRLF in der Befehlsvorlage.
 
 ## Neu in 0.9.48
 

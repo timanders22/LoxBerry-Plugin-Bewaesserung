@@ -10,6 +10,10 @@
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bewaesserung}"
+# 0.9.49: dieselbe Pruefung wie preinstall.sh (Bauart MGiSmart).
+case "$PFOLDER" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$PFOLDER' - nichts angelegt."; exit 2 ;;
+esac
 BASE="${ARGV5:-$LBHOMEDIR}"
 if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     SELF=$(cd "$(dirname "$0")" && pwd)
@@ -282,7 +286,8 @@ if [ -x "$VENV/bin/pip" ]; then
     # umgestellt. Der Dienst kommt mit beiden zurecht, aber eine
     # festgelegte Fassung ist eine gemessene Aussage, eine offene nicht.
     PIPLOG=$(mktemp 2>/dev/null || echo "$PDATA/pip.log")
-    if "$VENV/bin/pip" install --no-cache-dir "paho-mqtt<2" >"$PIPLOG" 2>&1; then
+    # 0.9.49: mit Zeitgrenze; ein haengendes Netz haelt die Installation nicht auf, paho-mqtt ist freiwillig.
+    if timeout 300 "$VENV/bin/pip" install --no-cache-dir --disable-pip-version-check "paho-mqtt<2" >"$PIPLOG" 2>&1; then
         echo "<OK> Paket paho-mqtt eingerichtet - Messwerte koennen ueber MQTT kommen."
     else
         BW_PAHO_FEHLT=1

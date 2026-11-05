@@ -279,10 +279,13 @@ VORGABEN = {
     # Nr. 36 b (Stufe 2, seit 0.9.38): Sprachausgabe ueber die gemeinsame Sprachausgabe der
     # Plugins (PHP, Bruecke bin/bw_ansage.php). Die Ausgabe selbst ist seit 0.9.46 ab Werk AN (Block
     # tts); seine Vorgaben stehen nur in PHP (ansage_werk_block()), der
-    # Dienst liest ihn nie und fuehrt hier nur den Namen. Die beiden Haken waehlen die
+    # Dienst liest ihn nie und fuehrt hier nur den Namen. Die Haken waehlen die
     # Anlaesse einzeln ab und stehen ab Werk an - wer die Ausgabe einschaltet, hoert sofort.
-    "ansage_ende": 1, "ansage_ventil": 1,
-    "tts": None, "ansage_regeln": None, "ansage_token_herkunft": None,
+    # 0.9.49: dazu ansage_sperre (Frost- oder Sturmsperre der kommenden Nacht).
+    "ansage_ende": 1, "ansage_ventil": 1, "ansage_sperre": 1,
+    # 0.9.49: nur "tts", wie bw_vorgaben(). ansage_regeln und ansage_token_herkunft standen seit 0.9.46 nur hier,
+    # die Zeile "Vorgaben" im Reiter Test zeigte dadurch ein rotes Kreuz. Der Dienst liest keinen der drei.
+    "tts": None,
     #
     # Gruppe 2 / MQTT (0.9.44): der Haken "Befehle ueber MQTT annehmen" der gemeinsamen Befehlsbruecke
     # (PHP, bin/befehlsbruecke.php). AUS ab Werk. Der Dienst liest ihn nie; er steht hier, damit beide
@@ -2214,15 +2217,18 @@ def ventil_lesen() -> tuple:
 #           und Befehl: eine anhaltende Stoerung spricht einmal; erst wenn
 #           dasselbe Ventil denselben Befehl wieder angenommen hat (Ende der
 #           Stoerung), spricht die naechste wieder.
+#   sperre  0.9.49: die Frost- oder Sturmsperre gilt fuer die kommende Nacht -
+#           einmal je Nacht und Grund, siehe ansage_sperre().
 # Die Bruecke laeuft in einem eigenen Faden mit Zeitgrenze, damit ein haengendes
 # Alexa-NG den GARDENA-Lauf nicht aufhaelt; es laeuft hoechstens eine zugleich.
 ANSAGE_ZEITGRENZE_S = 20.0      # die Bruecke kappt jede Ansage auf 15 s ('frist', bin/bw_ansage.php; B2)
 ANSAGE_HOECHSTENS_WARTEND = 4
-ANSAGE_HAKEN = {"ende": "ansage_ende", "ventil": "ansage_ventil"}
+ANSAGE_HAKEN = {"ende": "ansage_ende", "ventil": "ansage_ventil", "sperre": "ansage_sperre"}
 _ANSAGE_SCHLOSS = threading.Lock()
 _ANSAGE_REIHE = threading.Lock()
 _ANSAGE_STAND: dict = {}
 _ANSAGE_FAEDEN: list = []
+_ANSAGE_SPERRE_LAEUFT: list = []        # 0.9.49: hoechstens ein Auftrag 'sperre' zugleich
 
 
 def _ansage_stand() -> dict:
@@ -2232,12 +2238,14 @@ def _ansage_stand() -> dict:
         d = _still_lesen(DATEI_ANSAGE_SPERRE)
         _ANSAGE_STAND["ende"] = d.get("ende") if isinstance(d.get("ende"), dict) else {}
         _ANSAGE_STAND["ventil"] = d.get("ventil") if isinstance(d.get("ventil"), dict) else {}
+        _ANSAGE_STAND["sperre"] = d.get("sperre") if isinstance(d.get("sperre"), dict) else {}
     return _ANSAGE_STAND
 
 
 def _ansage_stand_sichern() -> None:
     if not json_schreiben(DATEI_ANSAGE_SPERRE, {"ende": _ANSAGE_STAND.get("ende") or {},
-                                                "ventil": _ANSAGE_STAND.get("ventil") or {}}):
+                                                "ventil": _ANSAGE_STAND.get("ventil") or {},
+                                                "sperre": _ANSAGE_STAND.get("sperre") or {}}):
         _LOG.warning("Ansage: die Wiederholsperre liess sich nicht schreiben - sie gilt bis "
                      "zum Neustart des Dienstes.")
 
@@ -2251,6 +2259,8 @@ def ansage_ereignis(art: str, daten: dict, cfg) -> str:
     aus), 'gesperrt' (Wiederholsperre), 'quittiert', 'verworfen' oder ''.
     """
     daten = daten if isinstance(daten, dict) else {}
+    if art == "sperre":
+        return ansage_sperre(daten, cfg)
     if art == "ventil_ok":
         name = str(daten.get("ventil") or "")
         befehl = str(daten.get("befehl") or "")
@@ -2305,14 +2315,79 @@ def ansage_ereignis(art: str, daten: dict, cfg) -> str:
     return _ansage_starten(art, auftrag)
 
 
-def _ansage_starten(art: str, auftrag: dict) -> str:
+def ansage_sperre(daten: dict, cfg) -> str:
+    """Frost- oder Sturmsperre ansagen (0.9.49), je Rechengang aus dem Dienstlauf.
+
+    daten: nacht (Datum des Abends, an dem die gesperrte Nacht beginnt) und die
+    Befunde frost und wind aus giessplan.sperren_pruefen(). Regen und 'Anlage am
+    Limit' sagen nichts an. Die Sperre selbst bleibt davon unberuehrt.
+
+    Der Merker liegt im Stamm der Wiederholsperre (DATEI_ANSAGE_SPERRE), je Nacht
+    und Grund, und wird erst gesetzt, wenn die Bruecke den Auftrag GELEGT hat
+    (_ansage_sperre_rufen). In der Nachtruhe antwortet sie mit Rueckgabe 3; dann
+    bleibt der Merker frei, und der naechste Rechengang ausserhalb der Nachtruhe
+    sagt an, solange dieselbe Nacht noch kommt und die Sperre noch gilt. Ob gerade
+    Nachtruhe ist, weiss nur PHP (Stamm, ansage_nachtruhe()).
+
+    Beide Gruende zugleich: ein Satz (grund 'beide'), danach ist beides gemerkt.
+    Rueckgabe wie ansage_ereignis(), dazu '' fuer keine Sperre und 'laeuft'.
+    """
+    gruende = [g for g in ("frost", "wind") if daten.get(g) == 1]
+    nacht = str(daten.get("nacht") or "")
+    if not gruende or not nacht:
+        return ""
+    try:
+        an = int((cfg or {}).get(ANSAGE_HAKEN["sperre"]) or 0) == 1
+    except (TypeError, ValueError):
+        an = False
+    if not an:
+        return "aus"
+    with _ANSAGE_SCHLOSS:
+        je = _ansage_stand()["sperre"]
+        schon = je.get("gruende") if je.get("nacht") == nacht and isinstance(je.get("gruende"), dict) else {}
+        neu = [g for g in gruende if g not in schon]
+        if not neu:
+            return "gesperrt"
+        if _ANSAGE_SPERRE_LAEUFT:
+            return "laeuft"
+        _ANSAGE_SPERRE_LAEUFT.append(1)
+    auftrag = {"anlass": "sperre", "grund": "beide" if len(neu) == 2 else neu[0]}
+    erg = _ansage_starten("sperre", auftrag, _ansage_sperre_rufen, (nacht, neu))
+    if erg != "gestartet":
+        with _ANSAGE_SCHLOSS:
+            del _ANSAGE_SPERRE_LAEUFT[:]
+    return erg
+
+
+def _ansage_sperre_rufen(art: str, auftrag: dict, nacht: str, gruende: list) -> int:
+    """Die Bruecke rufen und den Merker erst nach der Annahme setzen (0.9.49)."""
+    try:
+        rc = ansage_rufen(art, auftrag, ruhig=True)
+        if rc == 0:
+            with _ANSAGE_SCHLOSS:
+                st = _ansage_stand()
+                je = st["sperre"]
+                schon = je.get("gruende") if je.get("nacht") == nacht and isinstance(je.get("gruende"), dict) else {}
+                schon = dict(schon)
+                for g in gruende:
+                    schon[g] = int(time.time())
+                st["sperre"] = {"nacht": nacht, "gruende": schon}
+                _ansage_stand_sichern()
+        return rc
+    finally:
+        with _ANSAGE_SCHLOSS:
+            del _ANSAGE_SPERRE_LAEUFT[:]
+
+
+def _ansage_starten(art: str, auftrag: dict, ziel=None, mehr: tuple = ()) -> str:
     with _ANSAGE_SCHLOSS:
         _ANSAGE_FAEDEN[:] = [f for f in _ANSAGE_FAEDEN if f.is_alive()]
         if len(_ANSAGE_FAEDEN) >= ANSAGE_HOECHSTENS_WARTEND:
             _LOG.warning("Ansage (%s) entfaellt: %d Ansagen laufen oder warten schon.",
                          art, len(_ANSAGE_FAEDEN))
             return "verworfen"
-        f = threading.Thread(target=ansage_rufen, args=(art, auftrag), name="ansage", daemon=True)
+        f = threading.Thread(target=ziel or ansage_rufen, args=(art, auftrag) + tuple(mehr),
+                             name="ansage", daemon=True)
         _ANSAGE_FAEDEN.append(f)
     f.start()
     return "gestartet"
@@ -2340,10 +2415,12 @@ def _ansage_zeile(roh: bytes) -> str:
     return ""
 
 
-def ansage_rufen(art: str, auftrag: dict) -> int:
+def ansage_rufen(art: str, auftrag: dict, ruhig: bool = False) -> int:
     """Die Bruecke aufrufen und ihren Rueckgabewert auswerten (ansage_cli()):
     0 gesendet, 1 gescheitert, 3 nichts gesendet ohne Fehler (etwa Ausgabe
-    aus), 2 Aufruf falsch. Negativ: nicht aufrufbar oder Zeitgrenze."""
+    aus), 2 Aufruf falsch. Negativ: nicht aufrufbar oder Zeitgrenze.
+    ruhig (0.9.49): Rueckgabe 3 nur auf Stufe DEBUG. 'sperre' fragt in jeder
+    Nachtruhe bis zu jeden Rechengang neu; das soll keine Protokollzeile werden."""
     skript = os.path.join(HIER, "bw_ansage.php")
     if not os.path.isfile(skript):
         _LOG.warning("Ansage (%s) nicht moeglich: bin/bw_ansage.php fehlt.", art)
@@ -2366,7 +2443,8 @@ def ansage_rufen(art: str, auftrag: dict) -> int:
     if rc == 0:
         _LOG.info("Ansage (%s) gesendet: %s", art, zeile)
     elif rc == 3:
-        _LOG.info("Ansage (%s) nicht gesendet, kein Fehler: %s", art, zeile)
+        _LOG.log(logging.DEBUG if ruhig else logging.INFO,
+                 "Ansage (%s) nicht gesendet, kein Fehler: %s", art, zeile)
     elif rc == 1:
         _LOG.warning("Ansage (%s) gescheitert: %s", art, zeile)
     elif rc == 2:
@@ -2375,6 +2453,63 @@ def ansage_rufen(art: str, auftrag: dict) -> int:
         fehl = re.sub(r"[^\x20-\x7e]", "?", (r.stderr or b"").decode("utf-8", "replace").strip())
         _LOG.warning("Ansage (%s): die Bruecke endete mit %d: %s %s", art, rc, zeile, fehl[:160])
     return rc
+
+
+def ansage_sperre_selbstpruefung() -> list:
+    """0.9.49: ansage_sperre() ohne Bruecke und ohne Datei. Rueckgabe [(ok, Text)]."""
+    z: list = []
+    g = globals()
+    alt = {k: g[k] for k in ("ansage_rufen", "json_schreiben", "_still_lesen")}
+    stand_alt = dict(_ANSAGE_STAND)
+    datei: dict = {}
+    rufe: list = []
+    antwort = [0]
+    cfg = {"ansage_sperre": 1}
+
+    def _rufen(art, auftrag, ruhig=False):
+        rufe.append(auftrag.get("grund"))
+        return antwort[0]
+
+    def _schreiben(pfad, inhalt, *a, **k):
+        datei.clear()
+        datei.update(inhalt)
+        return True
+
+    def _los(nacht, frost=1, wind=0, c=None):
+        e = ansage_ereignis("sperre", {"nacht": nacht, "frost": frost, "wind": wind},
+                            cfg if c is None else c)
+        ansagen_abwarten(5.0)
+        return e
+
+    g["ansage_rufen"], g["json_schreiben"] = _rufen, _schreiben
+    g["_still_lesen"] = lambda pfad: dict(datei)
+    try:
+        _ANSAGE_STAND.clear()
+        z.append((_los("2026-11-05", c={"ansage_sperre": 0}) == "aus" and not rufe,
+                  "Sperre-Ansage: Haken aus ruft die Bruecke nicht"))
+        z.append((_los("2026-11-05", 0, 0) == "" and not rufe,
+                  "Sperre-Ansage: ohne Frost und Sturm kein Aufruf"))
+        antwort[0] = 3
+        _los("2026-11-05")
+        z.append((rufe == ["frost"] and "sperre" not in datei,
+                  "Sperre-Ansage: Rueckgabe 3 (Nachtruhe) merkt nichts"))
+        antwort[0] = 0
+        _los("2026-11-05")
+        z.append((_los("2026-11-05") == "gesperrt" and rufe == ["frost", "frost"],
+                  "Sperre-Ansage: nach der Annahme einmal je Nacht"))
+        _ANSAGE_STAND.clear()
+        z.append((_los("2026-11-05") == "gesperrt" and len(rufe) == 2,
+                  "Sperre-Ansage: die Sperre uebersteht einen Neustart"))
+        _los("2026-11-05", 1, 1)
+        z.append((rufe[-1] == "wind", "Sperre-Ansage: spaeter dazu nur der neue Grund"))
+        _los("2026-11-06", 1, 1)
+        z.append((rufe[-1] == "beide" and len(rufe) == 4,
+                  "Sperre-Ansage: neue Nacht, beide Gruende, ein Satz"))
+    finally:
+        g.update(alt)
+        _ANSAGE_STAND.clear()
+        _ANSAGE_STAND.update(stand_alt)
+    return z
 
 
 def ventil_lauf_neu(jetzt=time.time) -> "ventil.Lauf":
@@ -2631,11 +2766,21 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         wetter = {"u2": et0_eigen.get("u2"), "rh_min": m.get("rh_min")}
 
     ergebnisse = {}
+    tabelle_pflanzen = None     # 0.9.49: nur gelesen, wenn eine Zone ein Datum traegt
     for z in zonenliste:
         s = str(z.get("schluessel") or "")
         if not s:
             continue
         zz = dict(z)
+        # 0.9.49: Wachstumsphasen. Kommen aus pflanzen.json, nicht aus zonen.json:
+        # die Zone traegt nur ihr Datum. Ein ungueltiges Datum gilt als leer.
+        if zz.get("pflanzdatum"):
+            if giessplan.pflanzdatum_ungueltig(zz["pflanzdatum"], heute):
+                pflanzdatum_melden(s, zz["pflanzdatum"])
+            else:
+                if tabelle_pflanzen is None:
+                    tabelle_pflanzen = pflanzen().get("bepflanzung") or {}
+                zz["phasen"] = (tabelle_pflanzen.get(str(zz.get("bepflanzung") or "")) or {}).get("phasen")
         # Der Verlauf je Zone: dieselben Tage, aber mit DER Bewaesserung,
         # die diese Zone bekommen hat. Ohne Rueckmeldung steht dort 0 - also
         # genau das, was bis 0.9.6 immer galt.
@@ -2651,7 +2796,7 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         if bf is not None:
             zz["bodenfeuchte"] = bf
         ergebnisse[s] = giessplan.zone_rechnen(zz, verlauf_liste, vorschau,
-                                               cfg, wetter)
+                                               cfg, wetter, heute)
         ergebnisse[s]["feuchte_herkunft"] = bf_woher
         ergebnisse[s]["gegossen_mm"] = gegossen.get(s)
         if ergebnisse[s].get("ok"):
@@ -2746,6 +2891,21 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
                          int(round(100 * float(plan.get("fenster_anteil") or 0))),
                          int(plan.get("fenster_gekuerzt_min") or 0))
     return abbild
+
+
+_PFLANZDATUM_GEMELDET: set = set()
+
+
+def pflanzdatum_melden(schluessel: str, wert) -> None:
+    """Ein ungueltiges Datum Aussaat/Pflanzung einmal je Zone und Wert ins
+    Protokoll (0.9.49). Die Zone rechnet dann wie ohne Datum. Der Wert selbst
+    steht nicht im Protokoll, er kommt aus einer Datei."""
+    k = (schluessel, str(wert))
+    if k in _PFLANZDATUM_GEMELDET:
+        return
+    _PFLANZDATUM_GEMELDET.add(k)
+    _LOG.warning("Zone %s: das Datum Aussaat/Pflanzung ist ungueltig und wird wie leer "
+                 "behandelt (fester Pflanzenbeiwert).", schluessel)
 
 
 def nachtplan_pflegen(abbild: dict, cfg: dict, jetzt_dt) -> dict:
@@ -3175,6 +3335,12 @@ class Dienst:
                             "fehler": abbild.get("et0_fehler") or abbild.get("online_fehler") or ""})
                         n = veroeffentlichen(abbild, cfg)
                         meldungen_pruefen(abbild, cfg)
+                        # 0.9.49: erst hier, also nie aus einem Rechengang mit
+                        # ausgefallener Quelle, und nicht aus --einmal.
+                        sp_a = abbild.get("sperre") or {}
+                        ansage_ereignis("sperre", {"nacht": abbild.get("datum"),
+                                                   "frost": sp_a.get("frost"),
+                                                   "wind": sp_a.get("wind")}, cfg)
                         # Unabhaengig von 'melden_ein' und genau einmal
                         # je Tag - siehe die Funktion selbst.
                         stationslage_protokollieren(abbild)
@@ -3551,6 +3717,10 @@ def selbsttest() -> int:
     for ok, text in lebenszeichen_selbstpruefung():
         print(("  [OK]   " if ok else "  [FEHL] ") + text)
         fehlt += 0 if ok else 1
+    print("Ansage bei Frost- oder Sturmsperre (0.9.49):")
+    for ok, text in ansage_sperre_selbstpruefung():
+        print(("  [OK]   " if ok else "  [FEHL] ") + text)
+        fehlt += 0 if ok else 1
     print()
     print("Nicht geprueft, weil dafuer echte Hardware noetig ist:")
     print("  - ob die Themen und Pfade zu IHRER Wetterstation passen")
@@ -3560,6 +3730,10 @@ def selbsttest() -> int:
 
 
 def main() -> int:
+    # 0.9.49: ein Tippfehler startete bis 0.9.48 den Dauerdienst im Vordergrund, und dienst.sh erkannte ihn nicht als eigenen.
+    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("--einmal", "--selbsttest", "--mqtt-leeren")):
+        sys.stderr.write("Unbekannter Aufruf. Erlaubt: --einmal, --selbsttest oder --mqtt-leeren.\n")
+        return 2
     # Der zweite Protokollkanal nur dort, wo die Ausgabe wirklich auf den
     # Bildschirm gehoert. Im Dauerbetrieb leitet dienst.sh die
     # Standardausgabe in dieselbe Datei um - siehe log_einrichten().

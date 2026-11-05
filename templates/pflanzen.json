@@ -16,7 +16,13 @@
     "liegen sie zu niedrig. Die Feinanpassung dafuer ist bewusst NICHT",
     "eingebaut: sie braucht die Pflanzenhoehe und den Entwicklungsstand, und",
     "beides weiss hier niemand. Wer es genauer braucht, hebt den Kc-Wert der",
-    "Zone von Hand an."
+    "Zone von Hand an.",
+    "",
+    "phasen (0.9.49, freiwillig, nur Saisonkulturen): tage = Dauer Anfang, Entwicklung, Mitte, Ende",
+    "[FAO-56, Tabelle 11]; kc_ini, kc_mid, kc_end [FAO-56, Tabelle 12]. Sie wirken nur, wenn die Zone",
+    "ein Datum Aussaat/Pflanzung traegt; dann gilt Kc je Tag nach Gl. 66. Quelle:",
+    "https://www.fao.org/4/x0490e/x0490e0b.htm (FAO-56, Kapitel 6). Rasen, Mehrjaehriges, Erdbeeren",
+    "(in Tabelle 11 nicht enthalten) und die geschaetzten Bepflanzungen tragen keine Phasen."
   ],
   "bepflanzung": {
     "_quelle": "FAO-56, Tabelle 12 (Kc) und Tabelle 22 (Zr, p)",
@@ -51,7 +57,19 @@
       "zr": 0.4,
       "p": 0.35,
       "quelle": "FAO-56 Tab. 12 (Small Vegetables 0,7/1,05/0,95), Tab. 22 (Kohl p 0,45, Salat p 0,30)",
-      "text_en": "Vegetables, low growing (lettuce, cabbage, carrots)"
+      "text_en": "Vegetables, low growing (lettuce, cabbage, carrots)",
+      "phasen": {
+        "tage": [
+          20,
+          30,
+          15,
+          10
+        ],
+        "kc_ini": 0.7,
+        "kc_mid": 1.05,
+        "kc_end": 0.95,
+        "quelle": "FAO-56 Kap. 6 (x0490e0b.htm): Tab. 11 Lettuce, April, Mediterranean 20/30/15/10 = 75 Tage; Tab. 12 Gruppe a. Small Vegetables 0,7/1,05/0,95. Tab. 11 hat keine Zeile fuer die Gruppe; die Dauern sind die von Salat. Moehren (100 bis 200 Tage) und Kohl (165 Tage) brauchen laenger."
+      }
     },
     "tomate": {
       "text": "Tomaten",
@@ -59,7 +77,19 @@
       "zr": 1.0,
       "p": 0.4,
       "quelle": "FAO-56 Tab. 12 (Kc mid 1,15) und Tab. 22 (Zr 0,7-1,5 m, p 0,40)",
-      "text_en": "Tomatoes"
+      "text_en": "Tomatoes",
+      "phasen": {
+        "tage": [
+          30,
+          40,
+          45,
+          30
+        ],
+        "kc_ini": 0.6,
+        "kc_mid": 1.15,
+        "kc_end": 0.8,
+        "quelle": "FAO-56 Kap. 6 (x0490e0b.htm): Tab. 11 Tomato, April/May, Mediterranean 30/40/45/30 = 145 Tage; Tab. 12 Gruppe b. Solanum Family Kc ini 0,6, Tomato Kc mid 1,15, Kc end 0,70-0,90 (hier 0,80 wie die Gruppe)."
+      }
     },
     "erdbeere": {
       "text": "Erdbeeren",
