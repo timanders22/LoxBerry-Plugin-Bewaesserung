@@ -798,6 +798,31 @@ WICHTIGKEIT_BEPFLANZUNG = {
 }
 WICHTIGKEIT_VORGABE = 2
 
+# 0.9.53: Notzonen. Eine Zone, deren Wurzelzone zu 80 % oder mehr erschoepft
+# ist (Dr/TAW >= 0,8), steht nahe am Welkepunkt (Dr = TAW, Ks = 0). Sie geht
+# bei knappem Vorrat VOR jeder Wichtigkeit - sonst bekaeme Gemuese knapp
+# ueber RAW (kaum Stress) alles und der Rasen vertrocknete.
+#
+# Passt zu den Giessausloesern: gegossen wird ab Dr >= RAW = p * TAW, und p
+# ist nach fao56.p_angepasst() auf 0,1 bis 0,8 begrenzt. Eine Zone mit
+# Dr/TAW >= 0,8 liegt deshalb immer schon auf oder hinter ihrem Ausloeser -
+# die Schwelle trifft nur Zonen, die ohnehin Wasser verlangen, und keine
+# Zone wird allein durch sie "noetig". Bei p = 0,5 (Rasen, Tabellenwert) ist
+# Ks dort (1 - 0,8) / (1 - 0,5) = 0,4, bei p = 0,3 (Gemuese) 0,29.
+NOT_SCHWELLE = 0.8
+
+# 0.9.53: Teilgabe. Reicht der Rest nicht fuer den vollen Bedarf der naechsten
+# Zone, aber fuer mindestens die Haelfte, bekommt sie die gekuerzte Menge.
+# Darunter lohnt die Gabe nicht: sie benetzt nur die obere Schicht und
+# verdunstet zum grossen Teil, bevor sie die Wurzeln erreicht. Ausnahme:
+# eine Notzone (siehe oben) bekommt auch weniger als die Haelfte - dort
+# zaehlt jeder Liter, solange TEILGABE_MIN_S je Durchlauf erreicht wird.
+TEILGABE_MIN_ANTEIL = 0.5
+# Die kleinste Ventilzeit je Durchlauf - dieselbe Untergrenze wie in
+# plan_bauen() (30 s) und ventil.MINDEST_S (GARDENA-Schritte unter 30 s
+# entfallen). Eine Teilgabe darunter wuerde nie ausgefuehrt.
+TEILGABE_MIN_S = 30
+
 
 def _zahl_oder_null(w) -> float:
     try:
@@ -836,19 +861,68 @@ def liter_je_nacht(zone: dict, sekunden: float, durchlaeufe: int) -> tuple:
     return None, ""
 
 
-def zisterne_rangfolge(plan: dict, zonen: list, vorrat_l: float, reserve_l: float) -> dict:
-    """Reicht der Vorrat nicht fuer alle geplanten Zonen, gehen die wichtigen vor.
+def _zonenlage(ergebnisse, schluessel: str) -> tuple:
+    """(Dr/TAW, Dr/RAW) einer Zone aus ihrem Rechenergebnis (zone_rechnen).
 
-    'plan' ist das Ergebnis von plan_bauen() und wird hier geaendert: eine
-    ausgelassene Zone bekommt sekunden_soll = 0 und durchlaeufe = 0 (der alte
-    Wert bleibt als sekunden_soll_ohne_zisterne stehen). Verbraucht wird
-    hoechstens Vorrat minus Reserve.
+    Dr/TAW sagt, wie nahe die Wurzelzone am Welkepunkt steht (1 = Ks 0),
+    Dr/RAW, wie weit sie ueber ihren Giessausloeser hinaus ist (ueber 1 =
+    Stress, fao56.ks() < 1). Ohne Ergebnis oder ohne Bilanz (ok 0): (0, 0) -
+    die Zone ordnet sich dann allein nach Wichtigkeit ein wie in 0.9.52.
+    Gerundet auf vier Stellen, damit ein Gleichstand ein Gleichstand bleibt
+    und nicht am Rechenrauschen haengt.
+    """
+    e = ergebnisse.get(schluessel) if isinstance(ergebnisse, dict) else None
+    if not isinstance(e, dict) or not e.get("ok"):
+        return 0.0, 0.0
+    dr = max(0.0, _zahl_oder_null(e.get("dr")))
+    taw = _zahl_oder_null(e.get("taw"))
+    raw_mm = _zahl_oder_null(e.get("raw"))
+    erschoepft = dr / taw if taw > 0 else 0.0
+    stress = dr / raw_mm if raw_mm > 0 else 0.0
+    return round(erschoepft, 4), round(stress, 4)
 
-    Reihenfolge: Wichtigkeit 1 vor 2 vor 3, bei gleicher Wichtigkeit die
-    Reihenfolge der Zonentabelle. Innerhalb einer Wichtigkeit darf eine
-    kleinere Zone noch nachruecken, wenn eine groessere nicht mehr passte;
-    eine weniger wichtige Zone kommt dann aber nicht mehr dran - sonst bekaeme
-    der Rasen Wasser, das dem Gemuese fehlt.
+
+def zisterne_rangfolge(plan: dict, zonen: list, vorrat_l: float, reserve_l: float,
+                       ergebnisse: dict | None = None) -> dict:
+    """Reicht der Vorrat nicht fuer alle geplanten Zonen, wer bekommt ihn?
+
+    'plan' ist das Ergebnis von plan_bauen() und wird hier geaendert. Verbraucht
+    wird hoechstens Vorrat minus Reserve. 'ergebnisse' sind die Rechenergebnisse
+    je Zone (zone_rechnen: dr, taw, raw); ohne sie gilt allein die Wichtigkeit.
+
+    Reihenfolge (0.9.53, Einwand eines Fremdpruefers: in 0.9.52 entschied
+    allein die Wichtigkeit, und Gemuese knapp ueber RAW bekam alles, waehrend
+    der Rasen am Welkepunkt leer ausging):
+
+      1. Notzonen: Dr/TAW >= NOT_SCHWELLE (0,8). Untereinander die
+         erschoepfteste zuerst (Dr/TAW absteigend).
+      2. Die uebrigen nach Wichtigkeit 1 vor 2 vor 3; bei gleicher
+         Wichtigkeit die gestresstere zuerst (Dr/RAW absteigend).
+      Gleichstand: die Reihenfolge der Zonentabelle.
+
+    Wer nicht ganz passt:
+
+      - Teilgabe: reicht der Rest fuer mindestens TEILGABE_MIN_ANTEIL (50 %)
+        der Menge - eine Notzone: fuer irgendeinen Teil - UND bleiben je
+        Durchlauf mindestens TEILGABE_MIN_S (30 s) Ventilzeit, bekommt die
+        Zone die gekuerzte Ventilzeit
+        (sekunden_soll, abgerundet auf ganze Sekunden, Zahl der Durchlaeufe
+        bleibt). Merker zisterne_gekuerzt = 1, zisterne_anteil.
+      - sonst setzt sie aus: sekunden_soll = 0, durchlaeufe = 0,
+        zisterne_ausgelassen = 1.
+      In beiden Faellen bleibt der alte Wert als sekunden_soll_ohne_zisterne
+      stehen. Danach kommt keine Zone eines spaeteren Rangs mehr dran (Not
+      vor 1 vor 2 vor 3) - das Wasser bleibt fuer die wichtigere Zone im
+      Vorrat. Innerhalb desselben Rangs darf eine kleinere Zone nachruecken.
+
+    Bewusst NICHT gebaut: das Wasser anteilig nach (1 - Ks) auf alle Zonen
+    verteilen. Viele flache Gaben benetzen nur die obere Schicht, verdunsten
+    zum grossen Teil und ziehen die Wurzeln nach oben; wenige volle Gaben
+    erreichen die Wurzelzone.
+
+    Verbucht wird spaeter, was tatsaechlich lief (Rueckmeldung aus Loxone
+    bzw. die gemessene Oeffnungszeit eines GARDENA-Schritts) - nie die
+    geplante Menge. Die Bilanz von morgen rechnet also mit der Teilgabe.
 
     Zonen ohne bekannte Menge (kein Durchfluss, keine Becherprobe mit Flaeche)
     werden nicht mitgezaehlt und laufen wie bisher - ausser der Vorrat liegt
@@ -861,7 +935,8 @@ def zisterne_rangfolge(plan: dict, zonen: list, vorrat_l: float, reserve_l: floa
     verfuegbar = max(0.0, vorrat - reserve)
     info = {"aktiv": 1, "vorrat_l": round(vorrat), "reserve_l": round(reserve),
             "verfuegbar_l": round(verfuegbar), "bedarf_l": 0, "bedient_l": 0,
-            "ausgelassen": [], "ohne_menge": [], "reihenfolge": [], "knapp": 0,
+            "ausgelassen": [], "gekuerzt": [], "not": [], "ohne_menge": [],
+            "reihenfolge": [], "knapp": 0, "not_schwelle": NOT_SCHWELLE,
             "an_reserve": 1 if verfuegbar <= 0 else 0}
     kand = []
     for i, z in enumerate(zonen if isinstance(zonen, list) else []):
@@ -876,44 +951,74 @@ def zisterne_rangfolge(plan: dict, zonen: list, vorrat_l: float, reserve_l: floa
         if sek <= 0 or n <= 0:
             continue
         name = str(z.get("name") or s)
+        erschoepft, stress = _zonenlage(ergebnisse, s)
+        not_ = 1 if erschoepft >= NOT_SCHWELLE else 0
+        w = wichtigkeit(z)
         liter, wie = liter_je_nacht(z, sek, n)
         if liter is None:
             if verfuegbar <= 0:
-                kand.append((0, i, s, name, None, ""))
+                kand.append({"rang": 0, "w": w, "not": not_, "e": erschoepft, "st": stress, "i": i,
+                             "s": s, "name": name, "liter": None, "wie": "", "z": z, "sek": sek, "n": n})
             else:
                 info["ohne_menge"].append(name)
             continue
-        kand.append((wichtigkeit(z), i, s, name, float(liter), wie))
-    kand.sort(key=lambda k: (k[0], k[1]))
+        kand.append({"rang": 0 if not_ else w, "w": w, "not": not_, "e": erschoepft, "st": stress,
+                     "i": i, "s": s, "name": name, "liter": float(liter), "wie": wie, "z": z,
+                     "sek": sek, "n": n})
+    kand.sort(key=lambda k: (k["rang"], -(k["e"] if k["not"] else k["st"]), k["i"]))
     rest = verfuegbar
-    gesperrt_ab = None          # erste Wichtigkeit, in der eine Zone nicht mehr passte
+    gesperrt_ab = None          # erster Rang, in dem eine Zone nicht mehr voll passte
     bedarf = 0.0
     bedient = 0.0
-    for (w, _i, s, name, liter, wie) in kand:
+    for k in kand:
+        s, name, liter, rang = k["s"], k["name"], k["liter"], k["rang"]
+        eintrag = {"zone": s, "name": name, "wichtigkeit": k["w"], "rang": rang,
+                   "not": k["not"], "erschoepft": k["e"], "stress": k["st"],
+                   "liter": round(liter) if liter is not None else None, "wie": k["wie"]}
+        if k["not"]:
+            info["not"].append(name)
+            je[s]["zisterne_not"] = 1
         if liter is not None:
             bedarf += liter
-        passt = (liter is not None and liter <= rest + 1e-6
-                 and (gesperrt_ab is None or w <= gesperrt_ab))
-        if passt:
+        darf = gesperrt_ab is None or rang <= gesperrt_ab
+        if liter is not None and darf and liter <= rest + 1e-6:
             rest -= liter
             bedient += liter
-            info["reihenfolge"].append({"zone": s, "name": name, "wichtigkeit": w,
-                                        "liter": round(liter), "wie": wie, "bedient": 1})
+            info["reihenfolge"].append(dict(eintrag, bedient=1))
             continue
-        if gesperrt_ab is None or w < gesperrt_ab:
-            gesperrt_ab = w
+        if gesperrt_ab is None or rang < gesperrt_ab:
+            gesperrt_ab = rang
         jz = je[s]
+        # Teilgabe: mindestens die Haelfte der Menge und mindestens 30 s je Durchlauf. Eine Notzone
+        # (am Vertrocknen) bekommt den Rest auch unter der Haelfte - jeder Liter verschiebt den Welkepunkt;
+        # nur unter 30 s je Durchlauf setzt auch sie aus, und der Rest bleibt im Vorrat.
+        if liter is not None and liter > 0 and darf \
+                and (k["not"] or rest + 1e-6 >= TEILGABE_MIN_ANTEIL * liter):
+            # +1e-6: 30,0 darf nicht als 29,999999 auf 29 abgerundet werden.
+            sek_neu = float(math.floor(k["sek"] * rest / liter + 1e-6))
+            if sek_neu >= TEILGABE_MIN_S:
+                liter_neu, _w = liter_je_nacht(k["z"], sek_neu, k["n"])
+                liter_neu = float(liter_neu or 0.0)
+                rest -= liter_neu
+                bedient += liter_neu
+                anteil = round(liter_neu / liter, 3)
+                jz["sekunden_soll_ohne_zisterne"] = jz.get("sekunden_soll", 0)
+                jz["sekunden_soll"] = int(sek_neu)
+                jz["zisterne_gekuerzt"] = 1
+                jz["zisterne_anteil"] = anteil
+                info["gekuerzt"].append(name)
+                info["reihenfolge"].append(dict(eintrag, bedient=1, gekuerzt=1, anteil=anteil,
+                                                liter_gegeben=round(liter_neu)))
+                continue
         jz["sekunden_soll_ohne_zisterne"] = jz.get("sekunden_soll", 0)
         jz["sekunden_soll"] = 0
         jz["durchlaeufe"] = 0
         jz["zisterne_ausgelassen"] = 1
         info["ausgelassen"].append(name)
-        info["reihenfolge"].append({"zone": s, "name": name, "wichtigkeit": w,
-                                    "liter": round(liter) if liter is not None else None,
-                                    "wie": wie, "bedient": 0})
+        info["reihenfolge"].append(dict(eintrag, bedient=0))
     info["bedarf_l"] = round(bedarf)
     info["bedient_l"] = round(bedient)
-    if info["ausgelassen"]:
+    if info["ausgelassen"] or info["gekuerzt"]:
         info["knapp"] = 1
         plan["reicht"] = 0
         if not any(int(_zahl_oder_null(j.get("durchlaeufe"))) > 0
@@ -922,7 +1027,11 @@ def zisterne_rangfolge(plan: dict, zonen: list, vorrat_l: float, reserve_l: floa
             plan["durchlaeufe"] = 0
         if str(plan.get("grund") or "") in ("", "ventilzeit_gedeckelt", "fenster_gekuerzt",
                                              "rate_fehlt_teilweise"):
-            grund = "zisterne_knapp"
+            # Aussetzen wiegt schwerer als Kuerzen: stehen beide an, heisst der Grund zisterne_knapp.
+            if info["ausgelassen"]:
+                grund = "zisterne_knapp"
+            else:
+                grund = "zisterne_gekuerzt"
             plan["grund"] = grund
     plan["zisterne"] = info
     return info
@@ -1423,6 +1532,21 @@ def selbstpruefung() -> list[tuple[bool, str]]:
               and plr["je_zone"]["s"]["sekunden_soll"] == 600 and plr["grund"] == "zisterne_knapp"
               and ir["bedient_l"] == 250 and plr["reicht"] == 0,
               "Zisterne 400 l, Reserve 100 l: Gemuese 100 l und Stauden 150 l, Rasen 300 l aus"))
+    # 0.9.53: Rasen nahe am Welkepunkt (Dr/TAW 0,9) geht vor Gemuese knapp ueber RAW
+    # (Dr/RAW 1,05); das Gemuese bekommt den Rest als Teilgabe (100 von 150 l).
+    zn = [{"schluessel": "g", "name": "Gemuese", "bepflanzung": "gemuese_klein", "durchfluss_lmin": 15},
+          {"schluessel": "r", "name": "Rasen", "bepflanzung": "rasen_kuehl", "durchfluss_lmin": 30}]
+    pln = {"durchlaeufe": 1, "reicht": 1, "grund": "",
+           "je_zone": {"g": {"sekunden_soll": 600, "durchlaeufe": 1},
+                       "r": {"sekunden_soll": 600, "durchlaeufe": 1}}}
+    ern = {"g": {"ok": 1, "dr": 21.0, "taw": 60.0, "raw": 20.0},
+           "r": {"ok": 1, "dr": 90.0, "taw": 100.0, "raw": 50.0}}
+    inn = zisterne_rangfolge(pln, zn, 400.0, 0.0, ern)
+    e.append((inn["not"] == ["Rasen"] and inn["ausgelassen"] == [] and inn["gekuerzt"] == ["Gemuese"]
+              and pln["je_zone"]["r"]["sekunden_soll"] == 600 and pln["je_zone"]["g"]["sekunden_soll"] == 400
+              and pln["je_zone"]["g"]["sekunden_soll_ohne_zisterne"] == 600
+              and pln["grund"] == "zisterne_gekuerzt" and inn["bedient_l"] == 400,
+              "Zisterne 400 l: Rasen in Not (Dr/TAW 0,9) 300 l voll, Gemuese 400 von 600 s (Teilgabe)"))
     return e
 
 

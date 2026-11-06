@@ -5,12 +5,23 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.52 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.53 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.53
+
+- **Wasservorrat: wer am Vertrocknen ist, geht vor.** Bisher teilte das Plugin knappes Zisternenwasser starr nach Wichtigkeit zu (Gemüse vor Sträuchern vor Rasen). Stand das Gemüse kaum unter Stress und der Rasen kurz vor dem Welkepunkt, bekam das Gemüse alles und der Rasen vertrocknete. Jetzt gilt:
+  1. **Zuerst Zonen am Vertrocknen** – deren Wurzelzone zu 80 Prozent oder mehr erschöpft ist (FAO-56: Dr/TAW ≥ 0,8). Untereinander die trockenste zuerst. Die Schwelle liegt immer über dem Gießauslöser (RAW = p · TAW, p höchstens 0,8), trifft also nur Zonen, die ohnehin Wasser verlangen.
+  2. **Danach nach Wichtigkeit** 1, 2, 3 – bei gleicher Wichtigkeit die gestresstere zuerst (Dr/RAW). Die Wichtigkeit entscheidet also nur, solange keine Zone am Vertrocknen ist.
+  3. **Teilgabe statt Ausfall:** Reicht der Rest nicht für die volle Menge der nächsten Zone, aber für mindestens die Hälfte (und mindestens 30 Sekunden Ventilzeit je Durchlauf), bekommt sie diesen Teil – die Ventilzeit `<zone>/sekunden` wird entsprechend gekürzt. Darunter setzt sie eine Nacht aus. **Ausnahme Zone am Vertrocknen:** sie bekommt den Rest auch unter der Hälfte, solange er für mindestens 30 Sekunden je Durchlauf reicht; erst darunter setzt auch sie aus und der Rest bleibt im Vorrat. Grund im Plan: `zisterne_gekuerzt` (werden zugleich Zonen ausgelassen, bleibt es bei `zisterne_knapp`). Plan, Reiter *Zonen*, Protokoll, Meldung und Ansage nennen gekürzte Zonen und Zonen am Vertrocknen.
+  4. **Verbucht wird, was wirklich gegossen wurde** – die Rückmeldung aus Loxone bzw. die gemessene Öffnungszeit eines GARDENA-Ventils, nie die geplante Menge. Die Wasserbilanz von morgen rechnet also mit der Teilgabe.
+- **Rückmeldung „als Durchläufe“ bucht jetzt richtig:** Ein gemeldeter Durchlauf zählt mit der Ventilzeit, die das Plugin zuletzt als `<zone>/sekunden` gesendet hat (festgehaltener Nachtplan, sonst der Plan), nicht mehr mit der eingestellten Zonendauer. Bisher wurde zu viel oder zu wenig gebucht, sobald die Ventilzeit von der Zonendauer abwich – also seit 0.9.7 fast immer, und erst recht bei einer Teilgabe (300 s gelaufen bei 600 s Zonendauer: jetzt 0,75 statt 1,5 mm bei 12 mm/h). Voraussetzung wie im Musterprojekt: Tv der Zone kommt aus `<zone>/sekunden`. Rückmeldung in Minuten oder mm und GARDENA-Ventile buchen unverändert.
+- **Bewusst nicht gebaut:** das Wasser anteilig auf alle durstigen Zonen zu verteilen. Viele flache Gaben benetzen nur die obere Bodenschicht, verdunsten zum großen Teil und ziehen die Wurzeln nach oben; wenige volle Gaben erreichen die Wurzelzone. Deshalb bekommen lieber wenige Zonen genug als alle zu wenig.
+- **Ohne Füllstand ändert sich nichts.**
 
 ## Neu in 0.9.52
 

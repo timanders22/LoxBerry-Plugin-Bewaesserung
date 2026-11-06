@@ -1560,6 +1560,13 @@ if ($bw_rahmen) {
     <td><?php if (!empty($bw_zi['ok'])) {
         echo bw_e(sprintf(bw_t('ZISTERNE.STAND'), (int) $bw_zi['vorrat_l'], number_format((float) $bw_zi['prozent'], 0, ',', '.'),
                           (int) $bw_zi['reserve_l']));
+        /* 0.9.53: Not (am Vertrocknen, zuerst) und gekuerzt (Teilgabe) nur zeigen, wenn das Wasser knapp ist. */
+        if (!empty($bw_zr['knapp']) && !empty($bw_zr['not']) && is_array($bw_zr['not'])) {
+            echo ' <span class="sm-aus">' . bw_e(sprintf(bw_t('ZISTERNE.NOT'), implode(', ', $bw_zr['not']))) . '</span>';
+        }
+        if (!empty($bw_zr['gekuerzt']) && is_array($bw_zr['gekuerzt'])) {
+            echo ' <span class="sm-aus">' . bw_e(sprintf(bw_t('ZISTERNE.GEKUERZT'), implode(', ', $bw_zr['gekuerzt']))) . '</span>';
+        }
         if (!empty($bw_zr['ausgelassen'])) {
             echo ' <span class="sm-aus">' . bw_e(sprintf(bw_t('ZISTERNE.AUSGELASSEN'), implode(', ', $bw_zr['ausgelassen']))) . '</span>';
         }
@@ -2423,7 +2430,15 @@ foreach ($bw_zonen as $bw_z) {
             isset($bw_plan['ventilzeit_gedeckelt']) && is_array($bw_plan['ventilzeit_gedeckelt'])
                 ? $bw_plan['ventilzeit_gedeckelt'] : array(), true); ?>
     <td><?= (int) (isset($bw_jz['sekunden_soll']) ? $bw_jz['sekunden_soll'] : 0) ?> s<?php
-        if ($bw_ged) { echo ' <span class="sm-aus">' . bw_e(bw_t('ZONE.GEDECKELT')) . '</span>'; } ?></td>
+        if ($bw_ged) { echo ' <span class="sm-aus">' . bw_e(bw_t('ZONE.GEDECKELT')) . '</span>'; }
+        /* 0.9.53: Wasservorrat - Notzone, Teilgabe, setzt aus. */
+        $bw_zrz = isset($bw_plan['zisterne']) && is_array($bw_plan['zisterne']) ? $bw_plan['zisterne'] : array();
+        if (!empty($bw_zrz['knapp']) && isset($bw_zrz['not']) && is_array($bw_zrz['not'])
+            && in_array((string) $bw_z['name'], $bw_zrz['not'], true)) {
+            echo ' <span class="sm-aus">' . bw_e(bw_t('ZONE.ZISTERNE_NOT_KURZ')) . '</span>';
+        }
+        if (!empty($bw_jz['zisterne_gekuerzt'])) { echo ' <span class="sm-aus">' . bw_e(bw_t('ZONE.ZISTERNE_GEKUERZT_KURZ')) . '</span>'; }
+        if (!empty($bw_jz['zisterne_ausgelassen'])) { echo ' <span class="sm-aus">' . bw_e(bw_t('ZONE.ZISTERNE_AUS_KURZ')) . '</span>'; } ?></td>
     <td><?= isset($bw_e['gegossen_mm']) && $bw_e['gegossen_mm'] !== null
         ? number_format((float) $bw_e['gegossen_mm'], 1, ',', '.') . ' mm'
         : '<span class="sm-hilfe">&mdash;</span>' ?></td>
@@ -2454,6 +2469,13 @@ $bw_zr2 = isset($bw_plan['zisterne']) && is_array($bw_plan['zisterne']) ? $bw_pl
 if (!empty($bw_zr2['ausgelassen'])) { ?>
 <div class="sm-warnung"><?= bw_e(sprintf(bw_t('ZONE.ZISTERNE_AUSGELASSEN'), implode(', ', $bw_zr2['ausgelassen']),
     (int) $bw_zr2['verfuegbar_l'], (int) $bw_zr2['bedarf_l'])) ?></div>
+<?php }
+/* 0.9.53: Teilgabe und Notzonen. */
+if (!empty($bw_zr2['gekuerzt']) && is_array($bw_zr2['gekuerzt'])) { ?>
+<div class="sm-warnung"><?= bw_e(sprintf(bw_t('ZONE.ZISTERNE_GEKUERZT'), implode(', ', $bw_zr2['gekuerzt']))) ?></div>
+<?php }
+if (!empty($bw_zr2['knapp']) && !empty($bw_zr2['not']) && is_array($bw_zr2['not'])) { ?>
+<div class="sm-warnung"><?= bw_e(sprintf(bw_t('ZONE.ZISTERNE_NOT'), implode(', ', $bw_zr2['not']))) ?></div>
 <?php }
 if (!empty($bw_zr2['ohne_menge'])) { ?>
 <div class="sm-warnung"><?= bw_e(sprintf(bw_t('ZONE.ZISTERNE_OHNE_MENGE'), implode(', ', $bw_zr2['ohne_menge']))) ?></div>

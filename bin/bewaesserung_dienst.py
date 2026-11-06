@@ -492,11 +492,19 @@ def meldungen_pruefen(abbild: dict, cfg: dict) -> list:
 
     # 0.9.52: knapper Wasservorrat - einmal je Tag, wenn die Rangfolge Zonen auslaesst. Der Tag steht im
     # Meldezaehler, weil die Dienstschleife nur ihn (und zwei Tagesmarken) in zustand.json uebernimmt.
+    # 0.9.53: auch, wenn Zonen nur eine gekuerzte Menge bekommen (Teilgabe).
     zi = plan.get("zisterne") or {}
-    if zi.get("ausgelassen") and not int((abbild.get("sperre") or {}).get("aktiv") or 0)             and zaehler.get("zisterne_tag") != heute:
+    if (zi.get("ausgelassen") or zi.get("gekuerzt")) and not int((abbild.get("sperre") or {}).get("aktiv") or 0)             and zaehler.get("zisterne_tag") != heute:
         zaehler["zisterne_tag"] = heute
-        raus.append((4, "Wasservorrat knapp: heute Nacht werden nur die wichtigen Zonen gegossen, "
-                        "ausgelassen: %s." % ", ".join(str(x) for x in zi["ausgelassen"])))
+        teile = []
+        if zi.get("not"):
+            teile.append("zuerst (am Vertrocknen): %s" % ", ".join(str(x) for x in zi["not"]))
+        if zi.get("gekuerzt"):
+            teile.append("nur ein Teil: %s" % ", ".join(str(x) for x in zi["gekuerzt"]))
+        if zi.get("ausgelassen"):
+            teile.append("ausgelassen: %s" % ", ".join(str(x) for x in zi["ausgelassen"]))
+        raus.append((4, "Wasservorrat knapp: heute Nacht reicht das Wasser nicht fuer alle Zonen - "
+                        "%s." % "; ".join(teile)))
 
     stand["meldezaehler"] = zaehler
     stand["meldetag"] = heute
@@ -1794,6 +1802,9 @@ def lebenszeichen_selbstpruefung() -> list:
             (None, 3.0, dict(zone, rate_mmh=0), "Rate 0: keine Rueckmeldung")):
         ist = _giess_mm(roh, zz, {"zonendauer_s": 240}, 0.75)
         z.append((ist == soll, "Rueckmeldung %s: %s mm" % (text, "-" if ist is None else ist)))
+    ist = _giess_mm(1.0, dict(zone, rate_mmh=12.0, dauer_s=600), {}, 0.75, 300)
+    z.append((ist == 0.75, "Rueckmeldung 1 Durchlauf mit gesendeter Ventilzeit 300 s (Zonendauer 600 s): %s mm"
+              % ist))
     global _STATUS_ZAEHLER
     alt = _STATUS_ZAEHLER
     _STATUS_ZAEHLER = 998
@@ -1948,9 +1959,16 @@ def verlauf_luecken_fuellen(nach_datum: dict, heute_s: str) -> list:
     return neu
 
 
-def _giess_mm(roh: float, z: dict, cfg: dict, wirkungsgrad: float) -> float | None:
+def _giess_mm(roh: float, z: dict, cfg: dict, wirkungsgrad: float,
+              ventilzeit_s: float | None = None) -> float | None:
     """Eine Rueckmeldung (Tagesstand seit Mitternacht) in Millimeter - nach "Rueckmeldung als" der Zone.
-    None heisst: ohne gemessene Rate nicht umrechenbar (fail closed). Gemeinsam fuer beide Wege."""
+    None heisst: ohne gemessene Rate nicht umrechenbar (fail closed). Gemeinsam fuer beide Wege.
+
+    0.9.53: 'ventilzeit_s' ist die Ventilzeit je Durchlauf, die zuletzt als <zone>/sekunden hinausging
+    (festgehaltener Nachtplan, sonst der Plan - wie veroeffentlichen()). Bis 0.9.52 rechnete ein
+    Durchlauf immer mit der Zonendauer; seit 0.9.7 ist die Ventilzeit aber je Zone und Nacht gerechnet
+    (und seit 0.9.53 bei knappem Wasservorrat gekuerzt) - gebucht wurde dann mehr oder weniger, als lief.
+    Fehlt sie oder ist sie 0 (Zone ausgesetzt, Sperre), gilt wie bisher die Zonendauer."""
     art = str(z.get("giess_art") or "minuten")
     rate = float(z.get("rate_mmh") or 0.0)
     if art == "mm":
@@ -1959,11 +1977,40 @@ def _giess_mm(roh: float, z: dict, cfg: dict, wirkungsgrad: float) -> float | No
         # Fail closed: lieber keine Rueckmeldung als eine geratene.
         return None
     elif art == "durchlaeufe":
-        dauer = float(z.get("dauer_s") or cfg.get("zonendauer_s") or 240)
+        try:
+            vz = float(ventilzeit_s or 0.0)
+        except (TypeError, ValueError):
+            vz = 0.0
+        dauer = vz if vz > 0 else float(z.get("dauer_s") or cfg.get("zonendauer_s") or 240)
         mm = roh * rate * wirkungsgrad * (dauer / 3600.0)
     else:
         mm = (roh / 60.0) * rate * wirkungsgrad
     return round(max(0.0, mm), 2)
+
+
+def gesendete_ventilzeiten(abbild: dict) -> dict:
+    """0.9.53: {zone: Sekunden je Durchlauf}, wie sie zuletzt als <zone>/sekunden hinausgingen.
+
+    Dieselbe Reihenfolge wie veroeffentlichen(): erst der festgehaltene Nachtplan, dann der Plan. Nur Werte
+    ueber 0 - eine ausgesetzte Zone faellt in _giess_mm() auf die Zonendauer zurueck."""
+    aus = {}
+    if not isinstance(abbild, dict):
+        return aus
+    fest = abbild.get("nachtplan") if isinstance(abbild.get("nachtplan"), dict) else {}
+    plan = abbild.get("plan") if isinstance(abbild.get("plan"), dict) else {}
+    for quelle in (plan.get("je_zone"), fest.get("je_zone")):     # fest zuletzt: gewinnt
+        if not isinstance(quelle, dict):
+            continue
+        for s, jz in quelle.items():
+            if not isinstance(jz, dict):
+                continue
+            try:
+                sek = float(jz.get("sekunden_soll") or 0)
+            except (TypeError, ValueError):
+                continue
+            if sek > 0:
+                aus[str(s)] = sek
+    return aus
 
 
 def _altweg_merken(schluessel: str, ts: float) -> None:
@@ -2018,6 +2065,8 @@ def giesswerte_einsammeln(sammler, zonenliste: list, cfg: dict) -> dict:
     if not isinstance(datei, dict):
         datei = {}
     jetzt = time.time()
+    # 0.9.53: die zuletzt gesendete Ventilzeit je Zone (fuer 'Rueckmeldung als Durchlaeufe').
+    ventilzeiten = gesendete_ventilzeiten(_still_lesen(DATEI_ABBILD))
     for z in zonenliste:
         s = str(z.get("schluessel") or "")
         if not s:
@@ -2043,7 +2092,8 @@ def giesswerte_einsammeln(sammler, zonenliste: list, cfg: dict) -> dict:
                     if roh is not None and roh >= 0:
                         kandidaten.append(roh)
                         _altweg_merken(s, jetzt)
-        mm = [m for m in (_giess_mm(r, z, cfg, wirkungsgrad) for r in kandidaten) if m is not None]
+        mm = [m for m in (_giess_mm(r, z, cfg, wirkungsgrad, ventilzeiten.get(s)) for r in kandidaten)
+              if m is not None]
         if mm:
             aus[s] = max(mm)
     return aus
@@ -2375,6 +2425,9 @@ def ansage_sperre(daten: dict, cfg) -> str:
     # 0.9.52: knapper Wasservorrat (Zonen ausgelassen) - nur ohne Wettersperre, eigener Grund und Satz.
     if not gruende and daten.get("zisterne") == 1:
         gruende = ["zisterne"]
+    # 0.9.53: nichts ausgelassen, aber Zonen bekommen nur einen Teil (Teilgabe) - eigener Satz.
+    elif not gruende and daten.get("zisterne_gekuerzt") == 1:
+        gruende = ["zisterne_gekuerzt"]
     nacht = str(daten.get("nacht") or "")
     if not gruende or not nacht:
         return ""
@@ -2394,7 +2447,7 @@ def ansage_sperre(daten: dict, cfg) -> str:
             return "laeuft"
         _ANSAGE_SPERRE_LAEUFT.append(1)
     auftrag = {"anlass": "sperre", "grund": "beide" if len(neu) == 2 else neu[0]}
-    if neu == ["zisterne"]:
+    if neu in (["zisterne"], ["zisterne_gekuerzt"]):
         try:
             auftrag["zonen"] = max(1, int(daten.get("zisterne_zonen") or 1))
         except (TypeError, ValueError):
@@ -2865,7 +2918,10 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
     # 0.9.52: Rangfolge bei knappem Wasservorrat - nur mit gelesenem Vorrat und Fassungsvermoegen. Ohne
     # Zisternenquelle (oder wenn sie schweigt) bleibt der Plan, wie er ist.
     if zisterne.get("ok"):
-        giessplan.zisterne_rangfolge(plan, zonenliste, zisterne["vorrat_l"], zisterne["reserve_l"])
+        # 0.9.53: mit den Rechenergebnissen - Notzonen (Dr/TAW >= 0,8) zuerst, Teilgabe ab 50 %
+        # (Notzone: jeder Rest ab 30 s je Durchlauf).
+        giessplan.zisterne_rangfolge(plan, zonenliste, zisterne["vorrat_l"], zisterne["reserve_l"],
+                                     ergebnisse)
         zisterne_melden(heute_s, plan.get("zisterne") or {}, zisterne)
 
     # --- Sperren (neu in 0.9.7) ---
@@ -3029,16 +3085,19 @@ _ZISTERNE_GEMELDET = {"schluessel": ""}
 def zisterne_melden(datum: str, info: dict, zisterne: dict) -> None:
     """Die Rangfolge ins Protokoll - je Tag nur, wenn sich das Ergebnis aendert (0.9.52)."""
     aus = list(info.get("ausgelassen") or [])
+    gek = list(info.get("gekuerzt") or [])          # 0.9.53: Teilgabe
+    not_ = list(info.get("not") or [])             # 0.9.53: Notzonen (Dr/TAW >= 0,8)
     ohne = list(info.get("ohne_menge") or [])
-    k = "%s|%s|%s" % (datum, ",".join(aus), ",".join(ohne))
+    k = "%s|%s|%s|%s" % (datum, ",".join(aus), ",".join(gek), ",".join(ohne))
     if k == _ZISTERNE_GEMELDET["schluessel"]:
         return
     _ZISTERNE_GEMELDET["schluessel"] = k
-    if aus:
+    if aus or gek:
         _LOG.warning("Wasservorrat knapp: %d l im Vorrat, Reserve %d l, verfuegbar %d l, geplant %d l. "
-                     "Gegossen werden nur die wichtigen Zonen; heute Nacht ausgelassen: %s.",
+                     "Zuerst (am Vertrocknen): %s; nur ein Teil: %s; heute Nacht ausgelassen: %s.",
                      int(zisterne.get("vorrat_l") or 0), int(zisterne.get("reserve_l") or 0),
-                     int(info.get("verfuegbar_l") or 0), int(info.get("bedarf_l") or 0), ", ".join(aus))
+                     int(info.get("verfuegbar_l") or 0), int(info.get("bedarf_l") or 0),
+                     ", ".join(not_) or "-", ", ".join(gek) or "-", ", ".join(aus) or "-")
     elif info.get("bedarf_l"):
         _LOG.info("Wasservorrat reicht: %d l verfuegbar (ohne Reserve %d l), geplant %d l.",
                   int(info.get("verfuegbar_l") or 0), int(zisterne.get("reserve_l") or 0),
@@ -3114,9 +3173,12 @@ def nachtplan_pflegen(abbild: dict, cfg: dict, jetzt_dt) -> dict:
             "gekuerzt_min": int(plan.get("fenster_gekuerzt_min") or 0),
             # 0.9.52: welche Zonen der Wasservorrat zur Rechenzeit auslassen liess (Rangfolge).
             "ausgelassen": list(((plan.get("zisterne") or {}).get("ausgelassen")) or []),
+            # 0.9.53: Zonen mit Teilgabe (sekunden_soll ist schon die gekuerzte Zeit).
+            "gekuerzt": list(((plan.get("zisterne") or {}).get("gekuerzt")) or []),
             "je_zone": {k: dict({"sekunden_soll": w.get("sekunden_soll", 0),
                                  "durchlaeufe": w.get("durchlaeufe", 0)},
-                                **({"zisterne_ausgelassen": 1} if w.get("zisterne_ausgelassen") else {}))
+                                **({"zisterne_ausgelassen": 1} if w.get("zisterne_ausgelassen") else {}),
+                                **({"zisterne_gekuerzt": 1} if w.get("zisterne_gekuerzt") else {}))
                         for k, w in (plan.get("je_zone") or {}).items()}}
     json_schreiben(DATEI_NACHTPLAN, fest)
     _LOG.info("Nachtplan fuer %s festgehalten: %d Durchlaeufe (Rechenzeit %s)",
@@ -3563,7 +3625,12 @@ class Dienst:
                                                    "wind": sp_a.get("wind"),
                                                    "zisterne": 1 if (zi_a.get("ausgelassen")
                                                                      and not sp_a.get("aktiv")) else 0,
-                                                   "zisterne_zonen": len(zi_a.get("ausgelassen") or [])},
+                                                   # 0.9.53: nur gekuerzt -> eigener Satz
+                                                   "zisterne_gekuerzt": 1 if (zi_a.get("gekuerzt")
+                                                                              and not zi_a.get("ausgelassen")
+                                                                              and not sp_a.get("aktiv")) else 0,
+                                                   "zisterne_zonen": len(zi_a.get("ausgelassen") or [])
+                                                   or len(zi_a.get("gekuerzt") or [])},
                                         cfg)
                         # Unabhaengig von 'melden_ein' und genau einmal
                         # je Tag - siehe die Funktion selbst.

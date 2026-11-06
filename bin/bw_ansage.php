@@ -17,6 +17,7 @@
  *   {"anlass": "ventil", "zone": "<Name>", "ventil": "<Geraetename>", "befehl": "oeffnen"|"schliessen"}
  *   {"anlass": "sperre", "grund": "frost"|"wind"|"beide"}   (0.9.49)
  *   {"anlass": "sperre", "grund": "zisterne", "zonen": <Zahl>}  (0.9.52: Wasservorrat knapp, Zonen ausgelassen)
+ *   {"anlass": "sperre", "grund": "zisterne_gekuerzt", "zonen": <Zahl>}  (0.9.53: nur Teilgaben)
  * Ob ein Anlass angesagt wird (Haken, Wiederholsperre), entscheidet der Dienst.
  *
  * Antwort: EINE Zeile ANSAGE;STAND=..;ART=..;KENNUNG=..;HTTP=..;ZEICHEN=.. (ansage_cli(),

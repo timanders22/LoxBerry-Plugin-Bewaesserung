@@ -3297,6 +3297,12 @@ function bw_ansage_text($d)
             if ($n < 1 || $n > 1000) { return ''; }
             return $n === 1 ? bw_t('SPRECHEN.SPERRE_ZISTERNE_1') : sprintf(bw_t('SPRECHEN.SPERRE_ZISTERNE_N'), $n);
         }
+        if (isset($d['grund']) && $d['grund'] === 'zisterne_gekuerzt') {     // 0.9.53: Teilgabe, nichts ausgelassen
+            $n = (isset($d['zonen']) && is_int($d['zonen'])) ? $d['zonen'] : 1;
+            if ($n < 1 || $n > 1000) { return ''; }
+            return $n === 1 ? bw_t('SPRECHEN.SPERRE_ZISTERNE_GEKUERZT_1')
+                            : sprintf(bw_t('SPRECHEN.SPERRE_ZISTERNE_GEKUERZT_N'), $n);
+        }
         $g = array('frost' => 'SPRECHEN.SPERRE_FROST', 'wind' => 'SPRECHEN.SPERRE_WIND', 'beide' => 'SPRECHEN.SPERRE_BEIDE');
         return (isset($d['grund']) && is_string($d['grund']) && isset($g[$d['grund']])) ? bw_t($g[$d['grund']]) : '';
     }
