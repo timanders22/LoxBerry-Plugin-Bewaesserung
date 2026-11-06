@@ -235,6 +235,15 @@ if ($bw_post && isset($_POST['speichern'])) {
         }
         $bw_n0 = count($bw_fehler);
     };
+    // 0.9.51: beide Zahlen aus der Karte zusammen ins Feld Breitengrad kopiert ("50.123, 8.456") - hier aufteilen,
+    // wenn Laengengrad leer ist oder schon die zweite Zahl traegt. Eine Kommazahl allein ("51,3") bleibt eine Zahl.
+    if (isset($_POST['breite']) && is_string($_POST['breite'])
+        && !preg_match('/^\s*-?\d+,\d+\s*\z/', $_POST['breite'])
+        && preg_match('/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;\/ ]\s*(-?\d{1,3}(?:\.\d+)?)\s*\z/', $_POST['breite'], $bw_pm)
+        && (!isset($_POST['laenge']) || !is_string($_POST['laenge']) || trim($_POST['laenge']) === ''
+            || str_replace(',', '.', trim($_POST['laenge'])) === $bw_pm[2])) {
+        $_POST['breite'] = $bw_pm[1]; $_POST['laenge'] = $bw_pm[2];
+    }
     foreach (array('breite', 'laenge', 'hoehe', 'wind_hoehe') as $f) {
         $g = $bw_gr[$f];
         $w = $bw_kommazahl($bw_sauber($f));
@@ -1525,6 +1534,7 @@ if ($bw_rahmen) {
   <label for="<?= $bw_f ?>"><?= bw_t('EINST.L_' . strtoupper($bw_f)) ?></label>
   <input data-role="none" type="text" name="<?= $bw_f ?>" id="<?= $bw_f ?>" value="<?= bw_e(bw_eingabe('settings', $bw_f, $bw_cfg[$bw_f])) ?>"<?= bw_markierung($bw_f) ?>>
   <?php if ($bw_f === 'wind_hoehe') { ?><p class="sm-hilfe"><?= bw_t('EINST.H_WIND_HOEHE') ?></p><?php } ?>
+  <?php if ($bw_f === 'breite') { ?><p class="sm-hilfe"><a href="<?= bw_e('https://mapatlas.eu/' . (bw_sprache() === 'de' ? 'de' : 'en') . '/tools/coordinates') ?>" target="_blank" rel="noopener"><?= bw_e(bw_t('EINST.KARTE')) ?></a>. <?= bw_e(bw_t('EINST.KARTE_ZUSAMMEN')) ?></p><?php } ?>
 </div>
 <?php } ?>
 <label><input data-role="none" type="checkbox" name="kuestennah" value="1"<?= bw_eingabe_an('settings', 'kuestennah', !empty($bw_cfg['kuestennah'])) ? ' checked' : '' ?>>
