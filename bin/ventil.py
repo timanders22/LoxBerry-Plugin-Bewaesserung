@@ -38,6 +38,24 @@ ZAEHLEN - kein falsches "erledigt":
 
 Die Zeitgrenze von 45 s und "bei Zeitablauf zustand fragen statt blind zu
 wiederholen" stehen in GARDENA1_SCHNITTSTELLE.md, Abschnitt 4.
+
+0.9.52 - HANDBEFEHL "Ventil fuer X Minuten oeffnen" (Befehlsbruecke, Thema
+<praefix>/befehl/ventil/<zone>): nur mit dem Haken "Ventil aus Loxone/MQTT
+oeffnen erlauben" (befehl_ventil_ein, ab Werk aus), nur fuer Zonen mit
+Ausgabeart GARDENA (Entscheidung des Hausherrn 06.11.2026: Zonen ueber
+Loxone werden abgewiesen), hoechstens befehl_ventil_max_min Minuten.
+Derselbe Weg wie die Nacht: Abschnitte nach gardena_max_min (abschnitte()),
+oeffnen immer mit Dauer, schliessen am Ende, gezaehlt und verbucht wie jeder
+Schritt. Frost- und Sturmsperre und ein Wasservorrat an der Reserve weisen
+ab bzw. brechen ab; Pause und Regensperre nicht - der Befehl ist eine
+bewusste Handlung. Wert 0 schliesst ein von Hand geoeffnetes Ventil.
+
+Nie zwei Ventile zugleich (Nachtrag 06.11.2026, Druckabfall): laeuft der
+Nachtlauf, wird ein Handbefehl mit NACHTLAUF_LAEUFT abgewiesen, ist schon
+ein Ventil von Hand offen (oder ein Handlauf eingeplant), mit
+ANDERES_VENTIL_OFFEN. Umgekehrt wartet der Nachtlauf nicht: beginnt sein
+erster faelliger Schritt, wird ein laufender Handlauf regulaer geschlossen
+(mit Buchung, im Protokoll) und der Rest des Handlaufs entfaellt.
 """
 
 from __future__ import annotations
@@ -283,6 +301,42 @@ def plan_gilt(abbild: dict, cfg: dict, jetzt: float) -> str:
     return ""
 
 
+def nachtlauf_laeuft(schritte, jetzt: float) -> bool:
+    """Laeuft gerade ein Nachtlauf? Ein Schritt der Nacht ist offen, oder der
+    erste Schritt der Nacht hat begonnen und es stehen noch Schritte aus,
+    deren Fenster nicht vorbei ist. Hand- und Altschritte zaehlen nicht."""
+    nacht = [s for s in (schritte or []) if isinstance(s, dict) and not s.get("hand") and not s.get("alt")]
+    if any(s.get("stand") == "offen" for s in nacht):
+        return True
+    aus = [s for s in nacht if s.get("stand") == "geplant"
+           and jetzt < float(s.get("fenster_ende") or s.get("ende") or 0)]
+    if not aus or not nacht:
+        return False
+    return min(float(s.get("beginn") or 0) for s in nacht) <= jetzt
+
+
+def handlauf_aktiv(schritte) -> bool:
+    """Ist ein Ventil von Hand offen oder ein Handlauf eingeplant?"""
+    return any(isinstance(s, dict) and s.get("hand") and s.get("stand") in ("offen", "geplant")
+               for s in (schritte or []))
+
+
+def abschnitte(sek: int, max_s: int) -> list:
+    """Eine Ventilzeit in gleich lange Abschnitte von hoechstens max_s Sekunden
+    teilen (Entscheidung 10: GARDENA oeffnet hoechstens 180 min je Befehl).
+    90 min bei 60 min Hoechstdauer -> 2 x 45 min. Fuer Nacht und Handbefehl."""
+    max_s = max(1, int(max_s))
+    sek = max(0, int(sek))
+    teile = max(1, int(math.ceil(sek / float(max_s))))
+    rest = sek
+    aus = []
+    for k in range(teile):
+        dauer = int(math.ceil(rest / float(teile - k)))
+        rest -= dauer
+        aus.append(dauer)
+    return aus
+
+
 def gardena_zone(z) -> bool:
     return isinstance(z, dict) and str(z.get("ausgabe") or "loxone") == "gardena"
 
@@ -349,11 +403,9 @@ def fahrplan_bauen(cfg: dict, abbild: dict, zonenliste: list, beginn: float, end
             if d >= n:
                 t += sek
                 continue
-            teile = max(1, int(math.ceil(sek / float(max_s))))
-            rest = sek
-            for k in range(teile):
-                dauer = int(math.ceil(rest / float(teile - k)))
-                rest -= dauer
+            stuecke = abschnitte(sek, max_s)
+            teile = len(stuecke)
+            for k, dauer in enumerate(stuecke):
                 b, e = t, t + dauer
                 t = e
                 if e > ende:
@@ -382,11 +434,18 @@ class Lauf:
       melden(stufe, text)            Protokoll (logging-Stufe)
       ansagen(art, daten, cfg)       Nr. 36 b: Anlass fuer die Sprachausgabe ('ende', 'ventil',
                                      'ventil_ok'); wahlfrei, None = keine Ansagen
+      hand() -> list                 0.9.52: neue Handbefehle {zone, minuten, ts, quelle}, jeder nur
+                                     einmal geliefert; wahlfrei, None = keine
     """
 
-    def __init__(self, jetzt, lesen, port, rufen, buchen, laden, speichern, melden, ansagen=None):
+    # 0.9.52: ein aelterer Handbefehl wird nicht mehr ausgefuehrt (der Dienst lag still).
+    HAND_HOECHSTALTER_S = 180
+
+    def __init__(self, jetzt, lesen, port, rufen, buchen, laden, speichern, melden, ansagen=None,
+                 hand=None):
         self.jetzt = jetzt
         self.ansagen = ansagen
+        self.hand = hand
         self.lesen = lesen
         self.port = port
         self.rufen = rufen
@@ -431,6 +490,13 @@ class Lauf:
         z = self._zone(zonen, s.get("zone"))
         if not gardena_zone(z) or str(z.get("gardena_ventil") or "").strip() != s.get("ventil"):
             return "Zone nicht mehr auf diesem GARDENA-Ventil"
+        if s.get("hand"):
+            grund = self._hand_sperre(cfg, abbild)
+            if grund:
+                return grund
+            if jetzt >= float(s.get("fenster_ende") or s.get("ende") or 0):
+                return "Handbefehl zu Ende"
+            return None
         sp = abbild.get("sperre") if isinstance(abbild.get("sperre"), dict) else {}
         if int(sp.get("aktiv") or 0):
             return "Sperre (%s)" % str(sp.get("grund") or "")
@@ -442,6 +508,9 @@ class Lauf:
         z = self._zone(zonen, s.get("zone"))
         if not gardena_zone(z) or str(z.get("gardena_ventil") or "").strip() != s.get("ventil"):
             return "Zone nicht mehr auf diesem GARDENA-Ventil"
+        if s.get("hand"):
+            # Ein Handbefehl braucht keinen gueltigen Nachtplan - nur, dass nichts dagegen spricht.
+            return self._hand_sperre(cfg, abbild) or ""
         sp = abbild.get("sperre") if isinstance(abbild.get("sperre"), dict) else {}
         if int(sp.get("aktiv") or 0):
             return "Sperre (%s)" % str(sp.get("grund") or "")
@@ -469,7 +538,8 @@ class Lauf:
         (ein unterbrochener Lauf ist nicht zu Ende). Schritte frueherer Naechte zaehlen nicht."""
         if halt or self.ansagen is None:
             return
-        schritte = [s for s in self._schritte() if isinstance(s, dict) and not s.get("alt")]
+        schritte = [s for s in self._schritte()
+                    if isinstance(s, dict) and not s.get("alt") and not s.get("hand")]
         if not schritte or any(s.get("stand") in ("geplant", "offen") for s in schritte):
             return
         if not any(s.get("geoeffnet") for s in schritte):
@@ -501,6 +571,10 @@ class Lauf:
         # 2) Liegengebliebene Buchungen nachholen.
         if self._buchen_nachholen():
             self._sichern()
+        # 2b) 0.9.52: Handbefehle annehmen und faellige Abschnitte oeffnen - unabhaengig vom Giessfenster.
+        if not halt and self._hand_schritt(cfg, zonen, abbild, jetzt):
+            self._sichern()
+            return True
         if halt or cfg is None or int(cfg.get("gardena_ein") or 0) != 1:
             return False
         fe = fenster(cfg.get("fenster_von"), cfg.get("fenster_bis"), jetzt)
@@ -528,15 +602,189 @@ class Lauf:
             self._sichern()
             return True
         for s in self._schritte():
-            if not isinstance(s, dict) or s.get("stand") != "geplant":
+            if not isinstance(s, dict) or s.get("stand") != "geplant" or s.get("hand"):
                 continue
             if jetzt < float(s.get("beginn") or 0):
                 return False
+            # Nachtrag 06.11.2026: nie zwei Ventile zugleich - der Nachtlauf wartet nicht.
+            if self._handlauf_beenden(cfg, zonen):
+                self._sichern()
             self._oeffnen(s, cfg, zonen, abbild, jetzt)
             self._ende_pruefen(cfg, False)
             self._sichern()
             return True
         return False
+
+    # ------------------------------------------------------------ Handbefehl (0.9.52)
+    @staticmethod
+    def _hand_sperre(cfg, abbild):
+        """Was einen Handbefehl verbietet oder abbricht - oder None.
+        Haken, Frost- und Sturmsperre, Wasservorrat an der Reserve."""
+        if cfg is None:
+            return "Konfiguration unbrauchbar"
+        if int(cfg.get("befehl_ventil_ein") or 0) != 1:
+            return "Haken 'Ventil aus Loxone/MQTT oeffnen erlauben' ist aus"
+        sp = abbild.get("sperre") if isinstance(abbild.get("sperre"), dict) else {}
+        if int(sp.get("frost") or 0):
+            return "Frostsperre"
+        if int(sp.get("wind") or 0):
+            return "Sturmsperre"
+        zi = abbild.get("zisterne") if isinstance(abbild.get("zisterne"), dict) else {}
+        if int(zi.get("ok") or 0) and int(zi.get("an_reserve") or 0):
+            return "Wasservorrat an der Reserve"
+        return None
+
+    def _hand_schritt(self, cfg, zonen, abbild, jetzt) -> bool:
+        """Neue Handbefehle einplanen, verwaiste abbrechen, einen faelligen oeffnen."""
+        getan = False
+        if self.hand is not None:
+            try:
+                neu = self.hand() or []
+            except Exception as f:              # noqa: BLE001
+                self.melden(30, "Handbefehl: Auftraege nicht lesbar (%s)." % type(f).__name__)
+                neu = []
+            for a in neu:
+                if isinstance(a, dict):
+                    self._hand_einplanen(a, cfg, zonen, abbild, jetzt)
+                    getan = True
+        for s in self._schritte():
+            if not isinstance(s, dict) or not s.get("hand") or s.get("stand") != "geplant":
+                continue
+            grund = None
+            if cfg is None or int(cfg.get("gardena_ein") or 0) != 1:
+                grund = "Einstellung GARDENA-Ventile direkt ausgeschaltet"
+            elif int(cfg.get("befehl_ventil_ein") or 0) != 1:
+                grund = "Haken 'Ventil aus Loxone/MQTT oeffnen erlauben' ist aus"
+            if grund:
+                s["stand"] = "abgebrochen"
+                s["grund"] = grund
+                self.melden(30, "GARDENA: Handbefehl Zone '%s' nicht geoeffnet - %s." % (s.get("name"), grund))
+                return True
+            if jetzt >= float(s.get("beginn") or 0):
+                if nachtlauf_laeuft(self._schritte(), jetzt):
+                    s["stand"] = "abgebrochen"
+                    s["grund"] = "NACHTLAUF_LAEUFT"
+                    self.melden(30, "GARDENA: Handbefehl Zone '%s', Abschnitt %s nicht geoeffnet - der Nachtlauf "
+                                    "giesst gerade." % (s.get("name"), s.get("teil")))
+                    return True
+                self._oeffnen(s, cfg, zonen, abbild, jetzt)
+                return True
+        return getan
+
+    def _handlauf_beenden(self, cfg, zonen) -> bool:
+        """Der Nachtlauf beginnt: einen laufenden Handlauf regulaer schliessen, den Rest streichen."""
+        getan = False
+        for s in self._schritte():
+            if not isinstance(s, dict) or not s.get("hand"):
+                continue
+            if s.get("stand") == "offen":
+                self.melden(20, "GARDENA: der Nachtlauf beginnt - Handbefehl Zone '%s' wird geschlossen."
+                            % s.get("name"))
+                self._schliessen(s, cfg, zonen, "Nachtlauf beginnt", False)
+                getan = True
+            elif s.get("stand") == "geplant":
+                s["stand"] = "abgebrochen"
+                s["grund"] = "Nachtlauf beginnt"
+                getan = True
+        return getan
+
+    def _hand_einplanen(self, a, cfg, zonen, abbild, jetzt) -> None:
+        schluessel = str(a.get("zone") or "")[:40]
+        quelle = re.sub(r"[^a-z0-9_]", "", str(a.get("quelle") or "mqtt").lower())[:20] or "mqtt"
+        z = self._zone(zonen, schluessel)
+        name = str((z or {}).get("name") or schluessel)
+        wer = "GARDENA: Handbefehl (%s) Zone '%s'" % (quelle, name)
+        try:
+            minuten = int(a.get("minuten"))
+            ts = float(a.get("ts") or 0)
+        except (TypeError, ValueError):
+            self.melden(30, "%s abgewiesen - Befehl unlesbar." % wer)
+            return
+        if not 0 <= jetzt - ts <= self.HAND_HOECHSTALTER_S:
+            self.melden(30, "%s abgewiesen - der Befehl ist %d s alt (hoechstens %d s); der Dienst lief "
+                            "wohl nicht." % (wer, int(jetzt - ts), self.HAND_HOECHSTALTER_S))
+            return
+        if minuten == 0:
+            n = 0
+            for s in self._schritte():
+                if not isinstance(s, dict) or not s.get("hand") or s.get("zone") != schluessel:
+                    continue
+                if s.get("stand") == "geplant":
+                    s["stand"] = "abgebrochen"
+                    s["grund"] = "Befehl 0 (schliessen)"
+                    n += 1
+                elif s.get("stand") == "offen":
+                    # Geschlossen wird im naechsten Schritt, regulaer und mit Buchung.
+                    s["ende"] = int(jetzt)
+                    s["fenster_ende"] = int(jetzt)
+                    n += 1
+            self.melden(20, "%s: schliessen - %s." % (wer, ("%d Abschnitt(e) beendet" % n) if n
+                                                       else "kein von Hand geoeffnetes Ventil"))
+            return
+        if cfg is None:
+            self.melden(30, "%s abgewiesen - Konfiguration unbrauchbar." % wer)
+            return
+        try:
+            grenze = max(1, min(HOECHST_MIN, int(float(cfg.get("befehl_ventil_max_min") or 30))))
+            max_min = max(1, min(HOECHST_MIN, int(float(cfg.get("gardena_max_min") or 60))))
+        except (TypeError, ValueError):
+            grenze, max_min = 30, 60
+        grund = None
+        if int(cfg.get("gardena_ein") or 0) != 1:
+            grund = "Einstellung GARDENA-Ventile direkt ist aus"
+        elif z is None:
+            grund = "Zone unbekannt"
+        elif not gardena_zone(z):
+            grund = "Zone laeuft ueber Loxone - diese Ventile oeffnet nur Loxone selbst"
+        elif not ventil_name_taugt(z.get("gardena_ventil")):
+            grund = "Zone ohne gueltigen GARDENA-Geraetenamen"
+        elif not 1 <= minuten <= grenze:
+            grund = "%d min liegt nicht in 1 bis %d min (Hoechstdauer je Befehl)" % (minuten, grenze)
+        else:
+            grund = self._hand_sperre(cfg, abbild)
+        if not grund:
+            if nachtlauf_laeuft(self._schritte(), jetzt):
+                grund = "NACHTLAUF_LAEUFT (der Nachtlauf giesst gerade - nie zwei Ventile zugleich)"
+            elif handlauf_aktiv(self._schritte()):
+                grund = "ANDERES_VENTIL_OFFEN (ein Ventil ist schon von Hand offen)"
+        if not grund:
+            grund = self._hand_wasser(z, minuten, abbild)
+        if grund:
+            self.melden(30, "%s fuer %d min abgewiesen - %s." % (wer, minuten, grund))
+            return
+        ventil = str(z.get("gardena_ventil") or "").strip()
+        nr = max([int(s.get("nr") or 0) for s in self._schritte() if isinstance(s, dict)] or [0])
+        ende_ges = int(jetzt) + minuten * 60
+        t = int(jetzt)
+        stuecke = abschnitte(minuten * 60, max_min * 60)
+        if not isinstance(self.z.get("schritte"), list):
+            self.z["schritte"] = []
+        for k, dauer in enumerate(stuecke):
+            nr += 1
+            self.z["schritte"].append({"nr": nr, "zone": schluessel, "name": name, "ventil": ventil,
+                                       "durchlauf": 0, "teil": k + 1, "teile": len(stuecke),
+                                       "beginn": t, "ende": t + dauer, "fenster_ende": ende_ges,
+                                       "stand": "geplant", "hand": 1, "quelle": quelle})
+            t += dauer
+        self.melden(20, "%s fuer %d min angenommen (%d Abschnitt(e) zu hoechstens %d min)."
+                    % (wer, minuten, len(stuecke), max_min))
+
+    @staticmethod
+    def _hand_wasser(z, minuten, abbild):
+        """Reicht der Wasservorrat (ohne Reserve) fuer diesen Befehl? Nur mit Zisternenquelle und
+        bekannter Menge; sonst None (nichts dagegen)."""
+        zi = abbild.get("zisterne") if isinstance(abbild.get("zisterne"), dict) else {}
+        if not int(zi.get("ok") or 0):
+            return None
+        try:
+            import giessplan
+            liter, _wie = giessplan.liter_je_nacht(z, minuten * 60, 1)
+            frei = float(zi.get("verfuegbar_l") or 0)
+        except Exception:                       # noqa: BLE001
+            return None
+        if liter is not None and liter > frei:
+            return "Wasservorrat reicht nicht (%d l noetig, %d l ueber der Reserve)" % (int(liter), int(frei))
+        return None
 
     def _fahrplan(self, cfg, zonen, abbild, nacht, beginn, ende, jetzt):
         try:
@@ -546,7 +794,8 @@ class Lauf:
         neu, info = fahrplan_bauen(cfg, abbild, zonen, beginn, ende, max_min)
         # Ein Schritt, dessen Wasser noch nicht im Verlauf steht, bleibt.
         behalten = [s for s in self._schritte()
-                    if isinstance(s, dict) and (s.get("stand") == "offen" or s.get("gebucht") == 0)]
+                    if isinstance(s, dict) and (s.get("stand") == "offen" or s.get("gebucht") == 0
+                                                or (s.get("hand") and s.get("stand") == "geplant"))]
         for s in behalten:
             s["alt"] = 1
         self.z = {"nacht": nacht, "gebaut": int(jetzt), "fenster_beginn": int(beginn),
@@ -567,8 +816,9 @@ class Lauf:
 
     def _oeffnen(self, s, cfg, zonen, abbild, jetzt):
         rest = float(s.get("ende") or 0) - jetzt
-        wer = "Zone '%s' (Ventil '%s', Durchlauf %s%s)" % (
-            s.get("name"), s.get("ventil"), s.get("durchlauf"),
+        wer = "Zone '%s' (Ventil '%s', %s%s)" % (
+            s.get("name"), s.get("ventil"),
+            "Handbefehl" if s.get("hand") else "Durchlauf %s" % s.get("durchlauf"),
             (", Abschnitt %s/%s" % (s.get("teil"), s.get("teile"))) if int(s.get("teile") or 1) > 1 else "")
         if rest < MINDEST_S:
             s["stand"] = "verpasst"

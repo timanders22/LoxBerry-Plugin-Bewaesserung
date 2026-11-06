@@ -206,6 +206,15 @@ DATEI_LOG = os.path.join(LOGDIR, "bewaesserung.log")
 # (giess_thema) zuletzt etwas kam (fuer den Hinweis im Reiter Test).
 DATEI_RUECKMELDUNG = os.path.join(DATADIR, "rueckmeldung.json")
 DATEI_RM_ALTWEG = os.path.join(DATADIR, "rueckmeldung_altweg.json")
+# 0.9.52: Befehle aus Loxone/MQTT (bin/befehle_zuordnung.php, webfrontend/html/bw_lib.php) und die Zisterne.
+#   pause.json          die Pause (bis_ts, bis, tage, quelle) - schreibt bw_pause_setzen(); ueberlebt den Neustart
+#   rechnen_jetzt.json  Marke "sofort rechnen" - schreibt bw_rechnen_anstossen(); der Dienst nimmt sie weg
+#   ventil_hand/        je Befehl "Ventil oeffnen" eine Datei - schreibt bw_ventil_befehl(); der GARDENA-Lauf nimmt sie weg
+#   zisterne.json       der zuletzt gelesene Fuellstand (wert, ts) - damit "--einmal" dieselbe Rangfolge rechnet
+DATEI_PAUSE = os.path.join(DATADIR, "pause.json")
+DATEI_RECHNEN_JETZT = os.path.join(DATADIR, "rechnen_jetzt.json")
+ORDNER_HAND = os.path.join(DATADIR, "ventil_hand")
+DATEI_ZISTERNE = os.path.join(DATADIR, "zisterne.json")
 
 VORGABEN = {
     "breite": 0.0, "laenge": 0.0, "hoehe": 0.0, "wind_hoehe": 2.0,
@@ -291,6 +300,16 @@ VORGABEN = {
     # (PHP, bin/befehlsbruecke.php). AUS ab Werk. Der Dienst liest ihn nie; er steht hier, damit beide
     # Vorgabelisten gleich bleiben (Reiter Test, Zeile "Vorgaben").
     "befehle_mqtt_ein": 0,
+    #
+    # 0.9.52: der zweite Haken der Befehlsbruecke - "Ventil aus Loxone/MQTT oeffnen erlauben". AUS ab Werk:
+    # der UDP-Eingang des Gateways ist im Heimnetz ohne Anmeldung erreichbar (Regeln/07, 3a), und ein
+    # Fremdbefehl oeffnete sonst Wasser. Dazu die Hoechstdauer je Befehl in Minuten (1..180).
+    "befehl_ventil_ein": 0, "befehl_ventil_max_min": 30,
+    #
+    # 0.9.52: Wasservorrat (Zisterne/Tank) fuer die Rangfolge der Zonen. Ohne Quelle "zisterne" im Reiter
+    # Quellen wirkt nichts davon. Einheit des Werts (prozent|liter), Fassungsvermoegen in Litern (0 = nicht
+    # eingetragen, dann keine Rangfolge) und die Reserve in Prozent, die nie verbraucht wird.
+    "zisterne_einheit": "prozent", "zisterne_volumen_l": 0, "zisterne_reserve_prozent": 20,
 }
 
 _LOG = logging.getLogger("bewaesserung")
@@ -470,6 +489,14 @@ def meldungen_pruefen(abbild: dict, cfg: dict) -> list:
         raus.append((4, "Die eigene Wetterstation liefert seit %d Rechengaengen "
                         "keinen Wert mehr - gerechnet wird mit dem Modell."
                      % grenze2))
+
+    # 0.9.52: knapper Wasservorrat - einmal je Tag, wenn die Rangfolge Zonen auslaesst. Der Tag steht im
+    # Meldezaehler, weil die Dienstschleife nur ihn (und zwei Tagesmarken) in zustand.json uebernimmt.
+    zi = plan.get("zisterne") or {}
+    if zi.get("ausgelassen") and not int((abbild.get("sperre") or {}).get("aktiv") or 0)             and zaehler.get("zisterne_tag") != heute:
+        zaehler["zisterne_tag"] = heute
+        raus.append((4, "Wasservorrat knapp: heute Nacht werden nur die wichtigen Zonen gegossen, "
+                        "ausgelassen: %s." % ", ".join(str(x) for x in zi["ausgelassen"])))
 
     stand["meldezaehler"] = zaehler
     stand["meldetag"] = heute
@@ -1103,7 +1130,18 @@ def mqtt_gateway() -> dict:
 # Spalte "zurueckbehalten?" im Reiter MQTT und die Zeile "Retain" im Reiter
 # Test weiter gegen den Dienst pruefen (bw_retain_python() nimmt genau
 # diese Schreibweise als "gelesen, leer").
-RETAINED_GLOBAL = frozenset()
+#
+# 0.9.52: 'pause_bis' geht wieder retained hinaus - als einziges Thema. Es ist
+# kein Plan "fuer heute Nacht", sondern ein Zustand, den ein Mensch gesetzt hat,
+# mit einem ABSOLUTEN Datum (Regeln/07: ein absoluter Zeitpunkt ist retained;
+# Funkwacht 1.0.3, 'letzte'). Die Uhr macht ihn nicht falsch, und nach einem
+# Neustart von Miniserver oder Gateway steht sofort da, bis wann pausiert ist.
+# Ohne Pause steht dort "-", nie ein leerer Wert (eine leere retain-Nutzlast
+# loeschte das Thema). 'pausiert' (0/1) folgt dagegen der Uhr und bleibt
+# fluechtig wie 'gesperrt'.
+RETAINED_GLOBAL = {
+    "pause_bis",
+}
 RETAINED_ZONE = ()
 
 # Alle Themen, die dieser Dienst sendet - fuer das Abraeumen und die
@@ -1115,7 +1153,8 @@ RETAINED_ZONE = ()
 MQTT_GLOBAL = ("ok", "et0", "durchlaeufe", "noetige_durchlaeufe", "reicht",
                "giessen", "alter", "ts", "zaehler", "gesperrt", "sperrgrund",
                "plan_fest", "deckt", "gekuerzt_min",
-               "status/ok", "status/ts", "status/zaehler")
+               "status/ok", "status/ts", "status/zaehler",
+               "pausiert", "pause_bis", "ausgelassen")
 MQTT_ZONE = ("ok", "defizit_mm", "bedarf_mm", "dr_mm", "fuellstand", "liter",
              "minuten", "sekunden", "durchlaeufe", "gegossen_mm", "gemessen")
 # Was frueher zurueckbehalten hinausging und es heute nicht mehr tut: 'ok'
@@ -2333,6 +2372,9 @@ def ansage_sperre(daten: dict, cfg) -> str:
     Rueckgabe wie ansage_ereignis(), dazu '' fuer keine Sperre und 'laeuft'.
     """
     gruende = [g for g in ("frost", "wind") if daten.get(g) == 1]
+    # 0.9.52: knapper Wasservorrat (Zonen ausgelassen) - nur ohne Wettersperre, eigener Grund und Satz.
+    if not gruende and daten.get("zisterne") == 1:
+        gruende = ["zisterne"]
     nacht = str(daten.get("nacht") or "")
     if not gruende or not nacht:
         return ""
@@ -2352,6 +2394,11 @@ def ansage_sperre(daten: dict, cfg) -> str:
             return "laeuft"
         _ANSAGE_SPERRE_LAEUFT.append(1)
     auftrag = {"anlass": "sperre", "grund": "beide" if len(neu) == 2 else neu[0]}
+    if neu == ["zisterne"]:
+        try:
+            auftrag["zonen"] = max(1, int(daten.get("zisterne_zonen") or 1))
+        except (TypeError, ValueError):
+            auftrag["zonen"] = 1
     erg = _ansage_starten("sperre", auftrag, _ansage_sperre_rufen, (nacht, neu))
     if erg != "gestartet":
         with _ANSAGE_SCHLOSS:
@@ -2521,7 +2568,7 @@ def ventil_lauf_neu(jetzt=time.time) -> "ventil.Lauf":
         laden=lambda: _still_lesen(DATEI_VENTIL),
         speichern=lambda d: json_schreiben(DATEI_VENTIL, d),
         melden=lambda stufe, text: _LOG.log(stufe, text),
-        ansagen=ansage_ereignis)
+        ansagen=ansage_ereignis, hand=hand_auftraege_holen)
 
 
 class VentilFaden(threading.Thread):
@@ -2638,6 +2685,13 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         })
     zus = quellen.messwerte_zusammenstellen(sammler_lokal, online_heute,
                                             standort, heute_s)
+    # 0.9.52: der Wasservorrat (Quelle "zisterne" im Reiter Quellen). Er geht nicht in die Verdunstung ein,
+    # steht aber wie jede eingerichtete Groesse in 'herkunft' - sonst meldete der Reiter Test sie als stumm.
+    zisterne = zisterne_lesen(sammler_lokal, cfg)
+    if zisterne.get("eingerichtet"):
+        zus["herkunft"]["zisterne"] = zisterne.get("herkunft") or "keine"
+        if zisterne.get("herkunft") != "station" and zisterne.get("grund"):
+            zus.setdefault("grund", {})["zisterne"] = zisterne["grund"]
 
     m = dict(zus["messwerte"])
     # Das Jahr gehoert dazu: in einem Schaltjahr waere der Tagesindex
@@ -2808,6 +2862,11 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
             ergebnisse[s]["rate_gemessen"] = 1 if z.get("rate_gemessen") else 0
 
     plan = giessplan.plan_bauen(zonenliste, ergebnisse, cfg)
+    # 0.9.52: Rangfolge bei knappem Wasservorrat - nur mit gelesenem Vorrat und Fassungsvermoegen. Ohne
+    # Zisternenquelle (oder wenn sie schweigt) bleibt der Plan, wie er ist.
+    if zisterne.get("ok"):
+        giessplan.zisterne_rangfolge(plan, zonenliste, zisterne["vorrat_l"], zisterne["reserve_l"])
+        zisterne_melden(heute_s, plan.get("zisterne") or {}, zisterne)
 
     # --- Sperren (neu in 0.9.7) ---
     #
@@ -2817,6 +2876,8 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
     # stille Falschaussage.
     sperre = giessplan.sperren_pruefen(
         vorschau[0] if vorschau else None, cfg, m.get("regen_stunde"))
+    # 0.9.52: die Pause (Befehl aus Loxone/MQTT oder Oberflaeche) wirkt wie eine Sperre mit Enddatum.
+    sperre = giessplan.pause_einrechnen(sperre, _still_lesen(DATEI_PAUSE), time.time())
     plan["gesperrt"] = sperre["aktiv"]
     if sperre["aktiv"]:
         plan["durchlaeufe_ohne_sperre"] = plan["durchlaeufe"]
@@ -2861,6 +2922,8 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
         "zonen": ergebnisse,
         "plan": plan,
         "sperre": sperre,
+        # 0.9.52: Wasservorrat ({} -> eingerichtet 0 ohne Quelle); die Rangfolge steht in plan['zisterne'].
+        "zisterne": zisterne,
         "gegossen": gegossen,
         "nachgetragen": nachgetragen,
         "abdeckung": ({g: round(sammler_lokal.abdeckung_stunden(g), 1)
@@ -2891,6 +2954,99 @@ def rechnen(cfg: dict, sammler: quellen.Sammler | None = None) -> dict:
                          int(round(100 * float(plan.get("fenster_anteil") or 0))),
                          int(plan.get("fenster_gekuerzt_min") or 0))
     return abbild
+
+
+def zisterne_lesen(sammler, cfg: dict, jetzt: float | None = None) -> dict:
+    """Den Wasservorrat lesen (0.9.52) - Quelle 'zisterne' im Reiter Quellen.
+
+    Rueckgabe: eingerichtet 0/1, ok 0/1 (Rangfolge moeglich), herkunft
+    ('station' oder der Grund), grund, und mit ok: vorrat_l, prozent,
+    reserve_l, verfuegbar_l, an_reserve, volumen_l.
+
+    Der letzte gute Wert steht in zisterne.json. "--einmal" (Knopf "Jetzt
+    rechnen" in der Oberflaeche) laeuft in einem eigenen Prozess ohne die
+    MQTT-Werte des Dienstes; ohne diese Datei rechnete der Knopf ohne
+    Rangfolge und schickte einen Plan hinaus, der ausgelassene Zonen wieder
+    giessen liesse. Der Wert gilt nur so lange wie jeder Stationswert
+    (hoechstalter).
+    """
+    jetzt = time.time() if jetzt is None else jetzt
+    felder = getattr(sammler, "felder", None) or {}
+    f = felder.get("zisterne") if isinstance(felder, dict) else None
+    if not isinstance(f, dict) or not f.get("weg"):
+        return {"eingerichtet": 0, "ok": 0}
+    aus = {"eingerichtet": 1, "ok": 0, "herkunft": "", "grund": ""}
+    einheit = str(cfg.get("zisterne_einheit") or "prozent")
+    try:
+        volumen = max(0.0, float(cfg.get("zisterne_volumen_l") or 0))
+        reserve_p = max(0.0, min(90.0, float(cfg.get("zisterne_reserve_prozent") or 0)))
+        hoechstalter = float(cfg.get("hoechstalter") or 3600)
+    except (TypeError, ValueError):
+        volumen, reserve_p, hoechstalter = 0.0, 20.0, 3600.0
+    w, woher = sammler.wert("zisterne")
+    if w is not None:
+        if ANLAGE:
+            json_schreiben(DATEI_ZISTERNE, {"wert": w, "ts": int(jetzt)})
+    else:
+        g = _still_lesen(DATEI_ZISTERNE)
+        try:
+            alt_w, alt_ts = float(g.get("wert")), float(g.get("ts") or 0)
+        except (TypeError, ValueError):
+            alt_w, alt_ts = None, 0.0
+        if alt_w is not None and 0 <= jetzt - alt_ts <= hoechstalter:
+            w = alt_w
+    if w is None:
+        aus["herkunft"] = woher if woher not in ("", "fehlt") else "keine"
+        aus["grund"] = woher
+        return aus
+    aus["herkunft"] = "station"
+    aus["roh"] = round(float(w), 1)
+    aus["einheit"] = einheit
+    if volumen <= 0:
+        aus["grund"] = "volumen_fehlt"
+        return aus
+    if einheit == "liter":
+        if w < 0 or w > volumen * 1.1:
+            aus["grund"] = "unplausibel"
+            return aus
+        vorrat = min(float(w), volumen)
+    else:
+        if w < 0 or w > 110:
+            aus["grund"] = "unplausibel"
+            return aus
+        vorrat = volumen * min(100.0, float(w)) / 100.0
+    reserve = volumen * reserve_p / 100.0
+    aus.update({"ok": 1, "volumen_l": round(volumen), "vorrat_l": round(vorrat),
+                "prozent": round(100.0 * vorrat / volumen, 1), "reserve_prozent": reserve_p,
+                "reserve_l": round(reserve), "verfuegbar_l": round(max(0.0, vorrat - reserve)),
+                "an_reserve": 1 if vorrat <= reserve else 0})
+    return aus
+
+
+_ZISTERNE_GEMELDET = {"schluessel": ""}
+
+
+def zisterne_melden(datum: str, info: dict, zisterne: dict) -> None:
+    """Die Rangfolge ins Protokoll - je Tag nur, wenn sich das Ergebnis aendert (0.9.52)."""
+    aus = list(info.get("ausgelassen") or [])
+    ohne = list(info.get("ohne_menge") or [])
+    k = "%s|%s|%s" % (datum, ",".join(aus), ",".join(ohne))
+    if k == _ZISTERNE_GEMELDET["schluessel"]:
+        return
+    _ZISTERNE_GEMELDET["schluessel"] = k
+    if aus:
+        _LOG.warning("Wasservorrat knapp: %d l im Vorrat, Reserve %d l, verfuegbar %d l, geplant %d l. "
+                     "Gegossen werden nur die wichtigen Zonen; heute Nacht ausgelassen: %s.",
+                     int(zisterne.get("vorrat_l") or 0), int(zisterne.get("reserve_l") or 0),
+                     int(info.get("verfuegbar_l") or 0), int(info.get("bedarf_l") or 0), ", ".join(aus))
+    elif info.get("bedarf_l"):
+        _LOG.info("Wasservorrat reicht: %d l verfuegbar (ohne Reserve %d l), geplant %d l.",
+                  int(info.get("verfuegbar_l") or 0), int(zisterne.get("reserve_l") or 0),
+                  int(info.get("bedarf_l") or 0))
+    if ohne:
+        _LOG.warning("Wasservorrat: fuer %s ist die Wassermenge unbekannt (kein Durchfluss, keine "
+                     "Becherprobe mit Flaeche) - diese Zonen zaehlen in der Rangfolge nicht mit.",
+                     ", ".join(ohne))
 
 
 _PFLANZDATUM_GEMELDET: set = set()
@@ -2956,8 +3112,11 @@ def nachtplan_pflegen(abbild: dict, cfg: dict, jetzt_dt) -> dict:
             "reicht": int(plan.get("reicht") or 0),
             "grund": str(plan.get("grund") or ""),
             "gekuerzt_min": int(plan.get("fenster_gekuerzt_min") or 0),
-            "je_zone": {k: {"sekunden_soll": w.get("sekunden_soll", 0),
-                            "durchlaeufe": w.get("durchlaeufe", 0)}
+            # 0.9.52: welche Zonen der Wasservorrat zur Rechenzeit auslassen liess (Rangfolge).
+            "ausgelassen": list(((plan.get("zisterne") or {}).get("ausgelassen")) or []),
+            "je_zone": {k: dict({"sekunden_soll": w.get("sekunden_soll", 0),
+                                 "durchlaeufe": w.get("durchlaeufe", 0)},
+                                **({"zisterne_ausgelassen": 1} if w.get("zisterne_ausgelassen") else {}))
                         for k, w in (plan.get("je_zone") or {}).items()}}
     json_schreiben(DATEI_NACHTPLAN, fest)
     _LOG.info("Nachtplan fuer %s festgehalten: %d Durchlaeufe (Rechenzeit %s)",
@@ -3060,6 +3219,19 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     else:
         gekuerzt = int(plan.get("fenster_gekuerzt_min") or 0)
     p["gekuerzt_min"] = gekuerzt
+    # 0.9.52: die Pause (Befehl pause aus Loxone/MQTT oder Oberflaeche). 'pause_bis' ist das Datum, an dem
+    # sie endet ("-" ohne Pause, nie leer) und geht retained hinaus (RETAINED_GLOBAL); 'pausiert' folgt der
+    # Uhr und ist fluechtig. Dazu 'ausgelassen': wie viele Zonen heute Nacht wegen knappen Wasservorrats
+    # aussetzen (Rangfolge, 0 ohne Zisternenquelle). Eine Sperre setzt 0 - dann giesst ohnehin keine Zone.
+    p["pausiert"] = 1 if int(sperre.get("pause") or 0) else 0
+    p["pause_bis"] = (str(sperre.get("pause_bis") or "") or "-") if p["pausiert"] else "-"
+    if int(sperre.get("aktiv") or 0):
+        ausgelassen = 0
+    elif fest and isinstance(fest.get("ausgelassen"), list):
+        ausgelassen = len(fest["ausgelassen"])
+    else:
+        ausgelassen = len(((plan.get("zisterne") or {}).get("ausgelassen")) or [])
+    p["ausgelassen"] = ausgelassen
     for s, e in (abbild.get("zonen") or {}).items():
         # Der eingefrorene Plan gilt AUCH je Zone.
         #
@@ -3163,6 +3335,47 @@ def _stand_der_dateien() -> tuple:
     return tuple(aus)
 
 
+def rechnen_marke_nehmen() -> bool:
+    """Liegt eine Marke "sofort rechnen" (0.9.52)? Dann wegnehmen, protokollieren, True."""
+    if not os.path.exists(DATEI_RECHNEN_JETZT):
+        return False
+    m = _still_lesen(DATEI_RECHNEN_JETZT)
+    try:
+        os.remove(DATEI_RECHNEN_JETZT)
+    except OSError as f:
+        # Ohne Wegnehmen rechnete jeder Takt sofort - dann lieber gar nicht.
+        _LOG.warning("Marke 'sofort rechnen' liess sich nicht wegnehmen (%s) - sie wird uebergangen.", f)
+        return False
+    _LOG.info("Befehl 'sofort rechnen' (%s, %s) - es wird jetzt gerechnet.",
+              str(m.get("quelle") or "?")[:20], str(m.get("anlass") or "rechnen")[:20])
+    return True
+
+
+def hand_auftraege_holen() -> list:
+    """Die Befehle "Ventil oeffnen" aus ventil_hand/ (0.9.52; schreibt bw_ventil_befehl() in bw_lib.php).
+
+    Jede Datei wird gelesen und SOFORT weggenommen - ein Befehl wird nie zweimal
+    ausgefuehrt, auch nicht nach einem Neustart. Laesst sie sich nicht wegnehmen,
+    wird sie nicht ausgefuehrt. Hoechstens zehn je Aufruf.
+    """
+    try:
+        namen = sorted(n for n in os.listdir(ORDNER_HAND) if n.endswith(".json"))
+    except OSError:
+        return []
+    aus = []
+    for n in namen[:10]:
+        pfad = os.path.join(ORDNER_HAND, n)
+        d = _still_lesen(pfad)
+        try:
+            os.remove(pfad)
+        except OSError as f:
+            _LOG.warning("Ventilbefehl %s liess sich nicht wegnehmen (%s) - er wird nicht ausgefuehrt.", n, f)
+            continue
+        if isinstance(d, dict) and d:
+            aus.append(d)
+    return aus
+
+
 class Dienst:
     def __init__(self) -> None:
         self.laeuft = True
@@ -3251,6 +3464,11 @@ class Dienst:
                 # Dienstneustart weiter mit dem alten Wert, ohne Hinweis.
                 takt = max(60, min(3600, int(cfg.get("takt") or 300)))
                 jetzt = time.time()
+                # 0.9.52: Marke "sofort rechnen" (Befehl rechnen oder pause ueber die Befehlsbruecke,
+                # Knopf "Pausieren" der Oberflaeche). Sie wird weggenommen, bevor gerechnet wird - ein
+                # zweiter Befehl waehrend des Rechengangs legt eine neue und rechnet danach noch einmal.
+                if rechnen_marke_nehmen():
+                    letzte_rechnung = 0.0
 
                 # Hat jemand in der Oberflaeche etwas geaendert? Dann die
                 # Zuordnung neu lesen und gegebenenfalls neu abonnieren -
@@ -3338,9 +3556,15 @@ class Dienst:
                         # 0.9.49: erst hier, also nie aus einem Rechengang mit
                         # ausgefallener Quelle, und nicht aus --einmal.
                         sp_a = abbild.get("sperre") or {}
+                        # 0.9.52: dazu der knappe Wasservorrat (Zonen ausgelassen), nur ohne Sperre.
+                        zi_a = (abbild.get("plan") or {}).get("zisterne") or {}
                         ansage_ereignis("sperre", {"nacht": abbild.get("datum"),
                                                    "frost": sp_a.get("frost"),
-                                                   "wind": sp_a.get("wind")}, cfg)
+                                                   "wind": sp_a.get("wind"),
+                                                   "zisterne": 1 if (zi_a.get("ausgelassen")
+                                                                     and not sp_a.get("aktiv")) else 0,
+                                                   "zisterne_zonen": len(zi_a.get("ausgelassen") or [])},
+                                        cfg)
                         # Unabhaengig von 'melden_ein' und genau einmal
                         # je Tag - siehe die Funktion selbst.
                         stationslage_protokollieren(abbild)
@@ -3389,6 +3613,9 @@ class Dienst:
             lebenszeichen_senden(cfg_gut)
             for _ in range(takt * 2):
                 if not self.laeuft:
+                    break
+                # 0.9.52: eine Marke "sofort rechnen" beendet das Warten.
+                if os.path.exists(DATEI_RECHNEN_JETZT):
                     break
                 await asyncio.sleep(0.5)
         return 0

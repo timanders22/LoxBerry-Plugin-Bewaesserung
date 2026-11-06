@@ -152,8 +152,10 @@ function bw_vorgaben_python()
  */
 function bw_retain_tabelle()
 {
+    /* 0.9.52: pause_bis ist ein vom Menschen gesetzter Zustand mit absolutem Datum (Regeln/07) und geht
+     * retained hinaus - als einziges Thema; siehe RETAINED_GLOBAL im Dienst. */
     return array(
-        'global' => array(),
+        'global' => array('pause_bis'),
         'zone'   => array(),
     );
 }
@@ -1428,6 +1430,40 @@ function bw_pruefungen()
      * Punkt. */
     list($bw_v2s, $bw_v2t) = bw_v2_haken_lage($cfg);
     $zeilen[] = bw_pruefzeile($bw_v2s === 2 ? -1 : $bw_v2s, bw_t('TEST.F_V2_HAKEN'), bw_e($bw_v2t));
+
+    /* 0.9.52: Pause, Wasservorrat und Ventilbefehl. Keine Pause, keine Zisterne und ein ausgeschalteter
+     * Ventilbefehl sind eine Wahl - ein Punkt, kein Kreuz. */
+    $bw_pt = bw_pause_lesen();
+    $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_PAUSE'), $bw_pt['aktiv']
+        ? bw_e(sprintf(bw_t('TEST.A_PAUSE_AKTIV'), date('d.m.Y H:i', $bw_pt['bis_ts']), $bw_pt['quelle'] !== '' ? $bw_pt['quelle'] : '-'))
+        : bw_e(bw_t('TEST.A_PAUSE_KEINE')));
+    $bw_za = bw_abbild();
+    $bw_zz = isset($bw_za['zisterne']) && is_array($bw_za['zisterne']) ? $bw_za['zisterne'] : array();
+    $bw_zq = bw_quellen();
+    $bw_zein = !empty($bw_zq['felder']['zisterne']['weg']);
+    if (!$bw_zein) {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_ZISTERNE'), bw_e(bw_t('TEST.A_ZISTERNE_KEINE')));
+    } elseif ((int) $cfg['zisterne_volumen_l'] <= 0) {
+        $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_ZISTERNE'), bw_e(bw_t('TEST.A_ZISTERNE_VOLUMEN')));
+    } elseif (!empty($bw_zz['ok'])) {
+        $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_ZISTERNE'), bw_e(sprintf(bw_t('TEST.A_ZISTERNE_OK'),
+            (int) $bw_zz['vorrat_l'], number_format((float) $bw_zz['prozent'], 0, ',', '.'),
+            (int) $bw_zz['reserve_l'], (int) $bw_zz['verfuegbar_l'])));
+    } else {
+        $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_ZISTERNE'), bw_e(sprintf(bw_t('TEST.A_ZISTERNE_STUMM'),
+            isset($bw_zz['grund']) && $bw_zz['grund'] !== '' ? (string) $bw_zz['grund'] : '-')));
+    }
+    if (empty($cfg['befehl_ventil_ein'])) {
+        $zeilen[] = bw_pruefzeile(-1, bw_t('TEST.F_VENTILBEFEHL'), bw_e(bw_t('TEST.A_VENTILBEFEHL_AUS')));
+    } else {
+        $bw_gn = 0;
+        foreach (bw_zonen() as $bw_z5) { if (is_array($bw_z5) && isset($bw_z5['ausgabe']) && $bw_z5['ausgabe'] === 'gardena') { $bw_gn++; } }
+        $bw_vok = !empty($cfg['gardena_ein']) && $bw_gn > 0 && !empty($cfg['befehle_mqtt_ein']);
+        $zeilen[] = bw_pruefzeile($bw_vok ? 1 : 0, bw_t('TEST.F_VENTILBEFEHL'), bw_e(sprintf(bw_t('TEST.A_VENTILBEFEHL_AN'),
+            (int) $cfg['befehl_ventil_max_min'], $bw_gn,
+            bw_t(!empty($cfg['gardena_ein']) ? 'TEST.A_GARDENA_AN' : 'TEST.A_GARDENA_AUS'),
+            bw_t(!empty($cfg['befehle_mqtt_ein']) ? 'TEST.A_BRUECKE_AN' : 'TEST.A_BRUECKE_AUS'))));
+    }
     return $zeilen;
 }
 

@@ -5,12 +5,20 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.51 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.52 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.52
+
+- **Pause (neu):** Die Bewässerung lässt sich für 1 bis 60 Nächte anhalten – im Reiter *Einstellungen* (Abschnitt „Pause“) oder aus Loxone mit dem Befehl `publish bewaesserung/befehl/pause 3` (3 Nächte; `0` hebt die Pause auf). Die Pause endet von selbst nach dem Gießfenster der letzten Nacht und gilt auch nach einem Neustart. Über MQTT neu: `pausiert` (0/1), `pause_bis` (Datum, an dem sie endet, „-“ ohne Pause; als einziges Thema zurückbehalten) und `sperrgrund` = `pause`.
+- **Jetzt rechnen aus Loxone (neu):** `publish bewaesserung/befehl/rechnen 1` rechnet den Plan sofort neu, statt auf den nächsten Takt zu warten. Läuft der Dienst nicht, wird der Befehl mit `DIENST_STEHT` abgelehnt.
+- **Ventil von Hand öffnen (neu, ab Werk AUS):** `publish bewaesserung/befehl/ventil/<zone> 10` öffnet das Ventil einer **GARDENA-Zone** 10 Minuten lang; `0` schließt es wieder. Dafür braucht es im Reiter *MQTT* den Haken „Ventil aus Loxone/MQTT öffnen erlauben“ und eine Höchstdauer je Befehl (ab Werk 30 Minuten, längere Befehle werden abgelehnt). Zonen, die über Loxone gießen, werden abgelehnt – deren Ventile öffnen Sie in Loxone. Frost- und Sturmsperre und ein Wasservorrat an der Reserve gelten auch hier; jeder Befehl steht im Protokoll. Erst einschalten, wenn die Ventile am Gerät getestet sind.
+- **Wenn das Wasser knapp ist (neu):** Wer aus Zisterne oder Tank gießt, trägt im Reiter *Quellen* in der Zeile „zisterne“ ein, woher der Füllstand kommt, und im Reiter *Einstellungen* (Abschnitt „Wasservorrat“) Einheit, Fassungsvermögen und Reserve (ab Werk 20 Prozent). Reicht der Vorrat für eine Nacht nicht, gießen zuerst die wichtigen Zonen (Reiter *Zonen*: „Wichtigkeit“, automatisch aus der Bepflanzung – Gemüse und Kübel vor Sträuchern vor Rasen); die übrigen setzen eine Nacht aus. Das steht im Plan, im Protokoll, über MQTT als `ausgelassen` und – wenn eingeschaltet – als Meldung und Ansage. Die Wassermenge je Zone kommt aus dem „Durchfluss“ (Liter je Minute) oder aus Becherprobe mal Fläche; fehlt beides, sagt die Oberfläche das. **Ohne Füllstand ändert sich nichts.** Damit Loxone ausgelassene Zonen überspringt, muss Tv der Zone aus `<zone>/sekunden` kommen (wie im Musterprojekt).
+- Alle Befehle mit Erklärung und Beispiel stehen im Reiter *Einbindung in Loxone*, Schritt 5; der Reiter *Test* hat drei neue Prüfzeilen (Pause, Zisternenquelle, Ventilbefehl).
 
 ## Neu in 0.9.51
 

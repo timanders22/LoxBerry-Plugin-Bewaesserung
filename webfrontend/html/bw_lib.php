@@ -219,6 +219,11 @@ function bw_vorgaben()
         // Der Dienst fuehrt 'tts' nur als Namen (seine Vorgaben stehen nur hier).
         'ansage_ende' => 1, 'ansage_ventil' => 1, 'ansage_sperre' => 1,     // ansage_sperre: 0.9.49
         'tts' => ansage_werk_block(),
+        // 0.9.52: zweiter Haken der Befehlsbruecke "Ventil aus Loxone/MQTT oeffnen erlauben" (ab Werk AUS,
+        // der UDP-Eingang ist im Heimnetz offen - Regeln/07, 3a) und die Hoechstdauer je Befehl.
+        'befehl_ventil_ein' => 0, 'befehl_ventil_max_min' => 30,
+        // 0.9.52: Wasservorrat fuer die Rangfolge der Zonen; ohne Quelle "zisterne" (Reiter Quellen) wirkungslos.
+        'zisterne_einheit' => 'prozent', 'zisterne_volumen_l' => 0, 'zisterne_reserve_prozent' => 20,
     );
 }
 
@@ -1722,12 +1727,15 @@ function bw_eingabe_felder($form)
                              'zonendauer_max_s', 'rechenzeit', 'frost_c', 'wind_kmh_max',
                              'regen_mmh_max', 'hoechstalter', 'melden_limit_tage',
                              'melden_station_tage', 'ecowitt_ordner',
-                             'gardena_ordner', 'gardena_max_min'),
+                             'gardena_ordner', 'gardena_max_min',
+                             'zisterne_einheit', 'zisterne_volumen_l', 'zisterne_reserve_prozent'),
             'haken' => array('kuestennah', 'luecken_fuellen', 'plan_festhalten', 'frost_ein',
                              'wind_ein', 'regen_ein', 'melden_ein', 'ecowitt_regen',
                              'gardena_ein', 'gardena_token_loeschen'),
         ),
-        'mqtt' => array('text' => array('mqtt_topic'), 'haken' => array('mqtt_ein', 'befehle_mqtt_ein')),
+        'mqtt' => array('text' => array('mqtt_topic', 'befehl_ventil_max_min'),
+                        'haken' => array('mqtt_ein', 'befehle_mqtt_ein', 'befehl_ventil_ein')),
+        'pause' => array('text' => array('pause_tage'), 'haken' => array()),
         'quellen_weg' => array('text' => array('http_url', 'mqtt_thema'), 'haken' => array()),
         'quellen' => array('text' => array('weg', 'thema', 'pfad', 'einheit'), 'haken' => array()),
         'zonen' => array(
@@ -1735,7 +1743,7 @@ function bw_eingabe_felder($form)
                              'z_rate', 'z_regner', 'z_mikroklima', 'z_pflanzdatum', 'z_feuchte', 'z_dauer',
                              'z_hoehe_pflanze', 'z_abfluss', 'z_sensor_gewicht', 'z_theta_fc',
                              'z_theta_wp', 'z_giess_thema', 'z_giess_art',
-                             'z_ausgabe', 'z_gardena_ventil'),
+                             'z_ausgabe', 'z_gardena_ventil', 'z_wichtigkeit', 'z_durchfluss'),
             'haken' => array('z_zyklus', 'z_loeschen'),
         ),
         'becher' => array('text' => array('becher', 'becher_min', 'becher_mm'), 'haken' => array()),
@@ -2115,6 +2123,8 @@ function bw_zonen_grenzen()
         'dr'             => array(0, 10000, false, false),
         'im_zyklus'      => array(0, 1, false, true),
         'rate_gemessen'  => array(0, 1, false, true),
+        'wichtigkeit'    => array(0, 3, false, true),       // 0.9.52
+        'durchfluss_lmin' => array(0, 1000, false, false),  // 0.9.52
     );
 }
 
@@ -2639,6 +2649,11 @@ function bw_grenzen()
         'ansage_sperre'       => array(0, 1),
         /* Gruppe 2 / MQTT (0.9.44): der Haken der Befehlsbruecke. */
         'befehle_mqtt_ein'    => array(0, 1),
+        /* 0.9.52: Ventilbefehl und Wasservorrat. */
+        'befehl_ventil_ein'        => array(0, 1),
+        'befehl_ventil_max_min'    => array(1, 180),
+        'zisterne_volumen_l'       => array(0, 1000000),
+        'zisterne_reserve_prozent' => array(0, 90),
     );
 }
 
@@ -2688,6 +2703,8 @@ function bw_wert_pruefen($k, $w)
             return preg_match('/^[A-Za-z0-9_-]{1,64}$/', $s) === 1;
         case 'gardena_token':
             return preg_match('/^([0-9A-Fa-f]{32})?$/', $s) === 1;
+        case 'zisterne_einheit':     // 0.9.52
+            return in_array($s, array('prozent', 'liter'), true);
     }
     return is_string($w);
 }
@@ -2732,6 +2749,9 @@ function bw_zonen_schluessel()
         'pflanzdatum' => 'text',     // 0.9.49: Aussaat/Pflanzung, JJJJ-MM-TT oder leer
         /* Gardena-1: Ausgabeart (fehlt = ueber Loxone) und Geraetename. */
         'ausgabe' => 'text', 'gardena_ventil' => 'text',
+        /* 0.9.52: Wichtigkeit (0 = automatisch aus der Bepflanzung, 1 zuerst .. 3 zuletzt) und Durchfluss
+         * in Litern je Minute (0 = nicht gemessen) fuer die Rangfolge bei knappem Wasservorrat. */
+        'wichtigkeit' => 'zahl', 'durchfluss_lmin' => 'zahl',
     );
 }
 
@@ -3272,6 +3292,11 @@ function bw_ansage_text($d)
         return sprintf(bw_t($b === 'oeffnen' ? 'SPRECHEN.VENTIL_AUF' : 'SPRECHEN.VENTIL_ZU'), $z);
     }
     if ($d['anlass'] === 'sperre') {     // 0.9.49
+        if (isset($d['grund']) && $d['grund'] === 'zisterne') {     // 0.9.52
+            $n = (isset($d['zonen']) && is_int($d['zonen'])) ? $d['zonen'] : 1;
+            if ($n < 1 || $n > 1000) { return ''; }
+            return $n === 1 ? bw_t('SPRECHEN.SPERRE_ZISTERNE_1') : sprintf(bw_t('SPRECHEN.SPERRE_ZISTERNE_N'), $n);
+        }
         $g = array('frost' => 'SPRECHEN.SPERRE_FROST', 'wind' => 'SPRECHEN.SPERRE_WIND', 'beide' => 'SPRECHEN.SPERRE_BEIDE');
         return (isset($d['grund']) && is_string($d['grund']) && isset($g[$d['grund']])) ? bw_t($g[$d['grund']]) : '';
     }
@@ -3520,7 +3545,11 @@ function bw_sicherung_lesen($roh, &$namen = null)
         /* Gardena-1: das Ventil-Token fehlt in jeder Sicherung mit Absicht. */
         /* Gruppe 2 (0.9.44): der Haken der Befehlsbruecke fehlt in jeder Sicherung vor 0.9.44 - er bleibt
          * dann aus (Vorgabe 0), das ist kein Mangel (Entwurf bw 3.3: Sicherung verträglich). */
-        if ($fk !== 'gardena_token' && $fk !== 'befehle_mqtt_ein' && !array_key_exists($fk, $daten)) {
+        /* 0.9.52: ebenso die neuen Schluessel dieser Fassung - eine aeltere Sicherung kennt sie nicht, sie
+         * bleiben dann auf Werk (Ventilbefehl aus, keine Zisterne). */
+        if ($fk !== 'gardena_token' && $fk !== 'befehle_mqtt_ein' && !array_key_exists($fk, $daten)
+            && !in_array($fk, array('befehl_ventil_ein', 'befehl_ventil_max_min', 'zisterne_einheit',
+                                    'zisterne_volumen_l', 'zisterne_reserve_prozent'), true)) {
             $fehlend[] = $fk;
         }
     }
@@ -3721,6 +3750,12 @@ function bw_zone_befehlsteil($schluessel)
     return str_replace('-', '_', strtolower((string) $schluessel));
 }
 
+/** 0.9.52: ein Befehlsthema <praefix>/befehl/<name> (pause, rechnen, ventil/<zone>). */
+function bw_befehl_thema($name, $cfg = null)
+{
+    return bw_mqtt_teil(bw_mqtt_praefix($cfg)) . '/befehl/' . (string) $name;
+}
+
 /** Das Befehlsthema der Rueckmeldung einer Zone (fuer Reiter Zonen, Einbindung und die Vorlage). */
 function bw_rueckmeldung_thema($schluessel, $cfg = null)
 {
@@ -3766,7 +3801,11 @@ function bw_mqtt_namen($cfg = null, $zonen = null)
     $neu('deckt', 'MQTT.B_DECKT', '0/1', 'zahl', 'global', '', 'dienst');
     $neu('plan_fest', 'MQTT.B_PLANFEST', '0/1', 'zahl', 'global', '', 'dienst');
     $neu('gekuerzt_min', 'MQTT.B_GEKUERZT', '0 … 1440 min', 'zahl', 'global', '', 'dienst');
-    $neu('sperrgrund', 'MQTT.B_SPERRGRUND', 'sperre_frost / sperre_wind / sperre_regen / -', 'text', 'global', '', 'dienst');
+    $neu('sperrgrund', 'MQTT.B_SPERRGRUND', 'sperre_frost / sperre_wind / sperre_regen / pause / -', 'text', 'global', '', 'dienst');
+    /* 0.9.52: Pause (pause_bis zurueckbehalten, Datum, ohne Pause "-") und Rangfolge des Wasservorrats. */
+    $neu('pausiert', 'MQTT.B_PAUSIERT', '0/1', 'zahl', 'global', '', 'dienst');
+    $neu('ausgelassen', 'MQTT.B_AUSGELASSEN', '0 … 50', 'zahl', 'global', '', 'dienst');
+    $neu('pause_bis', 'MQTT.B_PAUSE_BIS', 'JJJJ-MM-TT / -', 'text', 'global', '', 'dienst');
     foreach ($zonen as $z) {
         if (!is_array($z) || !isset($z['schluessel']) || (string) $z['schluessel'] === '') { continue; }
         $s = (string) $z['schluessel'];
@@ -4036,6 +4075,217 @@ function bw_rueckmeldung_annehmen($teil, $wert, $quelle = 'mqtt')
     return array(true, '');
 }
 
+/* ------------------------------------------------------------------
+ * 0.9.52: Befehle Pause, sofort rechnen, Ventil oeffnen - EINE Funktion je
+ * Befehl fuer die Befehlsbruecke (bin/befehle_zuordnung.php) und die
+ * Oberflaeche. Rueckgabe wie bw_rueckmeldung_annehmen(): array(bool, GRUND).
+ * Der Dienst liest die Dateien (bin/bewaesserung_dienst.py: DATEI_PAUSE,
+ * DATEI_RECHNEN_JETZT, ORDNER_HAND).
+ * ------------------------------------------------------------------ */
+
+/** "HH:MM" -> Minuten seit Mitternacht oder null. */
+function bw_hhmm($s)
+{
+    if (!is_string($s) || !preg_match('/^([01][0-9]|2[0-3]):([0-5][0-9])$/', $s, $m)) { return null; }
+    return (int) $m[1] * 60 + (int) $m[2];
+}
+
+/**
+ * Wann endet eine Pause von N Tagen? N Tage sind N Naechte, beginnend mit der laufenden Nacht (wenn das
+ * Giessfenster gerade offen ist) oder der naechsten. Die Pause endet mit dem Ende des Giessfensters der
+ * N-ten Nacht. Ohne brauchbares Fenster: Tag + N um 12:00. mktime() rechnet die Zeitumstellung mit.
+ */
+function bw_pause_ende($tage, $jetzt = null, $cfg = null)
+{
+    if (!is_array($cfg)) { $cfg = bw_config(false); }
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $tage = max(1, (int) $tage);
+    $j = (int) date('Y', $jetzt); $mo = (int) date('n', $jetzt); $d = (int) date('j', $jetzt);
+    $vm = bw_hhmm(isset($cfg['fenster_von']) ? $cfg['fenster_von'] : '');
+    $bm = bw_hhmm(isset($cfg['fenster_bis']) ? $cfg['fenster_bis'] : '');
+    if ($vm === null || $bm === null || $vm === $bm) {
+        return mktime(12, 0, 0, $mo, $d + $tage, $j);
+    }
+    $ueber = $bm > $vm ? 0 : 1;      // Fenster ueber Mitternacht
+    $start = null;
+    foreach (array(-1, 0) as $k) {
+        $b = mktime(intdiv($vm, 60), $vm % 60, 0, $mo, $d + $k, $j);
+        $e = mktime(intdiv($bm, 60), $bm % 60, 0, $mo, $d + $k + $ueber, $j);
+        if ($b <= $jetzt && $jetzt < $e) { $start = $d + $k; }
+    }
+    if ($start === null) {
+        $start = ($jetzt < mktime(intdiv($vm, 60), $vm % 60, 0, $mo, $d, $j)) ? $d : $d + 1;
+    }
+    return mktime(intdiv($bm, 60), $bm % 60, 0, $mo, $start + $tage - 1 + $ueber, $j);
+}
+
+/** Die Pause: array('aktiv' => bool, 'bis_ts' => int, 'bis' => 'JJJJ-MM-TT', 'tage' => int, 'quelle' => ''). */
+function bw_pause_lesen($jetzt = null)
+{
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $d = bw_json_lesen(bw_paths()['datadir'] . '/pause.json');
+    $bis = (is_array($d) && isset($d['bis_ts']) && is_numeric($d['bis_ts'])) ? (int) $d['bis_ts'] : 0;
+    return array('aktiv' => $bis > $jetzt, 'bis_ts' => $bis,
+                 'bis' => $bis > 0 ? date('Y-m-d', $bis) : '',
+                 'tage' => (is_array($d) && isset($d['tage'])) ? (int) $d['tage'] : 0,
+                 'quelle' => (is_array($d) && isset($d['quelle']) && is_string($d['quelle'])) ? $d['quelle'] : '');
+}
+
+/** Pause setzen (N = 1..60 Tage) oder aufheben (N = 0). Ueberlebt den Neustart (pause.json); der Dienst
+ *  rechnet sofort neu (Marke), damit Plan, Status und MQTT gleich stimmen. */
+function bw_pause_setzen($tage, $quelle = 'mqtt', $jetzt = null)
+{
+    if (is_bool($tage) || !is_numeric($tage) || (float) $tage != (int) (float) $tage
+        || (int) $tage < 0 || (int) $tage > 60) {
+        return array(false, 'WERT_UNGUELTIG');
+    }
+    $tage = (int) $tage;
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $q = preg_replace('/[^a-z0-9_]/', '', strtolower((string) $quelle));
+    $bis = $tage > 0 ? bw_pause_ende($tage, $jetzt) : 0;
+    $d = array('bis_ts' => $bis, 'bis' => $bis > 0 ? date('Y-m-d', $bis) : '', 'tage' => $tage,
+               'gesetzt' => $jetzt, 'quelle' => $q);
+    if (!bw_json_schreiben(bw_paths()['datadir'] . '/pause.json', $d, 0664)) {
+        return array(false, 'NICHT_GESPEICHERT');
+    }
+    bw_log($tage > 0
+        ? sprintf('Pause gesetzt (%s): %d Tag(e), bis %s - so lange wird nicht gegossen.', $q, $tage, date('d.m.Y H:i', $bis))
+        : sprintf('Pause aufgehoben (%s) - es wird wieder nach Plan gegossen.', $q));
+    bw_rechnen_marke($q, 'pause');
+    return array(true, '');
+}
+
+/** Die Marke "sofort rechnen" legen (ohne Pruefung). */
+function bw_rechnen_marke($quelle, $anlass)
+{
+    return bw_json_schreiben(bw_paths()['datadir'] . '/rechnen_jetzt.json',
+        array('ts' => time(), 'quelle' => (string) $quelle, 'anlass' => (string) $anlass), 0664);
+}
+
+/** Befehl "jetzt rechnen": nur, wenn der Dienst laeuft - sonst rechnete niemand, und die Quittung log. */
+function bw_rechnen_anstossen($quelle = 'mqtt')
+{
+    if (!bw_dienst_pid()) { return array(false, 'DIENST_STEHT'); }
+    $q = preg_replace('/[^a-z0-9_]/', '', strtolower((string) $quelle));
+    if (!bw_rechnen_marke($q, 'rechnen')) { return array(false, 'NICHT_GESPEICHERT'); }
+    bw_log(sprintf('Befehl jetzt rechnen (%s) - der Dienst rechnet innerhalb einer Sekunde.', $q));
+    return array(true, '');
+}
+
+/** Liter, die eine Zone in so vielen Minuten nimmt (wie giessplan.liter_je_nacht()), oder null. */
+function bw_zone_liter($z, $minuten)
+{
+    $d = isset($z['durchfluss_lmin']) && is_numeric($z['durchfluss_lmin']) ? (float) $z['durchfluss_lmin'] : 0.0;
+    if ($d > 0) { return $d * $minuten; }
+    $r = isset($z['rate_mmh']) && is_numeric($z['rate_mmh']) ? (float) $z['rate_mmh'] : 0.0;
+    $f = isset($z['flaeche']) && is_numeric($z['flaeche']) ? (float) $z['flaeche'] : 0.0;
+    if (!empty($z['rate_gemessen']) && $r > 0 && $f > 0) { return $r * $f * $minuten / 60.0; }
+    return null;
+}
+
+/**
+ * Befehl "Ventil der Zone fuer X Minuten oeffnen" (0 = ein von Hand geoeffnetes Ventil schliessen).
+ * Nur mit dem Haken befehl_ventil_ein, nur fuer GARDENA-Zonen (Entscheidung des Hausherrn 06.11.2026: Zonen
+ * ueber Loxone oeffnet nur Loxone selbst), hoechstens befehl_ventil_max_min Minuten, nicht bei Frost- oder
+ * Sturmsperre und nicht, wenn der Wasservorrat an der Reserve liegt oder nicht reicht. Geschrieben wird ein
+ * Auftrag in ventil_hand/; der Dienst prueft beim Oeffnen noch einmal und protokolliert.
+ */
+function bw_ventil_befehl($teil, $wert, $quelle = 'mqtt')
+{
+    $teil = (string) $teil;
+    $q = preg_replace('/[^a-z0-9_]/', '', strtolower((string) $quelle));
+    $treffer = array();
+    foreach (bw_zonen() as $z) {
+        if (!is_array($z) || !isset($z['schluessel']) || (string) $z['schluessel'] === '') { continue; }
+        if (bw_zone_befehlsteil($z['schluessel']) === $teil) { $treffer[] = $z; }
+    }
+    $ab = function ($g) use ($teil, $wert, $q) {
+        bw_log(sprintf('Ventilbefehl (%s) Zone %s, %s min abgewiesen: %s', $q, $teil, is_scalar($wert) ? (string) $wert : '?', $g));
+        return array(false, $g);
+    };
+    if (!$treffer) { return $ab('ZONE_UNBEKANNT'); }
+    if (count($treffer) > 1) { return $ab('ZONE_MEHRDEUTIG'); }
+    $z = $treffer[0];
+    if (is_bool($wert) || !is_numeric($wert) || (float) $wert != (int) (float) $wert
+        || (int) $wert < 0 || (int) $wert > 180) {
+        return $ab('WERT_UNGUELTIG');
+    }
+    $min = (int) $wert;
+    $cfg = bw_config(false);
+    if (empty($cfg['befehl_ventil_ein'])) { return $ab('VENTILBEFEHL_AUS'); }
+    if (!isset($z['ausgabe']) || $z['ausgabe'] !== 'gardena') { return $ab('ZONE_UEBER_LOXONE'); }
+    if (empty($cfg['gardena_ein'])) { return $ab('GARDENA_AUS'); }
+    $grenze = max(1, min(180, (int) $cfg['befehl_ventil_max_min']));
+    if ($min > $grenze) { return $ab('LAENGER_ALS_' . $grenze . '_MIN'); }
+    if ($min > 0) {
+        $a = bw_abbild();
+        $sp = isset($a['sperre']) && is_array($a['sperre']) ? $a['sperre'] : array();
+        if (!empty($sp['frost'])) { return $ab('FROSTSPERRE'); }
+        if (!empty($sp['wind'])) { return $ab('STURMSPERRE'); }
+        $zi = isset($a['zisterne']) && is_array($a['zisterne']) ? $a['zisterne'] : array();
+        if (!empty($zi['ok'])) {
+            if (!empty($zi['an_reserve'])) { return $ab('WASSERVORRAT_AN_RESERVE'); }
+            $l = bw_zone_liter($z, $min);
+            if ($l !== null && $l > (float) $zi['verfuegbar_l']) { return $ab('WASSERVORRAT_REICHT_NICHT'); }
+        }
+        /* Nachtrag 06.11.2026: nie zwei Ventile zugleich (Druckabfall) - dieselbe Regel wie der Lauf im Dienst. */
+        $lage = bw_ventil_lauf_lage();
+        if ($lage === 'nacht') { return $ab('NACHTLAUF_LAEUFT'); }
+        if ($lage === 'hand') { return $ab('ANDERES_VENTIL_OFFEN'); }
+        if (!bw_dienst_pid()) { return $ab('DIENST_STEHT'); }
+    }
+    $s = (string) $z['schluessel'];
+    $datei = bw_paths()['datadir'] . '/ventil_hand/' . sprintf('%d_%s.json', time(), bin2hex(random_bytes(4)));
+    if (!bw_json_schreiben($datei, array('zone' => $s, 'minuten' => $min, 'ts' => time(), 'quelle' => $q), 0664)) {
+        return $ab('NICHT_GESPEICHERT');
+    }
+    bw_log(sprintf('Ventilbefehl (%s) Zone %s: %s - an den Dienst uebergeben.', $q, $s,
+        $min > 0 ? $min . ' min oeffnen' : 'schliessen'));
+    return array(true, '');
+}
+
+/**
+ * Nachtrag 0.9.52: was die GARDENA-Ventile gerade tun, aus ventil_lauf.json (schreibt der Dienst) - wie
+ * nachtlauf_laeuft() und handlauf_aktiv() in bin/ventil.py. Rueckgabe 'nacht' (Nachtlauf laeuft), 'hand' (ein
+ * Ventil ist von Hand offen oder eingeplant) oder '' (frei).
+ */
+function bw_ventil_lauf_lage($jetzt = null)
+{
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $d = bw_json_lesen(bw_paths()['datadir'] . '/ventil_lauf.json');
+    $sch = (is_array($d) && isset($d['schritte']) && is_array($d['schritte'])) ? $d['schritte'] : array();
+    $nacht = array(); $hand = false;
+    foreach ($sch as $s) {
+        if (!is_array($s)) { continue; }
+        $stand = isset($s['stand']) ? (string) $s['stand'] : '';
+        if (!empty($s['hand'])) {
+            if ($stand === 'offen' || $stand === 'geplant') { $hand = true; }
+            continue;
+        }
+        if (empty($s['alt'])) { $nacht[] = $s; }
+    }
+    $beginn = null; $aus = false;
+    foreach ($nacht as $s) {
+        $stand = isset($s['stand']) ? (string) $s['stand'] : '';
+        if ($stand === 'offen') { return 'nacht'; }
+        $b = isset($s['beginn']) ? (float) $s['beginn'] : 0.0;
+        $beginn = $beginn === null ? $b : min($beginn, $b);
+        $fe = isset($s['fenster_ende']) ? (float) $s['fenster_ende'] : (isset($s['ende']) ? (float) $s['ende'] : 0.0);
+        if ($stand === 'geplant' && $jetzt < $fe) { $aus = true; }
+    }
+    if ($aus && $beginn !== null && $beginn <= $jetzt) { return 'nacht'; }
+    return $hand ? 'hand' : '';
+}
+
+/** 0.9.52: die Wichtigkeit einer Zone (wie giessplan.wichtigkeit()): eigene 1..3, sonst aus der Bepflanzung. */
+function bw_wichtigkeit_auto($bep)
+{
+    $t = array('gemuese_klein' => 1, 'moehren' => 1, 'kohl' => 1, 'tomate' => 1, 'erdbeere' => 1, 'topf_kuebel' => 1,
+               'beerenstraucher' => 2, 'hecke_gehoelz' => 2, 'staudenbeet' => 2,
+               'rasen_kuehl' => 3, 'rasen_warm' => 3, 'rasen_sparsam' => 3);
+    return isset($t[(string) $bep]) ? $t[(string) $bep] : 2;
+}
+
 /** Die Rueckmeldungen ueber die Bruecke (data/plugins/<ordner>/rueckmeldung.json): {schluessel: {wert, ts}}. */
 function bw_rueckmeldung_lesen()
 {
@@ -4131,6 +4381,20 @@ function bw_vorlage_befehle()
             'publish ' . bw_rueckmeldung_thema($s, $cfg) . ' <v.0>', '', true);
     }
     if (!$z) { return null; }
+    /* 0.9.52: Pause, sofort rechnen und - nur fuer GARDENA-Zonen - Ventil oeffnen. */
+    $z[] = bb_vorlage_befehl("Bew\u{e4}sserung Pause Tage (MQTT)", bw_kommentar_kurz(bw_t('BEFEHL.VQ_PAUSE')),
+        'publish ' . bw_befehl_thema('pause', $cfg) . ' <v.0>', '', true);
+    $z[] = bb_vorlage_befehl("Bew\u{e4}sserung jetzt rechnen (MQTT)", bw_kommentar_kurz(bw_t('BEFEHL.VQ_RECHNEN')),
+        'publish ' . bw_befehl_thema('rechnen', $cfg) . ' 1', '', false);
+    foreach (bw_zonen() as $zone) {
+        if (!is_array($zone) || !isset($zone['schluessel']) || (string) $zone['schluessel'] === ''
+            || !isset($zone['ausgabe']) || $zone['ausgabe'] !== 'gardena') { continue; }
+        $s = (string) $zone['schluessel'];
+        $name = (isset($zone['name']) && trim((string) $zone['name']) !== '') ? trim((string) $zone['name']) : $s;
+        $z[] = bb_vorlage_befehl("Bew\u{e4}sserung " . $name . " Ventil Minuten (MQTT)",
+            bw_kommentar_kurz(sprintf(bw_t('BEFEHL.VQ_VENTIL'), $s)),
+            'publish ' . bw_befehl_thema('ventil/' . bw_zone_befehlsteil($s), $cfg) . ' <v.0>', '', true);
+    }
     $h = bw_host();
     if (substr_count($h, ':') === 1) { $h = substr($h, 0, strpos($h, ':')); }
     $bp = bb_pfade();

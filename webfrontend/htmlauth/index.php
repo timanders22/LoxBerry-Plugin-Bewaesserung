@@ -320,7 +320,8 @@ if ($bw_post && isset($_POST['speichern'])) {
     $bw_merke('rechenzeit');
 
     foreach (array('zonendauer_max_s', 'hoechstalter',
-                   'melden_limit_tage', 'melden_station_tage') as $bw_f) {
+                   'melden_limit_tage', 'melden_station_tage',
+                   'zisterne_volumen_l', 'zisterne_reserve_prozent') as $bw_f) {
         $bw_g = $bw_gr[$bw_f];
         $bw_w = $bw_sauber($bw_f);
         if (!preg_match('/^[0-9]+$/', $bw_w)) {
@@ -427,6 +428,14 @@ if ($bw_post && isset($_POST['speichern'])) {
         $bw_fehler[] = bw_t('EINST.FEHLER_GARDENA_OHNE_TOKEN');
     }
     $bw_merke('gardena_token');
+    /* 0.9.52: Einheit des Wasservorrats - roh geprueft, nichts still zurechtgebogen. */
+    $bw_ze = (isset($_POST['zisterne_einheit']) && is_string($_POST['zisterne_einheit'])) ? $_POST['zisterne_einheit'] : 'prozent';
+    if (!bw_wert_pruefen('zisterne_einheit', $bw_ze)) {
+        $bw_fehler[] = bw_t('EINST.FEHLER_ZISTERNE_EINHEIT');
+    } else {
+        $bw_cfg['zisterne_einheit'] = $bw_ze;
+    }
+    $bw_merke('zisterne_einheit');
     /* Nr. 36 b (Stufe 2): die Sprachausgabe. Die Anlass-Haken stehen im selben Formular;
      * den Block liest der Baustein des Moduls. Jede Beanstandung verhindert das Speichern
      * (Nr. 16); kein Sprechtoken steht in einer Meldung, ein leeres Tokenfeld heisst
@@ -470,6 +479,19 @@ if ($bw_post && isset($_POST['save_mqtt'])) {
     $bw_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
     /* Gruppe 2 / MQTT (0.9.44): der Haken der Befehlsbruecke wohnt in diesem Formular (Entwurf gemeinsam 2.11). */
     $bw_mcfg['befehle_mqtt_ein'] = isset($_POST['befehle_mqtt_ein']) ? 1 : 0;
+    /* 0.9.52: zweiter Haken "Ventil aus Loxone/MQTT oeffnen erlauben" (ab Werk aus) und Hoechstdauer je Befehl. */
+    $bw_mcfg['befehl_ventil_ein'] = isset($_POST['befehl_ventil_ein']) ? 1 : 0;
+    $bw_vm = (isset($_POST['befehl_ventil_max_min']) && is_string($_POST['befehl_ventil_max_min']))
+        ? trim($_POST['befehl_ventil_max_min']) : '';
+    if (!preg_match('/^[0-9]{1,3}$/', $bw_vm) || !bw_wert_pruefen('befehl_ventil_max_min', $bw_vm)) {
+        $bw_gv2 = bw_grenzen();
+        $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_BEREICH'), bw_t('MQTT.L_VENTIL_MAX'),
+                               $bw_gv2['befehl_ventil_max_min'][0], $bw_gv2['befehl_ventil_max_min'][1]);
+        $bw_eingaben_form = 'mqtt';
+        $bw_beanstandet[] = 'befehl_ventil_max_min';
+    } else {
+        $bw_mcfg['befehl_ventil_max_min'] = (int) $bw_vm;
+    }
     $bw_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
         (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
     if ($bw_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $bw_mtopic)) {
@@ -500,6 +522,29 @@ if ($bw_post && isset($_POST['save_mqtt'])) {
         }
     }
     $bw_tab = 'tab-mqtt';
+}
+
+/* ---------------- Pause (0.9.52) ----------------
+ * Dieselbe Funktion wie der Befehl "pause" ueber MQTT (bw_pause_setzen()). */
+if ($bw_post && (isset($_POST['pause_setzen']) || isset($_POST['pause_aufheben']))) {
+    $bw_pt = isset($_POST['pause_aufheben']) ? '0'
+        : trim((string) (isset($_POST['pause_tage']) && is_string($_POST['pause_tage']) ? $_POST['pause_tage'] : ''));
+    if (!preg_match('/^[0-9]{1,2}$/', $bw_pt) || ((int) $bw_pt < 1 && !isset($_POST['pause_aufheben']))) {
+        $bw_fehler[] = bw_t('PAUSE.FEHLER_TAGE');
+        $bw_eingaben_form = 'pause';
+        $bw_beanstandet[] = 'pause_tage';
+    } else {
+        list($bw_pok, $bw_pgr) = bw_pause_setzen((int) $bw_pt, 'oberflaeche');
+        if ($bw_pok) {
+            $bw_pl = bw_pause_lesen();
+            $bw_meldungen[] = $bw_pl['aktiv'] ? bw_e(sprintf(bw_t('PAUSE.M_GESETZT'), date('d.m.Y H:i', $bw_pl['bis_ts'])))
+                                              : bw_e(bw_t('PAUSE.M_AUFGEHOBEN'));
+            if (!bw_dienst_pid()) { $bw_meldungen[] = bw_e(bw_t('PAUSE.M_DIENST_STEHT')); }
+        } else {
+            $bw_fehler[] = bw_e(sprintf(bw_t('PAUSE.FEHLER'), $bw_pgr));
+        }
+    }
+    $bw_tab = 'tab-settings';
 }
 
 /* ---------------- Dienst ---------------- */
@@ -998,6 +1043,23 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
             $bw_beanstandet[] = 'z_gardena_ventil[' . $bw_i . ']';
             continue;
         }
+        /* 0.9.52: Wichtigkeit (0 = automatisch) und Durchfluss (leer = nicht gemessen), roh geprueft. */
+        $bw_wi = (isset($_POST['z_wichtigkeit'][$bw_i]) && is_string($_POST['z_wichtigkeit'][$bw_i]))
+            ? $_POST['z_wichtigkeit'][$bw_i] : '0';
+        if (!in_array($bw_wi, array('0', '1', '2', '3'), true)) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_WICHTIGKEIT'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_wichtigkeit[' . $bw_i . ']';
+            continue;
+        }
+        $bw_df = str_replace(',', '.', trim((string) (isset($_POST['z_durchfluss'][$bw_i]) && is_string($_POST['z_durchfluss'][$bw_i])
+            ? $_POST['z_durchfluss'][$bw_i] : '')));
+        if ($bw_df !== '' && (!preg_match('/^[0-9]{1,4}(\.[0-9]{1,2})?$/', $bw_df) || !bw_zonen_zahl_taugt('durchfluss_lmin', $bw_df))) {
+            $bw_fehler[] = sprintf(bw_t('ZONE.FEHLER_DURCHFLUSS'), bw_e($bw_name));
+            $bw_eingaben_form = 'zonen';
+            $bw_beanstandet[] = 'z_durchfluss[' . $bw_i . ']';
+            continue;
+        }
         $bw_regner = preg_replace('/[^a-z_]/', '', strtolower($bw_hol('z_regner')));
         // Regnertyp: nur ein STARTWERT, und nur wenn noch keine Rate dasteht.
         // Er ueberschreibt niemals eine Becherprobe - der Katalogwert weicht
@@ -1057,6 +1119,9 @@ if ($bw_post && isset($_POST['zonen_speichern'])) {
          * steht in zonen.json wie bisher. */
         if ($bw_aus === 'gardena') { $bw_neu[count($bw_neu) - 1]['ausgabe'] = 'gardena'; }
         if ($bw_gv !== '') { $bw_neu[count($bw_neu) - 1]['gardena_ventil'] = $bw_gv; }
+        /* 0.9.52: nur, was vom Werk abweicht - eine Zone ohne Angabe steht in zonen.json wie bisher. */
+        if ((int) $bw_wi > 0) { $bw_neu[count($bw_neu) - 1]['wichtigkeit'] = (int) $bw_wi; }
+        if ($bw_df !== '' && (float) $bw_df > 0) { $bw_neu[count($bw_neu) - 1]['durchfluss_lmin'] = (float) $bw_df; }
     }
     if (!$bw_fehler) {
         if ($bw_geloescht) {
@@ -1482,6 +1547,26 @@ if ($bw_rahmen) {
                  (int) $bw_plan['noetige_durchlaeufe']) . ')</span>';
         }
     } else { echo bw_e(bw_t('ALLG.KEIN_PLAN')); } ?></td></tr>
+<?php /* 0.9.52: Pause und Wasservorrat - nur, wenn es sie gibt. */
+      $bw_pz = bw_pause_lesen();
+      if ($bw_pz['aktiv']) { ?>
+<tr><td><?= bw_e(bw_t('PAUSE.ZEILE')) ?></td>
+    <td class="sm-aus"><?= bw_e(sprintf(bw_t('PAUSE.BIS'), date('d.m.Y H:i', $bw_pz['bis_ts']))) ?></td></tr>
+<?php }
+      $bw_zi = isset($bw_a['zisterne']) && is_array($bw_a['zisterne']) ? $bw_a['zisterne'] : array();
+      if (!empty($bw_zi['eingerichtet'])) {
+          $bw_zr = isset($bw_plan['zisterne']) && is_array($bw_plan['zisterne']) ? $bw_plan['zisterne'] : array(); ?>
+<tr><td><?= bw_e(bw_t('ZISTERNE.ZEILE')) ?></td>
+    <td><?php if (!empty($bw_zi['ok'])) {
+        echo bw_e(sprintf(bw_t('ZISTERNE.STAND'), (int) $bw_zi['vorrat_l'], number_format((float) $bw_zi['prozent'], 0, ',', '.'),
+                          (int) $bw_zi['reserve_l']));
+        if (!empty($bw_zr['ausgelassen'])) {
+            echo ' <span class="sm-aus">' . bw_e(sprintf(bw_t('ZISTERNE.AUSGELASSEN'), implode(', ', $bw_zr['ausgelassen']))) . '</span>';
+        }
+    } else {
+        echo '<span class="sm-aus">' . bw_e(bw_t('ZISTERNE.KEIN_WERT')) . ' (' . bw_e((string) (isset($bw_zi['grund']) ? $bw_zi['grund'] : '')) . ')</span>';
+    } ?></td></tr>
+<?php } ?>
 <tr><td><?= bw_e(bw_t('ALLG.ZONEN')) ?></td><td><?= count($bw_zonen) ?></td></tr>
 <tr><td><?= bw_e(bw_t('ALLG.GERECHNET')) ?></td>
     <?php /* O13 (Durchgang 30.09.2026): gruen nur bis 3 x max(600, takt)
@@ -1522,6 +1607,26 @@ if ($bw_rahmen) {
   <button data-role="none" class="sm-b sm-b-lesen" name="dienst" value="start"><?= bw_e(bw_t('EINST.K_START')) ?></button>
   <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="restart"><?= bw_e(bw_t('EINST.K_NEUSTART')) ?></button>
   <button data-role="none" class="sm-b sm-b-aktion" name="dienst" value="stop"><?= bw_e(bw_t('EINST.K_STOP')) ?></button>
+</form>
+
+<?php /* 0.9.52: Pause - dieselbe Funktion wie der Befehl "pause" aus Loxone/MQTT. */
+      $bw_pf2 = bw_pause_lesen(); ?>
+<h2><?= bw_e(bw_t('PAUSE.H_TITEL')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('PAUSE.ERKLAERUNG') ?></p>
+<?php if ($bw_pf2['aktiv']) { ?>
+<div class="sm-warnung"><?= bw_e(sprintf(bw_t('PAUSE.AKTIV'), date('d.m.Y H:i', $bw_pf2['bis_ts']), $bw_pf2['quelle'] !== '' ? $bw_pf2['quelle'] : '-')) ?></div>
+<?php } ?>
+<form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+  <div class="sm-feld">
+    <label for="pause_tage"><?= bw_e(bw_t('PAUSE.L_TAGE')) ?></label>
+    <input data-role="none" type="text" name="pause_tage" id="pause_tage" size="4" value="<?= bw_e(bw_eingabe('pause', 'pause_tage', '')) ?>" placeholder="3"<?= bw_markierung('pause_tage') ?>>
+  </div>
+  <button data-role="none" class="sm-b sm-b-aktion" name="pause_setzen" value="1"><?= bw_e(bw_t('PAUSE.K_SETZEN')) ?></button>
+  <?php if ($bw_pf2['aktiv']) { ?>
+  <button data-role="none" class="sm-b sm-b-aktion" name="pause_aufheben" value="1"><?= bw_e(bw_t('PAUSE.K_AUFHEBEN')) ?></button>
+  <?php } ?>
 </form>
 
 <form action="index.php" method="post">
@@ -1660,6 +1765,29 @@ if ($bw_rahmen) {
   <label for="gardena_max_min"><?= bw_t('EINST.L_GARDENA_MAX_MIN') ?></label>
   <input data-role="none" type="text" name="gardena_max_min" id="gardena_max_min" value="<?= bw_e(bw_eingabe('settings', 'gardena_max_min', $bw_cfg['gardena_max_min'])) ?>"<?= bw_markierung('gardena_max_min') ?>>
   <p class="sm-hilfe"><?= bw_t('EINST.H_GARDENA_MAX_MIN') ?></p>
+</div>
+
+<?php /* 0.9.52: Wasservorrat (Zisterne/Tank) fuer die Rangfolge der Zonen. Ohne Quelle "zisterne"
+         (Reiter Quellen) wirkt nichts davon. */ ?>
+<h2><?= bw_e(bw_t('ZISTERNE.H_TITEL')) ?></h2>
+<p class="sm-hilfe"><?= bw_t('ZISTERNE.ERKLAERUNG') ?></p>
+<div class="sm-feld">
+  <label for="zisterne_einheit"><?= bw_e(bw_t('EINST.L_ZISTERNE_EINHEIT')) ?></label>
+  <select data-role="none" name="zisterne_einheit" id="zisterne_einheit"<?= bw_markierung('zisterne_einheit') ?>>
+    <?php foreach (array('prozent' => bw_t('ZISTERNE.EINHEIT_PROZENT'), 'liter' => bw_t('ZISTERNE.EINHEIT_LITER')) as $bw_zek => $bw_zev) { ?>
+    <option value="<?= bw_e($bw_zek) ?>"<?= bw_eingabe('settings', 'zisterne_einheit', $bw_cfg['zisterne_einheit']) === $bw_zek ? ' selected' : '' ?>><?= bw_e($bw_zev) ?></option>
+    <?php } ?>
+  </select>
+</div>
+<div class="sm-feld">
+  <label for="zisterne_volumen_l"><?= bw_e(bw_t('EINST.L_ZISTERNE_VOLUMEN_L')) ?></label>
+  <input data-role="none" type="text" name="zisterne_volumen_l" id="zisterne_volumen_l" value="<?= bw_e(bw_eingabe('settings', 'zisterne_volumen_l', $bw_cfg['zisterne_volumen_l'])) ?>"<?= bw_markierung('zisterne_volumen_l') ?>>
+  <p class="sm-hilfe"><?= bw_t('ZISTERNE.H_VOLUMEN') ?></p>
+</div>
+<div class="sm-feld">
+  <label for="zisterne_reserve_prozent"><?= bw_e(bw_t('EINST.L_ZISTERNE_RESERVE_PROZENT')) ?></label>
+  <input data-role="none" type="text" name="zisterne_reserve_prozent" id="zisterne_reserve_prozent" value="<?= bw_e(bw_eingabe('settings', 'zisterne_reserve_prozent', $bw_cfg['zisterne_reserve_prozent'])) ?>"<?= bw_markierung('zisterne_reserve_prozent') ?>>
+  <p class="sm-hilfe"><?= bw_t('ZISTERNE.H_RESERVE') ?></p>
 </div>
 
 <?php /* Nr. 36 b (Stufe 2): Sprachausgabe ueber die gemeinsame Sprachausgabe. Die Ausgabe
@@ -2192,6 +2320,32 @@ if (!empty($bw_roh['mqtt']) && is_array($bw_roh['mqtt'])) { ?>
 </table>
 </div>
 <p class="sm-hilfe"><?= bw_t('ZONE.AUSGABE_FUSSNOTE') ?></p>
+
+<?php /* 0.9.52: Rangfolge bei knappem Wasservorrat. */ ?>
+<h3><?= bw_e(bw_t('ZONE.H_VORRAT')) ?></h3>
+<p class="sm-hilfe"><?= bw_t('ZONE.VORRAT_ERKLAERUNG') ?></p>
+<div class="sm-breit">
+<table class="sm-tabelle">
+<tr><th><?= bw_e(bw_t('ZONE.T_NAME')) ?></th><th><?= bw_e(bw_t('ZONE.T_WICHTIGKEIT')) ?></th>
+    <th><?= bw_e(bw_t('ZONE.T_DURCHFLUSS')) ?></th></tr>
+<?php for ($bw_j = 0; $bw_j < $bw_zeilen_n; $bw_j++) {
+    $bw_z = isset($bw_zonen[$bw_j]) ? $bw_zonen[$bw_j] : array();
+    $bw_wauto = bw_wichtigkeit_auto(isset($bw_z['bepflanzung']) ? $bw_z['bepflanzung'] : ''); ?>
+<tr>
+  <td class="sm-hilfe"><?= !empty($bw_z['name']) ? bw_e($bw_z['name']) : '&mdash;' ?></td>
+  <td><select data-role="none" name="z_wichtigkeit[<?= $bw_j ?>]"<?= bw_markierung('z_wichtigkeit[' . $bw_j . ']') ?>>
+      <?php foreach (array('0' => sprintf(bw_t('ZONE.WICHTIG_AUTO'), $bw_wauto), '1' => bw_t('ZONE.WICHTIG_1'),
+                           '2' => bw_t('ZONE.WICHTIG_2'), '3' => bw_t('ZONE.WICHTIG_3')) as $bw_wk => $bw_wv) { ?>
+      <option value="<?= bw_e($bw_wk) ?>"<?= (string) bw_eingabe('zonen', 'z_wichtigkeit[' . $bw_j . ']', isset($bw_z['wichtigkeit']) ? (string) (int) $bw_z['wichtigkeit'] : '0') === (string) $bw_wk ? ' selected' : '' ?>><?= bw_e($bw_wv) ?></option>
+      <?php } ?></select></td>
+  <td><input data-role="none" type="text" name="z_durchfluss[<?= $bw_j ?>]" size="6"
+             value="<?= bw_e(bw_eingabe('zonen', 'z_durchfluss[' . $bw_j . ']', !empty($bw_z['durchfluss_lmin']) ? str_replace('.', ',', (string) $bw_z['durchfluss_lmin']) : '')) ?>"
+             placeholder="<?= bw_e(bw_t('ZONE.P_DURCHFLUSS')) ?>"<?= bw_markierung('z_durchfluss[' . $bw_j . ']') ?>></td>
+</tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= bw_t('ZONE.VORRAT_FUSSNOTE') ?></p>
 <button data-role="none" class="sm-b sm-b-aktion" name="zonen_speichern" value="1"><?= bw_e(bw_t('ALLG.SPEICHERN')) ?></button>
 </form>
 
@@ -2295,6 +2449,15 @@ $bw_or = isset($bw_plan['ohne_rate']) && is_array($bw_plan['ohne_rate'])
 if ($bw_or) { ?>
 <div class="sm-fehler"><?= sprintf(bw_t('ZONE.OHNE_RATE'), bw_e(implode(', ', $bw_or))) ?></div>
 <?php }
+/* 0.9.52: Rangfolge des Wasservorrats - wer heute Nacht aussetzt, und fuer wen die Menge unbekannt ist. */
+$bw_zr2 = isset($bw_plan['zisterne']) && is_array($bw_plan['zisterne']) ? $bw_plan['zisterne'] : array();
+if (!empty($bw_zr2['ausgelassen'])) { ?>
+<div class="sm-warnung"><?= bw_e(sprintf(bw_t('ZONE.ZISTERNE_AUSGELASSEN'), implode(', ', $bw_zr2['ausgelassen']),
+    (int) $bw_zr2['verfuegbar_l'], (int) $bw_zr2['bedarf_l'])) ?></div>
+<?php }
+if (!empty($bw_zr2['ohne_menge'])) { ?>
+<div class="sm-warnung"><?= bw_e(sprintf(bw_t('ZONE.ZISTERNE_OHNE_MENGE'), implode(', ', $bw_zr2['ohne_menge']))) ?></div>
+<?php }
 $bw_gd = isset($bw_plan['ventilzeit_gedeckelt']) && is_array($bw_plan['ventilzeit_gedeckelt'])
     ? $bw_plan['ventilzeit_gedeckelt'] : array();
 if ($bw_gd) { ?>
@@ -2393,6 +2556,15 @@ if (!$bw_vt) { ?>
 <label><input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1"<?= bw_eingabe_an('mqtt', 'befehle_mqtt_ein', !empty($bw_cfg['befehle_mqtt_ein'])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('MQTT.L_BEFEHLE_EIN')) ?></label>
 <p class="sm-hilfe"><?= bw_e(bw_t('MQTT.BEFEHLE_H')) ?></p>
+<?php /* 0.9.52: zweiter Haken der Befehlsbruecke - nur fuer den Befehl "Ventil oeffnen", ab Werk aus. */ ?>
+<label><input data-role="none" type="checkbox" name="befehl_ventil_ein" value="1"<?= bw_eingabe_an('mqtt', 'befehl_ventil_ein', !empty($bw_cfg['befehl_ventil_ein'])) ? ' checked' : '' ?>>
+  <?= bw_e(bw_t('MQTT.L_VENTIL_EIN')) ?></label>
+<p class="sm-hilfe"><?= bw_e(bw_t('MQTT.VENTIL_H')) ?></p>
+<div class="sm-feld">
+  <label for="befehl_ventil_max_min"><?= bw_e(bw_t('MQTT.L_VENTIL_MAX')) ?></label>
+  <input data-role="none" type="text" name="befehl_ventil_max_min" id="befehl_ventil_max_min" size="4" value="<?= bw_e(bw_eingabe('mqtt', 'befehl_ventil_max_min', $bw_cfg['befehl_ventil_max_min'])) ?>"<?= bw_markierung('befehl_ventil_max_min') ?>>
+  <p class="sm-hilfe"><?= bw_e(bw_t('MQTT.VENTIL_MAX_H')) ?></p>
+</div>
 <?php /* Schreibweise wie im uebrigen Plugin: die Knopf-Grundklasse dieser
          Linie ist die kurze Form, und die Legendenpunkte bekommen ihre
          Groesse aus '.sm-legende span' und ihre Farbe unmittelbar aus dem
@@ -2453,7 +2625,10 @@ foreach (array('status/ok' => 'MQTT.B_STATUS_OK', 'status/zaehler' => 'MQTT.B_ST
                      'zaehler' => 'MQTT.B_ZAEHLER',
                      'gesperrt' => 'MQTT.B_GESPERRT', 'sperrgrund' => 'MQTT.B_SPERRGRUND',
                      'plan_fest' => 'MQTT.B_PLANFEST',
-                     'gekuerzt_min' => 'MQTT.B_GEKUERZT') as $bw_k => $bw_v) { ?>
+                     'gekuerzt_min' => 'MQTT.B_GEKUERZT',
+                     /* 0.9.52 */
+                     'pausiert' => 'MQTT.B_PAUSIERT', 'pause_bis' => 'MQTT.B_PAUSE_BIS',
+                     'ausgelassen' => 'MQTT.B_AUSGELASSEN') as $bw_k => $bw_v) { ?>
 <tr><td class="sm-mono"><?= bw_e($bw_cfg['mqtt_topic'] . '/' . $bw_k) ?></td><td><?= bw_t($bw_v) ?><?= in_array($bw_k, $bw_bestand, true) ? $bw_bestand_t : '' ?></td>
     <td><?= in_array($bw_k, $bw_ret, true) ? bw_e(bw_t('MQTT.RETAIN_JA')) : '<span class="sm-hilfe">' . bw_e(bw_t('MQTT.RETAIN_NEIN')) . '</span>' ?></td></tr>
 <?php } ?>
@@ -2617,6 +2792,29 @@ list($bw_eb_bl, $bw_eb_bl_fehl) = bw_bruecke_liste(); ?>
 </table></div>
 <p class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.ZONEN_H')) ?></p>
 <?php } ?>
+<?php /* 0.9.52: Pause, jetzt rechnen, Ventil oeffnen - je Befehl eine Zeile mit Erklaerung und Beispiel. */
+      $bw_gz = array();
+      foreach ($bw_zonen as $bw_bz4) {
+          if (is_array($bw_bz4) && isset($bw_bz4['ausgabe']) && $bw_bz4['ausgabe'] === 'gardena' && !empty($bw_bz4['schluessel'])) { $bw_gz[] = $bw_bz4; }
+      } ?>
+<h4><?= bw_e(bw_t('BEFEHL.NEU_TITEL')) ?></h4>
+<div class="sm-breit"><table class="sm-tabelle" id="eb-befehle-neu">
+<tr><th><?= bw_e(bw_t('BEFEHL.SP_WAS')) ?></th><th><?= bw_e(bw_t('BEFEHL.SP_THEMA')) ?></th><th><?= bw_e(bw_t('BEFEHL.SP_WERT')) ?></th><th><?= bw_e(bw_t('BEFEHL.SP_BEISPIEL')) ?></th></tr>
+<tr><td><?= bw_e(bw_t('BEFEHL.PAUSE_WAS')) ?></td><td class="sm-mono"><?= bw_e(bw_befehl_thema('pause', $bw_cfg)) ?></td>
+    <td class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.PAUSE_WERT')) ?></td>
+    <td class="sm-mono"><?= bw_e('publish ' . bw_befehl_thema('pause', $bw_cfg) . ' 3') ?><div class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.PAUSE_BSP')) ?></div></td></tr>
+<tr><td><?= bw_e(bw_t('BEFEHL.RECHNEN_WAS')) ?></td><td class="sm-mono"><?= bw_e(bw_befehl_thema('rechnen', $bw_cfg)) ?></td>
+    <td class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.RECHNEN_WERT')) ?></td>
+    <td class="sm-mono"><?= bw_e('publish ' . bw_befehl_thema('rechnen', $bw_cfg) . ' 1') ?><div class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.RECHNEN_BSP')) ?></div></td></tr>
+<?php $bw_vbz = $bw_gz ? $bw_gz[0]['schluessel'] : 'beet'; ?>
+<tr><td><?= bw_e(bw_t('BEFEHL.VENTIL_WAS')) ?></td><td class="sm-mono"><?= bw_e(bw_befehl_thema('ventil/<zone>', $bw_cfg)) ?></td>
+    <td class="sm-hilfe"><?= bw_e(sprintf(bw_t('BEFEHL.VENTIL_WERT'), (int) $bw_cfg['befehl_ventil_max_min'])) ?></td>
+    <td class="sm-mono"><?= bw_e('publish ' . bw_befehl_thema('ventil/' . bw_zone_befehlsteil($bw_vbz), $bw_cfg) . ' 10') ?><div class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.VENTIL_BSP')) ?></div></td></tr>
+</table></div>
+<div class="<?= !empty($bw_cfg['befehl_ventil_ein']) ? 'sm-hinweis' : 'sm-warnung' ?>" id="eb-ventil-haken"><?= bw_e(bw_t(!empty($bw_cfg['befehl_ventil_ein']) ? 'BEFEHL.VENTIL_HAKEN_AN' : 'BEFEHL.VENTIL_HAKEN_AUS')) ?></div>
+<p class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.VENTIL_NUR_GARDENA')) ?><?php if ($bw_gz) { echo ' ' . bw_e(sprintf(bw_t('BEFEHL.VENTIL_ZONEN'), implode(', ', array_map(function ($x) { return bw_befehl_thema('ventil/' . bw_zone_befehlsteil($x['schluessel'])); }, $bw_gz)))); } ?></p>
+<p class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.VENTIL_NIE_ZUGLEICH')) ?></p>
+<p class="sm-hilfe"><?= bw_e(bw_t('BEFEHL.ABGEWIESEN_H')) ?></p>
 <p class="sm-hilfe"><?= sprintf(bw_t('BEFEHL.QUITTUNG_H'), bw_e($bw_eb_bl['lebenszeichen'])) ?></p>
 <?php if ($bw_zonen) { ?>
 <form action="index.php" method="post" style="display:inline">

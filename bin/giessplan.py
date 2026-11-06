@@ -750,6 +750,185 @@ def sperren_pruefen(nacht: dict | None, cfg: dict,
 
 
 # --------------------------------------------------------------------------
+# 0.9.52: Pause (Befehl aus Loxone/MQTT) und Rangfolge bei knappem Wasservorrat
+# --------------------------------------------------------------------------
+
+def pause_einrechnen(sperre: dict | None, pause: dict | None, jetzt: float) -> dict:
+    """Eine Pause wirkt wie eine Sperre - nur mit Enddatum.
+
+    'pause' ist der Inhalt von data/.../pause.json (geschrieben von der
+    Befehlsbruecke oder der Oberflaeche): bis_ts (Unix-Zeit, bis zu der nicht
+    gegossen wird) und bis (Datum fuer die Anzeige). Eine abgelaufene oder
+    fehlende Pause aendert nichts - die Pause endet von selbst.
+
+    Eine Wettersperre behaelt ihren Grund (Frost ist Sachschaden); die Pause
+    steht dann nur daneben ('pause' = 1). Ohne Wettersperre lautet der Grund
+    'pause', und alles, was eine Sperre beachtet (Sendeweg, Nachtplan,
+    GARDENA-Lauf), beachtet damit auch die Pause.
+    """
+    aus = dict(sperre or {})
+    aus.setdefault("aktiv", 0)
+    aus.setdefault("grund", "")
+    aus["pause"] = 0
+    aus["pause_bis"] = ""
+    aus["pause_bis_ts"] = 0
+    try:
+        bis = int(float((pause or {}).get("bis_ts") or 0))
+    except (TypeError, ValueError):
+        bis = 0
+    if bis > jetzt:
+        aus["pause"] = 1
+        aus["pause_bis_ts"] = bis
+        aus["pause_bis"] = str((pause or {}).get("bis") or "")[:16]
+        if not int(aus.get("aktiv") or 0):
+            grund = "pause"
+            aus["aktiv"] = 1
+            aus["grund"] = grund
+    return aus
+
+
+# Wichtigkeit je Bepflanzung, wenn die Zone keine eigene traegt: 1 = zuerst,
+# 3 = zuletzt. Gemuese, Kuebel und Erdbeeren vertrocknen in einer Nacht,
+# Rasen erholt sich nach einer braunen Woche.
+WICHTIGKEIT_BEPFLANZUNG = {
+    "gemuese_klein": 1, "moehren": 1, "kohl": 1, "tomate": 1, "erdbeere": 1,
+    "topf_kuebel": 1,
+    "beerenstraucher": 2, "hecke_gehoelz": 2, "staudenbeet": 2,
+    "rasen_kuehl": 3, "rasen_warm": 3, "rasen_sparsam": 3,
+}
+WICHTIGKEIT_VORGABE = 2
+
+
+def _zahl_oder_null(w) -> float:
+    try:
+        z = float(w)
+    except (TypeError, ValueError):
+        return 0.0
+    return z if z == z and z not in (float("inf"), float("-inf")) else 0.0
+
+
+def wichtigkeit(zone: dict) -> int:
+    """1, 2 oder 3. Leer oder 0 heisst 'automatisch aus der Bepflanzung'."""
+    w = int(_zahl_oder_null(zone.get("wichtigkeit")))
+    if 1 <= w <= 3:
+        return w
+    return WICHTIGKEIT_BEPFLANZUNG.get(str(zone.get("bepflanzung") or ""), WICHTIGKEIT_VORGABE)
+
+
+def liter_je_nacht(zone: dict, sekunden: float, durchlaeufe: int) -> tuple:
+    """Wie viel Wasser nimmt diese Zone heute Nacht aus dem Vorrat?
+
+    Zuerst aus dem Durchfluss (Liter je Minute, an der Wasseruhr gemessen),
+    sonst aus Becherprobe mal Flaeche (1 mm auf 1 m2 = 1 Liter). Eine Rate aus
+    der Regnertabelle zaehlt nicht - geraten wird nichts. Rueckgabe
+    (Liter, 'durchfluss'|'becherprobe') oder (None, '') wenn unbekannt.
+    """
+    if sekunden <= 0 or durchlaeufe <= 0:
+        return 0.0, ""
+    minuten = float(sekunden) * int(durchlaeufe) / 60.0
+    d = _zahl_oder_null(zone.get("durchfluss_lmin"))
+    if d > 0:
+        return minuten * d, "durchfluss"
+    rate = _zahl_oder_null(zone.get("rate_mmh"))
+    flaeche = _zahl_oder_null(zone.get("flaeche"))
+    if int(_zahl_oder_null(zone.get("rate_gemessen"))) and rate > 0 and flaeche > 0:
+        return rate * flaeche * minuten / 60.0, "becherprobe"
+    return None, ""
+
+
+def zisterne_rangfolge(plan: dict, zonen: list, vorrat_l: float, reserve_l: float) -> dict:
+    """Reicht der Vorrat nicht fuer alle geplanten Zonen, gehen die wichtigen vor.
+
+    'plan' ist das Ergebnis von plan_bauen() und wird hier geaendert: eine
+    ausgelassene Zone bekommt sekunden_soll = 0 und durchlaeufe = 0 (der alte
+    Wert bleibt als sekunden_soll_ohne_zisterne stehen). Verbraucht wird
+    hoechstens Vorrat minus Reserve.
+
+    Reihenfolge: Wichtigkeit 1 vor 2 vor 3, bei gleicher Wichtigkeit die
+    Reihenfolge der Zonentabelle. Innerhalb einer Wichtigkeit darf eine
+    kleinere Zone noch nachruecken, wenn eine groessere nicht mehr passte;
+    eine weniger wichtige Zone kommt dann aber nicht mehr dran - sonst bekaeme
+    der Rasen Wasser, das dem Gemuese fehlt.
+
+    Zonen ohne bekannte Menge (kein Durchfluss, keine Becherprobe mit Flaeche)
+    werden nicht mitgezaehlt und laufen wie bisher - ausser der Vorrat liegt
+    schon an oder unter der Reserve: dann gehen ALLE geplanten Zonen aus, denn
+    jede nimmt Wasser.
+    """
+    je = plan.get("je_zone") if isinstance(plan.get("je_zone"), dict) else {}
+    vorrat = max(0.0, _zahl_oder_null(vorrat_l))
+    reserve = max(0.0, _zahl_oder_null(reserve_l))
+    verfuegbar = max(0.0, vorrat - reserve)
+    info = {"aktiv": 1, "vorrat_l": round(vorrat), "reserve_l": round(reserve),
+            "verfuegbar_l": round(verfuegbar), "bedarf_l": 0, "bedient_l": 0,
+            "ausgelassen": [], "ohne_menge": [], "reihenfolge": [], "knapp": 0,
+            "an_reserve": 1 if verfuegbar <= 0 else 0}
+    kand = []
+    for i, z in enumerate(zonen if isinstance(zonen, list) else []):
+        if not isinstance(z, dict):
+            continue
+        s = str(z.get("schluessel") or "")
+        jz = je.get(s) if s else None
+        if not isinstance(jz, dict):
+            continue
+        sek = _zahl_oder_null(jz.get("sekunden_soll"))
+        n = int(_zahl_oder_null(jz.get("durchlaeufe")))
+        if sek <= 0 or n <= 0:
+            continue
+        name = str(z.get("name") or s)
+        liter, wie = liter_je_nacht(z, sek, n)
+        if liter is None:
+            if verfuegbar <= 0:
+                kand.append((0, i, s, name, None, ""))
+            else:
+                info["ohne_menge"].append(name)
+            continue
+        kand.append((wichtigkeit(z), i, s, name, float(liter), wie))
+    kand.sort(key=lambda k: (k[0], k[1]))
+    rest = verfuegbar
+    gesperrt_ab = None          # erste Wichtigkeit, in der eine Zone nicht mehr passte
+    bedarf = 0.0
+    bedient = 0.0
+    for (w, _i, s, name, liter, wie) in kand:
+        if liter is not None:
+            bedarf += liter
+        passt = (liter is not None and liter <= rest + 1e-6
+                 and (gesperrt_ab is None or w <= gesperrt_ab))
+        if passt:
+            rest -= liter
+            bedient += liter
+            info["reihenfolge"].append({"zone": s, "name": name, "wichtigkeit": w,
+                                        "liter": round(liter), "wie": wie, "bedient": 1})
+            continue
+        if gesperrt_ab is None or w < gesperrt_ab:
+            gesperrt_ab = w
+        jz = je[s]
+        jz["sekunden_soll_ohne_zisterne"] = jz.get("sekunden_soll", 0)
+        jz["sekunden_soll"] = 0
+        jz["durchlaeufe"] = 0
+        jz["zisterne_ausgelassen"] = 1
+        info["ausgelassen"].append(name)
+        info["reihenfolge"].append({"zone": s, "name": name, "wichtigkeit": w,
+                                    "liter": round(liter) if liter is not None else None,
+                                    "wie": wie, "bedient": 0})
+    info["bedarf_l"] = round(bedarf)
+    info["bedient_l"] = round(bedient)
+    if info["ausgelassen"]:
+        info["knapp"] = 1
+        plan["reicht"] = 0
+        if not any(int(_zahl_oder_null(j.get("durchlaeufe"))) > 0
+                   for j in je.values() if isinstance(j, dict)):
+            plan["durchlaeufe_ohne_zisterne"] = plan.get("durchlaeufe", 0)
+            plan["durchlaeufe"] = 0
+        if str(plan.get("grund") or "") in ("", "ventilzeit_gedeckelt", "fenster_gekuerzt",
+                                             "rate_fehlt_teilweise"):
+            grund = "zisterne_knapp"
+            plan["grund"] = grund
+    plan["zisterne"] = info
+    return info
+
+
+# --------------------------------------------------------------------------
 # Selbstpruefung
 # --------------------------------------------------------------------------
 
@@ -1223,6 +1402,27 @@ def selbstpruefung() -> list[tuple[bool, str]]:
               "Grosser Bedarf, harte Grenze: 'anlage_am_limit' statt Schoenrechnen "
               "(noetig %d, moeglich %d)" % (pl4["noetige_durchlaeufe"],
                                             pl4["moegliche_durchlaeufe"])))
+
+    # 0.9.52: Pause wie eine Sperre, endet von selbst; Frost behaelt den Grund.
+    pa = pause_einrechnen({"aktiv": 0, "grund": ""}, {"bis_ts": 2000, "bis": "2026-11-08"}, 1000)
+    pb = pause_einrechnen({"aktiv": 0, "grund": ""}, {"bis_ts": 2000}, 2000)
+    pc = pause_einrechnen({"aktiv": 1, "grund": "sperre_frost"}, {"bis_ts": 2000}, 1000)
+    e.append((pa["aktiv"] == 1 and pa["grund"] == "pause" and pb["aktiv"] == 0 and pb["pause"] == 0
+              and pc["grund"] == "sperre_frost" and pc["pause"] == 1,
+              "Pause: greift bis zum Ende, endet von selbst, Frost behaelt den Grund"))
+    # 0.9.52: Rangfolge - Gemuese vor Stauden vor Rasen, Reserve bleibt.
+    zr = [{"schluessel": "g", "name": "Gemuese", "bepflanzung": "gemuese_klein", "durchfluss_lmin": 10},
+          {"schluessel": "r", "name": "Rasen", "bepflanzung": "rasen_kuehl", "durchfluss_lmin": 30},
+          {"schluessel": "s", "name": "Stauden", "bepflanzung": "staudenbeet", "durchfluss_lmin": 15}]
+    plr = {"durchlaeufe": 1, "reicht": 1, "grund": "",
+           "je_zone": {"g": {"sekunden_soll": 600, "durchlaeufe": 1},
+                       "r": {"sekunden_soll": 600, "durchlaeufe": 1},
+                       "s": {"sekunden_soll": 600, "durchlaeufe": 1}}}
+    ir = zisterne_rangfolge(plr, zr, 400.0, 100.0)
+    e.append((ir["ausgelassen"] == ["Rasen"] and plr["je_zone"]["r"]["sekunden_soll"] == 0
+              and plr["je_zone"]["s"]["sekunden_soll"] == 600 and plr["grund"] == "zisterne_knapp"
+              and ir["bedient_l"] == 250 and plr["reicht"] == 0,
+              "Zisterne 400 l, Reserve 100 l: Gemuese 100 l und Stauden 150 l, Rasen 300 l aus"))
     return e
 
 

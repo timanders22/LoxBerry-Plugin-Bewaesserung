@@ -97,6 +97,12 @@
       "text": "Bodenfeuchte je Zone (volumetrisch oder Prozent)",
       "pflicht": 0,
       "text_en": "soil moisture per zone (volumetric or percent)"
+    },
+    "zisterne": {
+      "einheit": "% oder l",
+      "text": "Füllstand von Zisterne oder Tank (nur für die Rangfolge der Zonen, Einheit im Reiter Einstellungen)",
+      "pflicht": 0,
+      "text_en": "fill level of cistern or tank (only for the ranking of zones, unit in the Settings tab)"
     }
   },
   "vorlagen": {
