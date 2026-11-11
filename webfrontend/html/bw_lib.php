@@ -451,6 +451,93 @@ function bw_config_heilen($p)
     return $d;
 }
 
+/** Leere Objekte des Rohtextes ($o, json_decode ohne true) im Feld $a wieder als Objekt fuehren (seit 0.9.56),
+ *  damit json_encode() sie als {} und nicht als [] schreibt. Nur fuer bw_config_vervollstaendigen(). */
+function bw_json_leere_objekte($a, $o)
+{
+    if (!is_array($a)) { return $a; }
+    if (is_object($o)) {
+        if (!get_object_vars($o) && $a === array()) { return new stdClass(); }
+        foreach ($a as $k => $v) {
+            $ks = (string) $k;
+            if (is_array($v) && property_exists($o, $ks)) { $a[$k] = bw_json_leere_objekte($v, $o->$ks); }
+        }
+    } elseif (is_array($o)) {
+        foreach ($a as $k => $v) {
+            if (is_array($v) && array_key_exists($k, $o)) { $a[$k] = bw_json_leere_objekte($v, $o[$k]); }
+        }
+    }
+    return $a;
+}
+
+/**
+ * Fehlende Vorgaben EINMAL in bewaesserung.json schreiben (seit 0.9.56, Regeln/05).
+ *
+ * Bis 0.9.55 ergaenzte bw_config() fehlende Schluessel bei jedem Lesen nur im
+ * Speicher, und der Dienst (VORGABEN in bin/bewaesserung_dienst.py) ebenso; in
+ * die Datei kamen sie erst mit dem naechsten Speichern im Formular.
+ * Aufgerufen beim Dienststart ueber bin/bw_vervollstaendigen.php (main() in
+ * bin/bewaesserung_dienst.py), vor dem ersten Lesen der Konfiguration; weil
+ * nur bei FEHLENDEN Schluesseln geschrieben wird, bleibt es bei einem
+ * Schreibvorgang.
+ *
+ * - Nur mit LoxBerry-Wurzel, nicht waehrend einer Aktualisierung (gueltige
+ *   Marke, bw_upgrade_marke()), und nur, wenn die Datei ein Objekt ist und
+ *   das Merkwort traegt (bw_config_hat_inhalt(): ein Aktionstoken). Eine
+ *   fehlende, kaputte oder tokenlose Datei ist Sache der Selbstheilung bzw.
+ *   des ersten Seitenaufbaus - hier wird nichts angelegt und nichts geheilt.
+ * - Geschrieben werden die WERTE AUS DER DATEI plus die fehlenden Vorgaben,
+ *   nicht die von bw_config() zusammengefuehrten; fremde Schluessel bleiben
+ *   stehen. bw_config() kennt keine Lese-Regel fuer Bestandsdateien (ein
+ *   fehlender Schluessel liest die Vorgabe), deshalb ist die Vorgabe hier
+ *   auch der geschriebene Wert. Nur die Schluessel aus bw_vorgaben() - genau
+ *   die, die das Speichern im Formular ohnehin schreibt.
+ * - Geschrieben wird ueber bw_config_speichern() (0600, Zweitschrift wie beim
+ *   Speichern), ohne den Nachzug der Abodatei des Gateways.
+ * - Genau eine Protokollzeile mit den Namen, nie mit Werten.
+ *
+ * Rueckgabe: array('stand' => ruht|ohne_datei|ohne_merkwort|vollstaendig
+ *                  |ergaenzt|fehler, 'schluessel' => array(...))
+ */
+function bw_config_vervollstaendigen()
+{
+    $p = bw_paths();
+    $marke = bw_upgrade_marke();
+    if ($p['home'] === '' || $marke[1]) {
+        return array('stand' => 'ruht', 'schluessel' => array());
+    }
+    clearstatcache(true, $p['config']);
+    if (!is_file($p['config'])) {
+        return array('stand' => 'ohne_datei', 'schluessel' => array());
+    }
+    $roh = @file_get_contents($p['config']);
+    $datei = is_string($roh) ? json_decode($roh, true) : null;
+    if (!is_array($datei) || !bw_config_hat_inhalt($datei) || array_values($datei) === $datei) {
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+    }
+    $fehlend = array();
+    foreach (bw_vorgaben() as $k => $w) {
+        if (!array_key_exists($k, $datei)) {
+            $datei[$k] = $w;
+            $fehlend[] = $k;
+        }
+    }
+    if (!$fehlend) {
+        return array('stand' => 'vollstaendig', 'schluessel' => array());
+    }
+    // Ein leeres Objekt der Datei ({}) bliebe nach json_decode(..., true) ein leeres Feld und kaeme als []
+    // zurueck - der Rohwert wird erhalten.
+    $datei = bw_json_leere_objekte($datei, json_decode($roh));
+    if (!bw_config_speichern($datei, false)) {
+        bw_log('Konfiguration NICHT vervollstaendigt: bewaesserung.json liess sich nicht schreiben ('
+             . count($fehlend) . ' fehlende Schluessel).');
+        return array('stand' => 'fehler', 'schluessel' => $fehlend);
+    }
+    bw_log('Konfiguration vervollstaendigt - ' . count($fehlend)
+         . ' fehlende Vorgaben in bewaesserung.json geschrieben: ' . implode(', ', $fehlend));
+    return array('stand' => 'ergaenzt', 'schluessel' => $fehlend);
+}
+
 /**
  * M3 (Durchgang 30.09.2026): die Abodatei des MQTT-Gateways.
  *
@@ -501,7 +588,10 @@ function bw_praefix_alt_merken($alt)
     return true;
 }
 
-function bw_config_speichern($cfg)
+/* $nebenwege = false (seit 0.9.56) nur fuer bw_config_vervollstaendigen(): Datei und Zweitschrift wie
+ * immer, aber kein Vormerken des alten Praefixes und kein Nachzug der Abodatei - das Vervollstaendigen
+ * schreibt nur die Konfiguration. */
+function bw_config_speichern($cfg, $nebenwege = true)
 {
     $p = bw_paths();
     /* M6: das bisherige Praefix VOR dem Schreiben lesen. */
@@ -526,6 +616,7 @@ function bw_config_speichern($cfg)
                  . ' liess sich nicht erneuern.');
         }
     }
+    if (!$nebenwege) { return true; }
     if ($bw_alt_pr !== '' && $bw_neu_pr !== '' && $bw_alt_pr !== $bw_neu_pr) {
         bw_praefix_alt_merken($bw_alt_pr);
     }

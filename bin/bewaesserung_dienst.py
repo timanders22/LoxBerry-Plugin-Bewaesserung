@@ -4041,6 +4041,35 @@ def selbsttest() -> int:
     return 1 if fehlt else 0
 
 
+def konfiguration_vervollstaendigen() -> str:
+    """Seit 0.9.56 (Regeln/05): fehlende Vorgaben einmal in die Datei schreiben - beim Dienststart.
+
+    Geschrieben wird ueber bin/bw_vervollstaendigen.php und damit ueber bw_config_vervollstaendigen() in
+    bw_lib.php, nicht von hier: ein Schreiber fuer ein Format. Bis 0.9.55 ergaenzten Dienst und Oberflaeche
+    fehlende Schluessel nur im Speicher. Die Protokollzeile mit den Namen schreibt bw_lib.php in dieselbe
+    Datei; hier steht eine Zeile nur, wenn der Aufruf scheiterte - nie ein Wert. Waehrend einer
+    Aktualisierung (Marke) schreibt das PHP-Stueck nichts.
+    Rueckgabe: die Ausgabezeile des Skripts oder "" (fuer die Pruefung)."""
+    import subprocess  # noqa: PLC0415 - wie melden()
+    skript = os.path.join(HIER, "bw_vervollstaendigen.php")
+    if not os.path.isfile(skript):
+        _LOG.warning("Konfiguration nicht vervollstaendigt: bin/bw_vervollstaendigen.php fehlt.")
+        return ""
+    umgebung = dict(os.environ, LBHOMEDIR=HOME, LBPPLUGINDIR=ORDNER)
+    try:
+        r = subprocess.run([_ansage_php(), skript, ORDNER], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           env=umgebung, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError) as fehler:
+        _LOG.warning("Konfiguration nicht vervollstaendigt: Aufruf von bw_vervollstaendigen.php scheiterte (%s)",
+                     type(fehler).__name__)
+        return ""
+    zeilen = r.stdout.decode("utf-8", "replace").strip().splitlines()
+    zeile = zeilen[-1] if zeilen else ""
+    if r.returncode != 0 or not zeile.startswith("VERVOLLSTAENDIGEN;"):
+        _LOG.warning("Konfiguration nicht vervollstaendigt: Rueckgabe %s, Ausgabe %r", r.returncode, zeile[:200])
+    return zeile
+
+
 def main() -> int:
     # 0.9.49: ein Tippfehler startete bis 0.9.48 den Dauerdienst im Vordergrund, und dienst.sh erkannte ihn nicht als eigenen.
     if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("--einmal", "--selbsttest", "--mqtt-leeren")):
@@ -4080,6 +4109,8 @@ def main() -> int:
         return 3
     with open(DATEI_PID, "w", encoding="utf-8") as fh:
         fh.write(str(os.getpid()))
+    # 0.9.56: fehlende Vorgaben einmal in die Datei, bevor der Dienst die Konfiguration liest (Regeln/05).
+    konfiguration_vervollstaendigen()
     d = Dienst()
     signal.signal(signal.SIGTERM, d.anhalten)
     signal.signal(signal.SIGINT, d.anhalten)

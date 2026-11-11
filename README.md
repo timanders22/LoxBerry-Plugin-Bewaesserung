@@ -5,12 +5,18 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.55 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.56 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.56
+
+- **Konfiguration wird nach einem Update vervollständigt:** Fehlen in `bewaesserung.json` Einstellungen, die eine neuere Fassung mitbringt, trägt der Dienst sie beim Start jetzt einmal in die Datei ein, bevor er die Konfiguration zum ersten Mal liest. Geschrieben wird über das neue Kommandozeilenstück `bin/bw_vervollstaendigen.php` und damit über die Bibliothek der Oberfläche (`bw_config_vervollstaendigen()` in `webfrontend/html/bw_lib.php`), mit denselben Rechten (0600) und derselben Zweitschrift wie beim Speichern im Formular; die Abodatei des MQTT-Gateways wird dabei nicht angefasst. Das Protokoll `bewaesserung.log` nennt die ergänzten Namen in einer Zeile, keine Werte. Bisher ergänzten Oberfläche und Dienst fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern im Formular.
+- Geschrieben werden die Werte aus der Datei, wie sie dort stehen (auch ein leeres Objekt `{}` bleibt eines), plus die fehlenden Vorgaben; Schlüssel, die das Plugin nicht kennt, bleiben stehen. Was Oberfläche und Dienst aus der Konfiguration lesen, ändert sich dadurch nicht. Nicht angefasst werden eine fehlende oder unlesbare `bewaesserung.json`, eine ohne Aktionstoken und jede Datei während einer Aktualisierung.
+- Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, einschließlich eines Aufrufs der Startfunktion des Dienstes in einem nachgebildeten LoxBerry-Baum; am Gerät ist es noch nicht gemessen.
 
 ## Neu in 0.9.55
 
