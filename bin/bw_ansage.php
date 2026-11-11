@@ -54,8 +54,19 @@ function bw_ansage_wurzel()
     return '';
 }
 
+/* 0.9.55: Eine LoxBerry-Wurzel gilt nur mit config/plugins, data/plugins UND config/system/general.json -
+ * fuer LBHOMEDIR und fuer jeden Kandidaten der Bibliotheksliste unten, der eine Wurzel anspricht (Regeln/06,
+ * Wurzelsuche). Bis 0.9.54 genuegten fuer LBHOMEDIR die beiden ersten, und der Kandidat drei Ebenen ueber
+ * bin/plugins/<ordner> wurde ungeprueft geladen. Die eigene Bibliothek im selben entpackten Archiv braucht
+ * keine Wurzel und wird geladen wie bisher. */
+function bw_ansage_wurzel_gilt($h)
+{
+    return is_string($h) && $h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')
+        && is_file($h . '/config/system/general.json');
+}
+
 $bw_home = (string) getenv('LBHOMEDIR');
-if ($bw_home === '' || !is_dir($bw_home . '/config/plugins') || !is_dir($bw_home . '/data/plugins')) {
+if (!bw_ansage_wurzel_gilt($bw_home)) {
     $bw_home = bw_ansage_wurzel();
 }
 $bw_ordner = isset($argv[1]) ? preg_replace('/[^A-Za-z0-9_\-]/', '', (string) $argv[1]) : '';
@@ -66,20 +77,36 @@ if ($bw_ordner === '') { $bw_ordner = 'bewaesserung'; }
 
 /* Die Bibliothek ueber eine Kandidatenliste (Regeln/03): installiert ueber die
  * Wurzel, aus dem eigenen Ort abgeleitet (bin/plugins/<ordner> -> drei Ebenen hoch),
- * entpacktes Archiv (bin/ neben webfrontend/). */
-$bw_kandidaten = array();
-if ($bw_home !== '') {
-    $bw_kandidaten[] = $bw_home . '/webfrontend/html/plugins/' . $bw_ordner . '/bw_lib.php';
-}
-$bw_kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/' . basename(__DIR__) . '/bw_lib.php';
-$bw_kandidaten[] = dirname(__DIR__) . '/webfrontend/html/bw_lib.php';
+ * entpacktes Archiv (bin/ neben webfrontend/). Jeder Kandidat nennt die Wurzel, an der
+ * er haengt; erfuellt sie bw_ansage_wurzel_gilt() nicht, wird er uebersprungen (0.9.55).
+ * Der Archiv-Kandidat nennt keine (null): er liegt im selben Archiv wie dieses Skript. */
+$bw_drei = dirname(dirname(dirname(__DIR__)));
+$bw_kandidaten = array(
+    array($bw_home, $bw_home . '/webfrontend/html/plugins/' . $bw_ordner . '/bw_lib.php'),
+    array($bw_drei, $bw_drei . '/webfrontend/html/plugins/' . basename(__DIR__) . '/bw_lib.php'),
+    array(null, dirname(__DIR__) . '/webfrontend/html/bw_lib.php'),
+);
+$bw_gesucht = array();
+$bw_wurzel_da = false;
 $bw_gefunden = false;
 foreach ($bw_kandidaten as $bw_k) {
-    if (is_file($bw_k)) { require_once $bw_k; $bw_gefunden = true; break; }
+    if ($bw_k[0] !== null && !bw_ansage_wurzel_gilt($bw_k[0])) {
+        $bw_gesucht[] = $bw_k[1] . ' (keine Wurzel, uebersprungen)';
+        continue;
+    }
+    if ($bw_k[0] !== null) { $bw_wurzel_da = true; }
+    $bw_gesucht[] = $bw_k[1];
+    if (is_file($bw_k[1])) { require_once $bw_k[1]; $bw_gefunden = true; break; }
+}
+if (!$bw_gefunden && !$bw_wurzel_da) {
+    fwrite(STDERR, "Keine LoxBerry-Wurzel mit config/plugins, data/plugins und config/system/general.json - "
+                   . "es wurde nichts geladen, gesucht in: " . implode(', ', $bw_gesucht) . "\n");
+    echo "ANSAGE;STAND=0;KENNUNG=WURZEL\n";
+    exit(1);
 }
 if (!$bw_gefunden || !function_exists('ansage_cli') || !function_exists('bw_ansage_text')) {
     fwrite(STDERR, "bw_lib.php oder die Sprachausgabe nicht gefunden, gesucht in: "
-                   . implode(', ', $bw_kandidaten) . "\n");
+                   . implode(', ', $bw_gesucht) . "\n");
     echo "ANSAGE;STAND=0;KENNUNG=BIBLIOTHEK_FEHLT\n";
     exit(1);
 }

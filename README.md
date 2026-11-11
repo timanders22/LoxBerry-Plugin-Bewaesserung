@@ -5,12 +5,18 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.54 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.55 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.55
+
+- **Ansage-Brücke des Dienstes:** `bin/bw_ansage.php` nimmt eine LoxBerry-Wurzel nur noch an, wenn dort `config/plugins`, `data/plugins` und `config/system/general.json` liegen – für `LBHOMEDIR` ebenso wie für die Orte, an denen es die Bibliothek der Anlage sucht (installiert, drei Ebenen über dem eigenen Ablageort). Ein Ort ohne solche Wurzel wird übersprungen; findet sich weder eine Wurzel noch die Bibliothek im eigenen entpackten Archiv, antwortet die Brücke mit `KENNUNG=WURZEL` und Rückgabewert 1. Aus einem entpackten Archiv lädt sie ihre mitgelieferte Bibliothek wie bisher.
+- **Wurzel für Meldungen und Pfade:** `bin/bw_notify.php` und `bw_lbhome()` in `webfrontend/html/bw_lib.php` nehmen `LBHOMEDIR` ebenfalls nur noch mit `config/plugins`, `data/plugins` und `config/system/general.json` an; sonst suchen sie die Wurzel wie bisher vom eigenen Ablageort aus.
+- **Gemeinsames Sprachmodul 1.4.3:** Als LoxBerry-Wurzel aus `LBHOMEDIR` gilt für die Sprachausgabe nur noch ein Ordner mit `config/plugins`, `data/plugins` und `config/system/general.json`; bis 1.4.2 genügte `config/system`, und ein Prüfstand oder Rest mit diesem Ordner wurde wie ein LoxBerry gelesen. Auf einem LoxBerry ändert sich nichts.
 
 ## Neu in 0.9.54
 

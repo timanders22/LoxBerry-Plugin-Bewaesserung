@@ -80,16 +80,19 @@ if (!function_exists('lb_wurzel_ermitteln')) {
 }
 
 /* Die Wurzel in der Reihenfolge der Hausregel: erst die Umgebung, dann die
- * Suche - und DANACH NICHTS MEHR. Ein gesetztes LBHOMEDIR gilt mit
- * config/plugins UND data/plugins darunter; general.json wird dort nicht
- * verlangt, damit die Attrappen der Pruefwerkzeuge (Werkzeuge/lb) weiter
- * tragen. Bis 0.9.32 genuegte ein beliebiges Verzeichnis. Rueckgabe ''
+ * Suche - und DANACH NICHTS MEHR. Ein gesetztes LBHOMEDIR gilt seit 0.9.55
+ * nur mit config/plugins, data/plugins UND config/system/general.json
+ * darunter, wie die Suche (Regeln/06); die Attrappen der Pruefwerkzeuge
+ * (Werkzeuge/lb, lb_attrappe, lb_leer, lb_mqtt) tragen alle drei, gemessen
+ * 11.11.2026. Bis 0.9.54 wurde general.json dort nicht verlangt, bis 0.9.32
+ * genuegte ein beliebiges Verzeichnis. Rueckgabe ''
  * heisst "keine Wurzel". Bauart: LoxBerry-Plugin-Spotpreis-Tibber-0.9.19
  * (tb_lbhome()). */
 function bw_lbhome()
 {
     $h = (string) getenv('LBHOMEDIR');
-    if ($h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+    if ($h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')
+        && is_file($h . '/config/system/general.json')) {
         return rtrim($h, '/');
     }
     return lb_wurzel_ermitteln();

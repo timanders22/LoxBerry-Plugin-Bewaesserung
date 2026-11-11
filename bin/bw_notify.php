@@ -23,8 +23,9 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen - dieselbe
  * Regel wie lb_wurzel_ermitteln() und bw_lbhome() in bw_lib.php: aufwaerts
  * gilt nur ein Verzeichnis mit config/plugins, data/plugins UND
- * config/system/general.json; ein gesetztes LBHOMEDIR mit config/plugins und
- * data/plugins. Bis 0.9.32 genuegten config/plugins und webfrontend, und in
+ * config/system/general.json, und seit 0.9.55 auch ein gesetztes LBHOMEDIR
+ * nur mit allen dreien (bis 0.9.54 genuegten dort config/plugins und
+ * data/plugins). Bis 0.9.32 genuegten config/plugins und webfrontend, und in
  * einem fremden Baum ohne general.json lud dieses Skript dessen
  * libs/phplib/loxberry_log.php (in WSL gemessen,
  * Pruefung-Bewaesserung-0.9.33, Fall P9a). */
@@ -44,7 +45,8 @@ function bw_notify_wurzel()
 }
 
 $home = (string) getenv('LBHOMEDIR');
-if ($home === '' || !is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')) {
+if ($home === '' || !is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')
+    || !is_file($home . '/config/system/general.json')) {
     $home = bw_notify_wurzel();
 }
 if ($home === '') {
