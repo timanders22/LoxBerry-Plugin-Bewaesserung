@@ -5,6 +5,10 @@
 # Gesichert werden Konfiguration, Zonen, Quellenzuordnung UND der Verlauf.
 # Der Verlauf ist der Wasserhaushalt der letzten Wochen - geht er verloren,
 # faengt die Bilanz bei Null an und giesst erst einmal zu wenig.
+# [upgrade_daten] Argumente des Installers festhalten - unten sichert der gemeinsame Baustein
+# [upgrade_daten] upgrade_daten.sh (neben diesem Skript) den ganzen Datenordner.
+UPGD_ORDNER="$3"; UPGD_WURZEL="$5"
+
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bewaesserung}"
@@ -76,6 +80,14 @@ BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
 if [ -f "$BBSH" ]; then
     echo "<INFO> Befehlsbruecke: $(timeout 40 bash "$BBSH" stop 2>&1 | head -n 1)"
 fi
+
+# 0.9.57: Was das Update bewusst NICHT ueberlebt (Baustein 1.1.0, Angabe UPGD_OHNE; Entscheidung des Hausherrn
+# 15.11.2026, "Einheitlich ausnehmen", Regeln/06): der Ordner befehle/ der Befehlsbruecke - darin die
+# Mosquitto-Optionsdateien mit dem Broker-Kennwort, zustand.json, waechter.json und die Sperrdatei. Damit liegt das
+# Kennwort in keiner Update-Sicherung. Die Bruecke legt befehle/ samt Optionsdateien beim Start in postinstall.sh
+# selbst neu an (befehlsbruecke.sh start, Optionsdateien aus config/system/general.json; nachgestellt in WSL
+# 16.11.2026, Pruefung-Bewaesserung-0.9.57/update_nachgestellt/). Einen Ordner antworten/ fuehrt diese Linie nicht.
+UPGD_OHNE="befehle"
 
 # Anhalten ueber dienst.sh, nicht mit einem eigenen kill.
 #
@@ -337,5 +349,14 @@ done
 # Die Wirkung pruefen, nicht den Rueckgabewert: liegt hinterher etwas da?
 if [ -n "$(ls -A "$LANG_SICHER" 2>/dev/null)" ]; then
     echo "<OK> Langzeitwerte gesichert."
+fi
+# [upgrade_daten] Gemeinsamer Baustein (Werkzeuge/gemeinsam/upgrade_daten.sh): den ganzen Datenordner
+# [upgrade_daten] neben den Ordner sichern; misslingt das, bricht die Aktualisierung mit Rueckgabe 2 ab.
+if [ -f "$(dirname "$0")/upgrade_daten.sh" ] && . "$(dirname "$0")/upgrade_daten.sh"; then
+    upgrade_daten_sichern "$UPGD_ORDNER" "$UPGD_WURZEL" || exit 2
+else
+    echo "<FAIL> Der Baustein upgrade_daten.sh fehlt neben $(basename "$0") - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt installiert."
+    exit 2
 fi
 exit 0

@@ -5,12 +5,30 @@ Standardverfahren **FAO-56**, wie viel Wasser der Boden je Zone verloren hat,
 zieht den erwarteten Regen der nächsten Tage ab und sagt Loxone, wie viele
 Durchläufe heute Nacht nötig sind.
 
-> **Fassung 0.9.56 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
+> **Fassung 0.9.57 — ungeprüft im Betrieb.** Die Rechnung selbst ist gegen das
 > veröffentlichte Rechenbeispiel aus FAO-56 geprüft; ob die Messwertzuordnung
 > zu Ihrer Wetterstation passt, zeigt erst der Betrieb. Diese Angabe stand bis
 > 0.9.6 auf „0.9.0“ und bis 0.9.18 auf „0.9.7“ — sechs
 > und dann elf Fassungen lang. Sie gehört zu den vier Stellen, die
 > `Werkzeuge/fassung_setzen.py` mitzieht.
+
+## Neu in 0.9.57
+
+- **„Einstellungen sichern“ und „Zurückspielen“ laufen über das gemeinsame Sicherungsmodul** (Fassung 1.2.6), wie in den übrigen Plugins dieses Autors. Was sich ändert:
+  - **Haken vor dem Zurückspielen:** Der Knopf *Zurückspielen* wirkt nur, wenn der Haken unmittelbar davor gesetzt ist. Ohne Haken wird die Datei nicht gelesen und nichts geändert; die Meldung sagt es.
+  - **Neue Form der Datei:** Der Kopf trägt `_hinweis`, `_plugin` = `LoxBerry-Plugin-Bewaesserung`, `_fassung` und `_stand`; die Einstellungen stehen oben in der Datei statt unter `config`, daneben wie bisher `zonen` und `quellen`. Inhalt wie bisher: alle Einstellungen samt Aktionstoken, die Zonen samt Becherprobe und die Quellenzuordnung; das Ventil-Token für GARDENA und die Sprechtoken stehen nie darin. Die Datei bitte wie ein Passwort behandeln. Eine Datei eines anderen Plugins wird als Ganzes abgewiesen.
+  - **Ältere Sicherungen werden angenommen:** Eine Sicherung aus 0.9.22 bis 0.9.56 (ohne `_plugin`, Einstellungen unter `config`) erkennt das Plugin an ihrem Kopf und spielt sie zurück; die Meldung sagt „ältere Sicherung erkannt“. Einstellungen, die die Fassung der Datei noch nicht kannte, behalten ihren geltenden Wert, und die Meldung nennt sie. Bisher wies 0.9.56 jede Sicherung aus 0.9.22 bis 0.9.48 ab, weil ihr später hinzugekommene Einstellungen fehlten; gemessen mit den Sicherungen aller 42 Fassungen 0.9.16 bis 0.9.57: bisher 9 angenommen, jetzt 36. Sechs spätere Einstellungen (*Befehle über MQTT annehmen*, Ventilbefehl samt Höchstdauer und die drei Angaben zum Wasservorrat) fielen bisher still auf die Werkseinstellung, wenn sie in der Datei fehlten; jetzt behalten sie den geltenden Wert und werden genannt.
+  - **Sicherungen ohne Kopf** (0.9.16 bis 0.9.21) werden abgewiesen, wie in allen Plugins dieses Autors. Auch bisher ließen sie sich nicht zurückspielen.
+  - **Unbekannte Einstellung in der Datei:** wird verworfen und mit Namen genannt; der Rest wird zurückgespielt. Bisher wies sie die ganze Datei ab.
+  - **Unbekannte Einstellung in der geltenden Konfiguration** (etwa von Hand eingetragen): fällt beim Zurückspielen weg und wird mit Namen genannt, nie mit Wert. Bisher fiel sie still weg.
+  - **Leerer Wert in der Datei:** überschreibt keine bestehende Einstellung; sie bleibt und wird genannt. Bisher galt das nur für das Aktionstoken.
+  - **Wie bisher:** Jeder Wert wird mit denselben Grenzen wie im Formular geprüft; eine Datei mit Ventil-Token oder Sprechtoken wird abgewiesen, die gespeicherten bleiben; ist ein Wert unzulässig, ändert sich nichts, auch nicht an Zonen und Quellenzuordnung, und die Meldung nennt alle Beanstandungen. Fehlen `zonen` oder `quellen` in der Datei, bleiben die gespeicherten. „Einstellungen sichern“ warnt am Knopf, wenn das eigene Zurückspielen einen gespeicherten Wert abweisen würde.
+  - **Zurück auf eine ältere Fassung:** Eine mit 0.9.57 erstellte Sicherung lässt sich in 0.9.56 und älter nicht zurückspielen (gemessen).
+- **Vorgaben:** `ansage_regeln` („Wann gesprochen wird“) und `ansage_token_herkunft`, die die Sprachausgabe seit 0.9.46 in `bewaesserung.json` schreibt, stehen jetzt in den Vorgaben von Oberfläche und Dienst. Fehlen sie in Ihrer Konfiguration, trägt der Dienst sie beim nächsten Start einmal ein (Regeln ab Werk, leerer Vermerk); was gesprochen wird, ändert sich dadurch nicht.
+- **Konfiguration vervollständigen:** Die Protokollzeile beim Dienststart nennt jetzt auch Einstellungen, die das Plugin nicht kennt, mit Namen und ohne Wert; sie bleiben stehen. Fehlt nichts, steht die Zeile nur, wenn es solche Einstellungen gibt. Der Reiter *Test* misst das in einer neuen Zeile an einer Probedatei im temporären Ordner; die echte Konfiguration bleibt dabei unberührt.
+- **Update:** Der ganze Datenordner wird über das Update getragen (gemeinsamer Baustein `upgrade_daten.sh`). Bisher überstanden nur Verlauf, Tageswerte, Nachtplan und Zustand ein Update; jetzt auch Abbild, Pause, Rückmeldungen, Wasservorrat und die übrigen Dateien. Den Ordner `befehle/` der Befehlsbrücke nimmt das Update bewusst nicht mit, denn darin steht das Kennwort des Brokers; die Brücke legt ihn beim Start nach dem Update selbst neu an.
+- **Dokumentation:** `plugin.cfg` nennt die Adresse des Repositorys (`WEBSITE`); LoxBerry zeigt sie bei der Installation als Knopf „Dokumentation“.
+- Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4 und in einer nachgestellten Aktualisierung (WSL); am Gerät ist es noch nicht gemessen.
 
 ## Neu in 0.9.56
 

@@ -97,6 +97,58 @@ function bw_endpunkt_probe()
     return array(0, $code . ' / ' . substr(trim((string) $rumpf), 0, 120), $url);
 }
 
+/**
+ * 0.9.57 (Entscheidung des Hausherrn 15.11.2026, "Ja, nennen und stehen lassen"):
+ * Nennt das Vervollstaendigen der Konfiguration beim Dienststart eine
+ * unbekannte Einstellung mit Namen, laesst es sie stehen, und bleibt ihr Wert
+ * aus der Protokollzeile?
+ *
+ * Gemessen mit Wirkung, an einer PROBEDATEI in einem eigenen Ordner unter dem
+ * temporaeren Verzeichnis, nicht an der echten Konfiguration: die Vorgaben ohne
+ * takt, ein Probe-Aktionstoken und eine unbekannte Einstellung mit Wert.
+ * Gerufen wird derselbe Kern wie beim Dienststart
+ * (bw_config_vervollstaendigen_datei()); er schreibt kein Protokoll, die Zeile
+ * kommt als Rueckgabe. Danach werden Probedatei, Zweitschrift und Ordner
+ * entfernt. Rueckgabe: array(stand, Text) mit stand 1, 0 oder -1 (nicht messbar).
+ */
+function bw_vervollstaendigen_probe()
+{
+    $ord = rtrim(sys_get_temp_dir(), '/\\') . '/bw_vprobe_' . getmypid() . '_' . mt_rand(100000, 999999);
+    if (!@mkdir($ord, 0700)) {
+        return array(-1, sprintf(bw_t('TEST.A_ERG_FREMD_NICHT'), bw_e($ord)));
+    }
+    $cfg = $ord . '/bewaesserung.json';
+    $zweit = $ord . '/bewaesserung.backup.json';
+    $name = 'zz_probe_unbekannt';
+    $wert = 'ProbeWert' . mt_rand(100000, 999999);
+    $d = bw_vorgaben();
+    unset($d['takt']);
+    $d['aktionstoken'] = 'probe' . substr(md5((string) mt_rand()), 0, 19);
+    $d[$name] = $wert;
+    $erg = bw_json_schreiben($cfg, $d, 0600) ? bw_config_vervollstaendigen_datei($cfg, $zweit) : null;
+    $nach = is_file($cfg) ? json_decode((string) @file_get_contents($cfg), true) : null;
+    foreach (array_merge(array($cfg, $zweit), glob($ord . '/*') ?: array()) as $f) {
+        if (is_file($f)) { @unlink($f); }
+    }
+    @rmdir($ord);
+    if (!is_array($erg)) {
+        return array(-1, sprintf(bw_t('TEST.A_ERG_FREMD_NICHT'), bw_e($ord)));
+    }
+    $zeile = (string) $erg['zeile'];
+    $mangel = array();
+    if (strpos($zeile, $name) === false) { $mangel[] = bw_t('TEST.A_ERG_FREMD_M_NAME'); }
+    if (strpos($zeile, $wert) !== false) { $mangel[] = bw_t('TEST.A_ERG_FREMD_M_WERT'); }
+    if (!is_array($nach) || !isset($nach[$name]) || $nach[$name] !== $wert) { $mangel[] = bw_t('TEST.A_ERG_FREMD_M_WEG'); }
+    if (!is_array($nach) || !array_key_exists('takt', $nach) || $erg['stand'] !== 'ergaenzt'
+        || $erg['schluessel'] !== array('takt')) {
+        $mangel[] = bw_t('TEST.A_ERG_FREMD_M_ERG');
+    }
+    if ($mangel) {
+        return array(0, sprintf(bw_t('TEST.A_ERG_FREMD_FEHL'), implode(' ', $mangel)));
+    }
+    return array(1, sprintf(bw_t('TEST.A_ERG_FREMD_OK'), $name));
+}
+
 /** Die Vorgabeschluessel aus dem Python-Dienst lesen - fuer den Abgleich. */
 function bw_vorgaben_python()
 {
@@ -975,6 +1027,10 @@ function bw_pruefungen()
                               bw_e(implode(', ', $nur_py)),
                               bw_e(implode(', ', $nur_php)))));
     }
+
+    // 0.9.57: nennt das Vervollstaendigen beim Dienststart Unbekanntes und laesst es stehen? (an einer Probedatei)
+    list($bw_vst, $bw_vtx) = bw_vervollstaendigen_probe();
+    $zeilen[] = bw_pruefzeile($bw_vst, bw_t('TEST.F_ERG_FREMD'), $bw_vtx);
 
     // Zwei Retain-Tabellen, die auseinanderlaufen koennen: der Dienst
     // entscheidet, was zurueckbehalten wird, die Oberflaeche sagt es an.

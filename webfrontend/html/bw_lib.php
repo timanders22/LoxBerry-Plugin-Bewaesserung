@@ -41,6 +41,10 @@ if (!function_exists('bw_e')) {
  * mit weiteren Ausgabezielen, bw_mit_zielen(), Welle Mehrfach-Ziele). Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden und weist einen
  * direkten Aufruf ueber den Webserver mit 403 ab. */
 require_once __DIR__ . '/sprachausgabe.php';
+/* Gemeinsames Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, seit 0.9.57): "Einstellungen sichern"
+ * und "Einstellungen zurueckspielen" wie in allen Linien des Hauses; die Beschreibung dieser Linie steht in
+ * bw_sicherung_beschreibung(). Die Abschrift weist einen direkten Aufruf ueber den Webserver mit 403 ab. */
+require_once __DIR__ . '/sicherung.php';
 
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
@@ -222,6 +226,11 @@ function bw_vorgaben()
         // Der Dienst fuehrt 'tts' nur als Namen (seine Vorgaben stehen nur hier).
         'ansage_ende' => 1, 'ansage_ventil' => 1, 'ansage_sperre' => 1,     // ansage_sperre: 0.9.49
         'tts' => ansage_werk_block(),
+        // 0.9.57 (Regeln/05 "Was ein gemeinsames Modul in die Konfiguration schreibt ..."): die beiden Schluessel, die
+        // die Sprachausgabe seit 0.9.46 in bewaesserung.json schreibt - ansage_regeln (Formular "Wann gesprochen
+        // wird", ansage_regeln_formular()) und den Vermerk ansage_token_herkunft (bw_ansage_token_pflegen()). Ohne
+        // sie hier verwarf das Sicherungsmodul ansage_regeln als unbekannt; die Sicherung schreibt den Vermerk nie.
+        'ansage_regeln' => ansage_regeln_vorgaben(), 'ansage_token_herkunft' => array(),
         // 0.9.52: zweiter Haken der Befehlsbruecke "Ventil aus Loxone/MQTT oeffnen erlauben" (ab Werk AUS,
         // der UDP-Eingang ist im Heimnetz offen - Regeln/07, 3a) und die Hoechstdauer je Befehl.
         'befehl_ventil_ein' => 0, 'befehl_ventil_max_min' => 30,
@@ -492,50 +501,81 @@ function bw_json_leere_objekte($a, $o)
  *   fehlender Schluessel liest die Vorgabe), deshalb ist die Vorgabe hier
  *   auch der geschriebene Wert. Nur die Schluessel aus bw_vorgaben() - genau
  *   die, die das Speichern im Formular ohnehin schreibt.
- * - Geschrieben wird ueber bw_config_speichern() (0600, Zweitschrift wie beim
- *   Speichern), ohne den Nachzug der Abodatei des Gateways.
- * - Genau eine Protokollzeile mit den Namen, nie mit Werten.
+ * - Geschrieben wird wie in bw_config_speichern() (0600, Zweitschrift wie beim
+ *   Speichern, bw_config_datei_schreiben()), ohne den Nachzug der Abodatei des
+ *   Gateways.
+ * - Genau eine Protokollzeile mit den Namen, nie mit Werten. Seit 0.9.57
+ *   (Entscheidung des Hausherrn 15.11.2026, "Ja, nennen und stehen lassen";
+ *   Regeln/05 "fremd -> NENNEN, stehen lassen") nennt sie auch die Schluessel,
+ *   die das Plugin nicht kennt und die stehen bleiben - mit Namen, nie mit
+ *   Werten; fehlt nichts, steht die Zeile nur, wenn es solche gibt. Bis 0.9.56
+ *   blieben sie stehen, ohne dass es irgendwo stand.
  *
  * Rueckgabe: array('stand' => ruht|ohne_datei|ohne_merkwort|vollstaendig
- *                  |ergaenzt|fehler, 'schluessel' => array(...))
+ *                  |ergaenzt|fehler, 'schluessel' => array(...),
+ *                  'fremd' => array(...))
  */
 function bw_config_vervollstaendigen()
 {
     $p = bw_paths();
     $marke = bw_upgrade_marke();
     if ($p['home'] === '' || $marke[1]) {
-        return array('stand' => 'ruht', 'schluessel' => array());
+        return array('stand' => 'ruht', 'schluessel' => array(), 'fremd' => array());
     }
-    clearstatcache(true, $p['config']);
-    if (!is_file($p['config'])) {
-        return array('stand' => 'ohne_datei', 'schluessel' => array());
+    $e = bw_config_vervollstaendigen_datei($p['config'], $p['sicherung']);
+    if ($e['zeile'] !== '') {
+        bw_log($e['zeile']);
     }
-    $roh = @file_get_contents($p['config']);
+    unset($e['zeile']);
+    return $e;
+}
+
+/** Der Kern von bw_config_vervollstaendigen() an einer bestimmten Datei $config mit ihrer Zweitschrift $zweit (seit
+ *  0.9.57 getrennt, damit der Reiter Test ihn an einer Probedatei messen kann, ohne die echte Konfiguration
+ *  anzufassen). Schreibt kein Protokoll; die Zeile dafuer steht in 'zeile' (nur Namen, nie Werte). Heilt nicht. */
+function bw_config_vervollstaendigen_datei($config, $zweit)
+{
+    clearstatcache(true, $config);
+    if (!is_file($config)) {
+        return array('stand' => 'ohne_datei', 'schluessel' => array(), 'fremd' => array(), 'zeile' => '');
+    }
+    $roh = @file_get_contents($config);
     $datei = is_string($roh) ? json_decode($roh, true) : null;
     if (!is_array($datei) || !bw_config_hat_inhalt($datei) || array_values($datei) === $datei) {
-        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array(), 'fremd' => array(), 'zeile' => '');
     }
+    $vorgaben = bw_vorgaben();
+    /* Unbekannte Schluessel bleiben stehen und werden genannt - nur der Name, durch sicherung_name() (keine
+     * Zeilenumbrueche, kein Semikolon, hoechstens 64 Zeichen), nie der Wert. */
+    $fremd = array();
+    foreach (array_keys($datei) as $k) {
+        if (!array_key_exists($k, $vorgaben)) {
+            $fremd[] = sicherung_name((string) $k);
+        }
+    }
+    $fremd_satz = $fremd ? '; unbekannt, nicht veraendert und nicht entfernt: ' . implode(', ', $fremd) : '';
     $fehlend = array();
-    foreach (bw_vorgaben() as $k => $w) {
+    foreach ($vorgaben as $k => $w) {
         if (!array_key_exists($k, $datei)) {
             $datei[$k] = $w;
             $fehlend[] = $k;
         }
     }
     if (!$fehlend) {
-        return array('stand' => 'vollstaendig', 'schluessel' => array());
+        return array('stand' => 'vollstaendig', 'schluessel' => array(), 'fremd' => $fremd,
+                     'zeile' => $fremd ? 'Konfiguration vollstaendig' . $fremd_satz . '.' : '');
     }
     // Ein leeres Objekt der Datei ({}) bliebe nach json_decode(..., true) ein leeres Feld und kaeme als []
     // zurueck - der Rohwert wird erhalten.
     $datei = bw_json_leere_objekte($datei, json_decode($roh));
-    if (!bw_config_speichern($datei, false)) {
-        bw_log('Konfiguration NICHT vervollstaendigt: bewaesserung.json liess sich nicht schreiben ('
-             . count($fehlend) . ' fehlende Schluessel).');
-        return array('stand' => 'fehler', 'schluessel' => $fehlend);
+    if (!bw_config_datei_schreiben($config, $zweit, $datei)) {
+        return array('stand' => 'fehler', 'schluessel' => $fehlend, 'fremd' => $fremd,
+                     'zeile' => 'Konfiguration NICHT vervollstaendigt: ' . basename($config)
+                              . ' liess sich nicht schreiben (' . count($fehlend) . ' fehlende Schluessel).');
     }
-    bw_log('Konfiguration vervollstaendigt - ' . count($fehlend)
-         . ' fehlende Vorgaben in bewaesserung.json geschrieben: ' . implode(', ', $fehlend));
-    return array('stand' => 'ergaenzt', 'schluessel' => $fehlend);
+    return array('stand' => 'ergaenzt', 'schluessel' => $fehlend, 'fremd' => $fremd,
+                 'zeile' => 'Konfiguration vervollstaendigt - ' . count($fehlend) . ' fehlende Vorgaben in '
+                          . basename($config) . ' geschrieben: ' . implode(', ', $fehlend) . $fremd_satz);
 }
 
 /**
@@ -588,10 +628,10 @@ function bw_praefix_alt_merken($alt)
     return true;
 }
 
-/* $nebenwege = false (seit 0.9.56) nur fuer bw_config_vervollstaendigen(): Datei und Zweitschrift wie
- * immer, aber kein Vormerken des alten Praefixes und kein Nachzug der Abodatei - das Vervollstaendigen
- * schreibt nur die Konfiguration. */
-function bw_config_speichern($cfg, $nebenwege = true)
+/* Bis 0.9.56 gab es hier den Schalter $nebenwege = false fuer bw_config_vervollstaendigen() (Datei und
+ * Zweitschrift, aber kein Vormerken des alten Praefixes und kein Nachzug der Abodatei). Seit 0.9.57 geht das
+ * Vervollstaendigen ueber bw_config_datei_schreiben() und braucht ihn nicht mehr. */
+function bw_config_speichern($cfg)
 {
     $p = bw_paths();
     /* M6: das bisherige Praefix VOR dem Schreiben lesen. */
@@ -601,7 +641,21 @@ function bw_config_speichern($cfg, $nebenwege = true)
     $bw_neu_pr = isset($cfg['mqtt_topic']) ? trim((string) $cfg['mqtt_topic'], '/') : '';
     // 0600, nicht 0644: in dieser Datei steht das Aktionstoken, mit dem der
     // Miniserver den unangemeldeten Endpunkt erreicht.
-    if (!bw_json_schreiben($p['config'], $cfg, 0600)) { return false; }
+    if (!bw_config_datei_schreiben($p['config'], $p['sicherung'], $cfg)) { return false; }
+    if ($bw_alt_pr !== '' && $bw_neu_pr !== '' && $bw_alt_pr !== $bw_neu_pr) {
+        bw_praefix_alt_merken($bw_alt_pr);
+    }
+    /* M3: die Abodatei folgt dem geltenden Praefix. */
+    bw_abo_datei($bw_neu_pr !== '' ? $bw_neu_pr : 'bewaesserung', true);
+    return true;
+}
+
+/** Die Konfiguration $cfg nach $config schreiben (0600) und die Zweitschrift $zweit nachziehen - der Schreibweg von
+ *  bw_config_speichern(), seit 0.9.57 mit den Pfaden als Argument, damit bw_config_vervollstaendigen_datei() ihn
+ *  auch an einer Probedatei geht. Rueckgabe: false, wenn sich die Konfiguration nicht schreiben liess. */
+function bw_config_datei_schreiben($config, $zweit, $cfg)
+{
+    if (!bw_json_schreiben($config, $cfg, 0600)) { return false; }
     /* Die Zweitschrift wird nur erneuert, wenn der gespeicherte Stand ein
      * Aktionstoken traegt. Sonst kopierte ein Speichervorgang auf einer
      * beschaedigten Anlage die Vorgabenlage darueber - und der letzte gute
@@ -609,19 +663,13 @@ function bw_config_speichern($cfg, $nebenwege = true)
      * Fehlschlag hier heisst, dass es beim naechsten Schaden nichts zu holen
      * gibt. */
     if (isset($cfg['aktionstoken']) && trim((string) $cfg['aktionstoken']) !== '') {
-        if (@copy($p['config'], $p['sicherung'])) {
-            @chmod($p['sicherung'], 0600);
+        if (@copy($config, $zweit)) {
+            @chmod($zweit, 0600);
         } else {
-            bw_log('Die Zweitschrift ' . basename($p['sicherung'])
+            bw_log('Die Zweitschrift ' . basename($zweit)
                  . ' liess sich nicht erneuern.');
         }
     }
-    if (!$nebenwege) { return true; }
-    if ($bw_alt_pr !== '' && $bw_neu_pr !== '' && $bw_alt_pr !== $bw_neu_pr) {
-        bw_praefix_alt_merken($bw_alt_pr);
-    }
-    /* M3: die Abodatei folgt dem geltenden Praefix. */
-    bw_abo_datei($bw_neu_pr !== '' ? $bw_neu_pr : 'bewaesserung', true);
     return true;
 }
 
@@ -3132,22 +3180,10 @@ function bw_ziele_x2_post(array $werte)
     return isset($p['tts_ziel_art']) ? $p : null;
 }
 
-/** Welle Mehrfach-Ziele (0.9.45): beim Zurueckspielen die Spaetliste (Stueck d) - $neu aus bw_sicherung_lesen(), $jetzt
- *  die geltende Einstellung. Rueckgabe: array(neu, Namen der behaltenen Schluessel). */
-function bw_sicherung_spaet($neu, $jetzt)
-{
-    $liste = array();
-    /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
-     * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
-     * heisst "keine weiteren Ziele" und wird so uebernommen. */
-    $bw_spaete = array();
-    if (isset($neu['tts']) && is_array($neu['tts']) && function_exists('ansage_sicherung_spaet')) {
-        list($neu['tts'], $bw_spaete) = ansage_sicherung_spaet($neu['tts'],
-            (isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : null);
-    }
-    foreach ($bw_spaete as $bw_sn) { $liste[] = $bw_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
-    return array($neu, $liste);
-}
+/* Hier stand bis 0.9.56 bw_sicherung_spaet() (Welle Mehrfach-Ziele, 0.9.45): fehlte die Liste der weiteren Ziele
+ * (tts.ziele) in einer Sicherung, galten die jetzigen weiter. Seit 0.9.57 sagt das die Beschreibung fuer das
+ * Sicherungsmodul ('fehlt' => 'behalten' am Unterschluessel ziele, bw_sicherung_beschreibung()); das Modul nennt
+ * den Namen tts.ziele in der Meldung. */
 
 /** Die Anlaesse: Haken in der Konfiguration => Kennung der Texte (EINST.L_ANSAGE_<K>, TEST.A_ANSAGE_<K>). */
 /* ---------------- Sprachansagen: Regeln aus dem Stamm (0.9.46, Welle S2, Stamm sprachausgabe.php 1.3.2) ----------------
@@ -3458,232 +3494,232 @@ function bw_plugin_fassung()
     return $f;
 }
 
-function bw_sicherung_bauen()
+/* ==================================================================
+ * EINSTELLUNGEN SICHERN UND ZURUECKSPIELEN (seit 0.9.57: gemeinsames Sicherungsmodul)
+ * ==================================================================
+ *
+ * Bis 0.9.56 baute und las diese Linie ihre Sicherung selbst (bw_sicherung_bauen(), bw_sicherung_lesen()). Seit
+ * 0.9.57 tun das sicherung_bauen() und sicherung_zurueckspielen() des gemeinsamen Moduls (Abschrift sicherung.php,
+ * Auftrag des Hausherrn 12.11.2026: alle Plugins verhalten sich gleich); diese Linie uebergibt ihre Beschreibung
+ * (bw_sicherung_beschreibung()).
+ *
+ * Die Datei seit 0.9.57: Kopf _hinweis, _plugin = LoxBerry-Plugin-Bewaesserung (Name des Repositorys, wie bei den
+ * Linien, die nie ein _plugin schrieben: Ecowitt-Weiche, FerienFeiertage), _fassung, _stand, bei Bedarf _warnung
+ * (nur Namen); danach jede Einstellung oben - samt Aktionstoken, ohne Ventil-Token fuer GARDENA, ohne Sprechtoken
+ * und ohne den Vermerk ansage_token_herkunft -, dazu die Teile zonen (zonen.json) und quellen
+ * (quellen_zuordnung.json).
+ *
+ * Aeltere Sicherungen: 0.9.22 bis 0.9.56 schrieben _stand, _fassung (die Zahl 2), config (die Einstellungen), zonen
+ * und quellen, kein _plugin. Das Modul erkennt sie ueber bw_sicherung_alt_erkennen() ('uebersetzer'), packt config
+ * aus ('huelle') und laesst zonen und quellen daneben stehen ('neben_huelle', Modul 1.2.6). Sicherungen ganz ohne
+ * Kopf (0.9.16 bis 0.9.21, die Konfiguration flach) werden abgewiesen wie in jeder Linie (Regel 1 des Moduls,
+ * Entscheidung des Hausherrn 15.11.2026). Bis 0.9.56 sagte ein Kommentar in bw_sicherung_lesen() zu, eine solche
+ * flache Datei werde angenommen ("Zwei Gestalten werden angenommen"); gemessen 15.11.2026 wies 0.9.57 sie trotzdem
+ * ab, weil ihr Einstellungen fehlten, die erst spaeter dazukamen - ebenso jede Sicherung von 0.9.22 bis 0.9.48
+ * (PHP 7.4 und 8.4, Sicherungen aller Fassungen mit dem Knopf der Fassung gebaut: 9 von 42 angenommen).
+ *
+ * Wie bisher: jeder Wert geht durch bw_wert_taugt() und bw_wert_pruefen() (dieselben Grenzen wie das Formular) und
+ * wird in die Art der Vorgabe gebracht; Sprachausgabe und Regeln prueft das Sprachmodul; Zonen und
+ * Quellenzuordnung pruefen bw_zonen_pruefen() und bw_quellen_pruefen(); eine Datei mit Ventil-Token oder
+ * Sprechtoken wird abgewiesen, die gespeicherten bleiben; fehlt die Liste tts.ziele, bleibt die geltende; eine
+ * Beanstandung in einem Teil laesst alle drei unberuehrt; alle Beanstandungen werden gesammelt. Ein Teil, der in
+ * der Datei fehlt, bleibt, wie er ist; einer, der darin steht, ersetzt den gespeicherten.
+ *
+ * Neu mit dem Modul, in allen Linien gleich: der Haken "Zurueckspielen bestaetigen"; eine unbekannte Einstellung
+ * wird verworfen und genannt, statt die ganze Datei abzuweisen; ein leerer Wert ueberschreibt keinen bestehenden
+ * (bis 0.9.56 nur beim Aktionstoken); eine Einstellung, die die Fassung der Datei noch nicht kannte, behaelt ihren
+ * geltenden Wert und wird genannt (Regel 6 der Entscheidungen vom 12.11.2026; bis 0.9.56 wurde die Datei dann
+ * abgewiesen, nur sechs spaete Schluessel gingen still auf die Werkseinstellung, das Ventil-Token blieb); eine
+ * Einstellung der geltenden Konfiguration, die das Plugin nicht kennt, faellt beim Zurueckspielen weg und wird
+ * genannt.
+ */
+
+/** Was einer Sicherung mit Kopf fehlen darf: die Einstellungen, die eine Vorfassung noch nicht schrieb (gemessen
+ *  15.11.2026 an den Sicherungen aller 36 Fassungen 0.9.22 bis 0.9.57, je mit dem Knopf der Fassung gebaut;
+ *  ansage_regeln steht seit 0.9.46 nur nach einem Speichern im Formular darin). Sie behalten den geltenden Wert,
+ *  und die Meldung nennt sie. Die uebrigen 32 Einstellungen schrieb jede dieser Fassungen; fehlt eine, wird die
+ *  Datei abgewiesen. */
+function bw_sicherung_spaet_schluessel()
 {
-    /* Gardena-1 (Verbesserungsbau 01.10.2026): das Ventil-Token geht NIE in
-     * eine Sicherung (Auftrag: wie ein Kennwort). Beim Zurueckspielen gilt
-     * das gespeicherte weiter; eine Datei, die eines traegt, wird abgewiesen
-     * (bw_sicherung_lesen()). */
-    $bw_sc = bw_config();
-    unset($bw_sc['gardena_token']);
-    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung. */
-    unset($bw_sc['ansage_token_herkunft']);     // 0.9.46
-    if (isset($bw_sc['tts']) && is_array($bw_sc['tts'])) {
-        $bw_sc['tts'] = ansage_sicherung_bereinigen($bw_sc['tts']);
+    return array('ecowitt_regen', 'ecowitt_ordner', 'ecowitt_token',             // seit 0.9.36
+                 'gardena_ein', 'gardena_ordner', 'gardena_max_min',             // seit 0.9.37
+                 'ansage_ende', 'ansage_ventil', 'tts',                          // seit 0.9.38
+                 'befehle_mqtt_ein',                                             // seit 0.9.44
+                 'ansage_regeln',                                                // seit 0.9.46, nur nach Speichern
+                 'ansage_sperre',                                                // seit 0.9.49
+                 'befehl_ventil_ein', 'befehl_ventil_max_min',                   // seit 0.9.52
+                 'zisterne_einheit', 'zisterne_volumen_l', 'zisterne_reserve_prozent');     // seit 0.9.52
+}
+
+/**
+ * Merkmal der Sicherungen 0.9.22 bis 0.9.56, die noch kein _plugin trugen (Rueckruf 'uebersetzer' des Moduls):
+ * _fassung ist die Zahl 2, und _stand beginnt mit dem Titel des Plugins und einem Leerzeichen. Den Titel nahm jede
+ * dieser Fassungen aus ALLG.TITEL ihrer Sprachdatei, in allen 36 Fassungen gleich (gemessen 15.11.2026 an den
+ * Archiven 0.9.22 bis 0.9.57): de "Bewässerung vorausschauend", en "Predictive irrigation". Er steht deshalb hier
+ * fest und nicht aus der heutigen Sprachdatei: ein spaeter geaenderter Titel aendert die alten Dateien nicht.
+ * Eindeutig: gemessen 15.11.2026 ueber jede Textdatei der hoechsten Fassung von 59 anderen Linien traegt keine den
+ * Titel und keine ein _fassung mit einer Zahl (Regeln/05, Abschnitt "Modul 1.2.6").
+ * Rueckgabe: die Datei unveraendert (ausgepackt wird im Modul) oder null - dann weist das Modul sie ab.
+ */
+function bw_sicherung_alt_erkennen($daten)
+{
+    if (!is_array($daten) || !array_key_exists('_fassung', $daten) || $daten['_fassung'] !== 2
+        || !isset($daten['_stand']) || !is_string($daten['_stand'])) {
+        return null;
+    }
+    foreach (array('Bewässerung vorausschauend', 'Predictive irrigation') as $titel) {
+        if (strpos($daten['_stand'], $titel . ' ') === 0) { return $daten; }
+    }
+    return null;
+}
+
+/** Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul. */
+function bw_sicherung_beschreibung()
+{
+    $p = bw_paths();
+    $vorgaben = bw_vorgaben();
+    $schluessel = array(
+        /* Der Block der Sprachausgabe (seit 0.9.38): eine Sicherung dieses Plugins traegt nie ein Sprechtoken -
+         * traegt die Datei eines, wird sie abgewiesen (gemessen am Block der DATEI, $roh: Regel 3 des Moduls setzt
+         * ein leeres Feld vorher auf den geltenden Wert). Fehlt die Liste der weiteren Ziele (Sicherung vor
+         * 0.9.45), bleibt die geltende. */
+        'tts' => sicherung_block(array_merge(array_keys(ansage_werk_block()), ansage_geheim()),
+                                 array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))
+                                                  + array('fehlt' => 'behalten')))
+                 + array(
+                     'sichern' => 'ansage_sicherung_bereinigen',
+                     'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+                         $m = ansage_sicherung_mangel($roh);
+                         if ($m) {
+                             return sprintf(bw_t('EINST.SICH_TTS_TOKEN'), bw_e(implode(', ', $m)));
+                         }
+                         $g = '';
+                         if (ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, bw_ansage_modi()) === null) {
+                             return sprintf(bw_t('EINST.SICH_TTS'), bw_e(ansage_kennung_text($g, bw_ansage_k())));
+                         }
+                         return '';
+                     },
+                     'wandeln' => function ($w) {
+                         $g = '';
+                         return ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, bw_ansage_modi());
+                     }),
+        /* "Wann gesprochen wird" (seit 0.9.46): ungueltig = abgewiesen (seit 0.9.49), gueltig = in der Form von
+         * ansage_regeln_wert() uebernommen. */
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())) + array(
+            'pruefen' => function ($w) {
+                $g = '';
+                return ansage_regeln_wert($w, $g) === null
+                    ? sprintf(bw_t('EINST.SICH_TTS'),
+                              bw_e(ansage_kennung_text($g !== '' ? $g : 'M_R_BLOCK', bw_ansage_k())))
+                    : '';
+            },
+            'wandeln' => function ($w) { $g = ''; return ansage_regeln_wert($w, $g); }),
+    );
+    /* Jeder einfache Wert in die Art seiner Vorgabe, nach bestandener Pruefung (wie bis 0.9.56): sonst stuende nach
+     * dem Zurueckspielen eine Zeichenkette da, wo das Formular eine Zahl schreibt. */
+    foreach ($vorgaben as $k => $soll) {
+        if (is_array($soll) || isset($schluessel[$k])) { continue; }
+        $schluessel[$k] = array('wandeln' => function ($w) use ($soll) {
+            if (is_int($soll)) { return (int) $w; }
+            if (is_float($soll)) { return (float) $w; }
+            return (string) $w;
+        });
+    }
+    foreach (bw_sicherung_spaet_schluessel() as $s) {
+        if (!isset($schluessel[$s])) { $schluessel[$s] = array(); }
+        $schluessel[$s]['fehlt'] = 'behalten';
     }
     return array(
-        /* Die Fassung kommt aus plugin.cfg, nicht aus einer zweiten
-         * Konstante im Quelltext: eine Fassungsnummer hat EINE Quelle. */
-        '_stand'   => sprintf(bw_t('EINST.SICH_STAND'), bw_t('ALLG.TITEL'),
-                              bw_plugin_fassung(), date('Y-m-d H:i:s')),
-        '_fassung' => 2,
-        'config'   => $bw_sc,
-        'zonen'    => bw_zonen(),
-        'quellen'  => bw_quellen(),
+        'kennzeichen' => 'LoxBerry-Plugin-Bewaesserung',
+        'uebersetzer' => 'bw_sicherung_alt_erkennen',
+        'huelle' => 'config',
+        'neben_huelle' => array('zonen', 'quellen'),
+        /* _fassung aus bw_plugin_fassung() (Plugin-Datenbank, sonst plugin.cfg) - EINE Quelle; das Modul faellt
+         * ohne Antwort auf dieselben beiden zurueck. */
+        'fassung' => 'bw_plugin_fassung',
+        'home' => (string) $p['home'], 'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => $vorgaben,
+        'schluessel' => $schluessel,
+        /* Das Ventil-Token fuer GARDENA geht nie in eine Sicherung (wie ein Kennwort, seit Gardena-1); der Vermerk
+         * ansage_token_herkunft ebenso. Beide behalten beim Zurueckspielen ihren geltenden Wert. */
+        'nie_aus_datei' => array('gardena_token', 'ansage_token_herkunft'),
+        'teile' => array('zonen' => 'bw_sicherung_zonen', 'quellen' => 'bw_sicherung_quellen'),
+        'pruefen' => function ($k, $w) {
+            return (bw_wert_taugt($w) && bw_wert_pruefen($k, $w)) ? '' : sprintf(bw_t('EINST.SICH_WERT'), bw_e($k));
+        },
+        'quer' => 'bw_sicherung_quer',
+        'vorbereiten' => 'bw_sicherung_vorbereiten',
+        'jetzt' => 'bw_config',
+        't' => 'bw_t',
     );
 }
 
-function bw_sicherung_lesen($roh, &$namen = null)
+/** Die Teile der Sicherung neben den Einstellungen, wie sie gespeichert sind. */
+function bw_sicherung_teile()
 {
-    /* X-3 (Verbesserungsbau 30.09.2026): zu jeder Beanstandung ein NAME
-     * (config.<schluessel>, zonen[<nr>].<schluessel>, quellen...), nie ein
-     * Wert - bw_rueckspiel_altwerte() warnt damit beim Sichern. */
-    $namen = array();
-    $mangel = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        $namen[] = '(json)';
-        return array(null, array(bw_t('EINST.SICH_KEIN_JSON')), 0, null, null);
-    }
-    /* Zwei Gestalten werden angenommen.
-     *
-     * Fassung 2 (seit 0.9.22) traegt drei Abschnitte; eine flache Liste ist
-     * eine Datei aus 0.9.21 oder aelter und dann eben nur die
-     * Konfiguration. Eine alte Sicherung muss sich zurueckspielen lassen -
-     * sonst waere die Umstellung ein stiller Datenverlust. */
-    $zonen_roh = null;
-    $quellen_roh = null;
-    if (isset($daten['config']) && is_array($daten['config'])) {
-        /* O5 (Durchgang 30.09.2026): ein fremder oberster Abschnitt wird
-         * abgelehnt, nicht still uebergangen. */
-        foreach (array_keys($daten) as $bw_ok) {
-            /* X-3: '_warnung' ist eine Kopfzeile wie '_stand'. */
-            if (!in_array((string) $bw_ok, array('_stand', '_fassung', '_hinweis', '_warnung',
-                                                 'config', 'zonen', 'quellen'), true)) {
-                $mangel[] = sprintf(bw_t('EINST.SICH_ABSCHNITT_FREMD'),
-                                    htmlspecialchars((string) $bw_ok, ENT_QUOTES, 'UTF-8'));
-                $namen[] = substr((string) $bw_ok, 0, 60);
-            }
-        }
-        $zonen_roh = isset($daten['zonen']) ? $daten['zonen'] : null;
-        $quellen_roh = isset($daten['quellen']) ? $daten['quellen'] : null;
-        $daten = $daten['config'];
-    } else {
-        /* Der lesbare Kopf gehoert nicht zur Konfiguration. */
-        unset($daten['_stand'], $daten['_fassung'], $daten['_warnung']);
-    }
-    $vorgaben = bw_vorgaben();
-    $neu = $vorgaben;
-    $bekannt = array_keys($neu);
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        /* Gardena-1: eine Sicherung traegt nie ein Ventil-Token - eine Datei,
-         * die eines traegt, wird abgewiesen (Name, nie der Wert). Ein leeres
-         * Feld ist keines und wird uebergangen. */
-        /* Nr. 36 b (Stufe 2): der Block der Sprachausgabe. Eine Sicherung dieses Plugins
-         * traegt nie ein Sprechtoken - traegt die Datei eines (auch als Liste, Zahl, null),
-         * stammt sie nicht aus "Einstellungen sichern" und wird abgewiesen; die geltenden
-         * bleiben (index.php). Ausgabeart, Adresse und Vorlage werden wie im Formular
-         * geprueft (Heimnetz, Entwurf F1). */
-        if ($k === 'ansage_token_herkunft') { continue; }     // S2: nie aus einer Datei
-        if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
-            $s2_g = '';
-            $s2_r = ansage_regeln_wert($w, $s2_g);
-            if ($s2_r === null) {     // 0.9.49: bis 0.9.48 stillschweigend uebergangen, die Datei galt als heil
-                $mangel[] = sprintf(bw_t('EINST.SICH_TTS'),
-                    htmlspecialchars(ansage_kennung_text($s2_g !== '' ? $s2_g : 'M_R_BLOCK', bw_ansage_k()), ENT_QUOTES, 'UTF-8'));
-                $namen[] = 'config.ansage_regeln';
-                continue;
-            }
-            $neu['ansage_regeln'] = $s2_r;
-            continue;
-        }
-        if ($k === 'tts') {
-            $bw_tm = ansage_sicherung_mangel($w);
-            if ($bw_tm) {
-                $mangel[] = sprintf(bw_t('EINST.SICH_TTS_TOKEN'),
-                                    htmlspecialchars(implode(', ', $bw_tm), ENT_QUOTES, 'UTF-8'));
-                $namen = array_merge($namen, $bw_tm);
-                continue;
-            }
-            $bw_tg = '';
-            $bw_tp = ansage_wert_pruefen($w, $bw_tg, bw_ansage_modi());
-            if ($bw_tp === null) {
-                $mangel[] = sprintf(bw_t('EINST.SICH_TTS'),
-                    htmlspecialchars(ansage_kennung_text($bw_tg, bw_ansage_k()), ENT_QUOTES, 'UTF-8'));
-                $namen[] = 'config.tts';
-                continue;
-            }
-            list($neu['tts']) = ansage_vervollstaendigen($bw_tp, 'aus');
-            $anzahl++;
-            continue;
-        }
-        if ($k === 'gardena_token') {
-            if (!(is_string($w) && $w === '')) {
-                $mangel[] = bw_t('EINST.SICH_GARDENA_TOKEN');
-                $namen[] = 'config.gardena_token';
-            }
-            continue;
-        }
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(bw_t('EINST.SICH_FREMD'),
-                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
-            $namen[] = 'config.' . substr((string) $k, 0, 60);
-            continue;
-        }
-        if (!bw_wert_taugt($w) || !bw_wert_pruefen($k, $w)) {
-            $mangel[] = sprintf(bw_t('EINST.SICH_WERT'),
-                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
-            $namen[] = 'config.' . (string) $k;
-            continue;
-        }
-        /* Art angleichen, Wert nicht aendern: die Pruefung oben hat
-         * schon entschieden, dass er zulaessig ist. Ohne das stuende
-         * nach dem Zurueckspielen eine Zeichenkette da, wo das Formular
-         * eine Zahl schreibt. */
-        $soll = $vorgaben[$k];
-        if (is_int($soll))        { $w = (int) $w; }
-        elseif (is_float($soll))  { $w = (float) $w; }
-        else                      { $w = (string) $w; }
-        $neu[$k] = $w;
-        $anzahl++;
-    }
-    if ($anzahl === 0) {
-        $mangel[] = bw_t('EINST.SICH_LEER');
-        $namen[] = 'config';
-    }
-    /* Die beiden anderen Teile werden GEPRUEFT, auch wenn die Konfiguration
-     * schon beanstandet ist: der Anwender bekommt alle Beanstandungen auf
-     * einmal, nicht die erste. */
-    $zonen = null;
-    if ($zonen_roh !== null) {
-        $bw_zn = array();
-        list($zonen, $zm) = bw_zonen_pruefen($zonen_roh, $bw_zn);
-        $mangel = array_merge($mangel, $zm);
-        $namen = array_merge($namen, $bw_zn);
-    }
-    $quellen = null;
-    if ($quellen_roh !== null) {
-        $bw_qn = array();
-        list($quellen, $qm) = bw_quellen_pruefen($quellen_roh, $bw_qn);
-        $mangel = array_merge($mangel, $qm);
-        $namen = array_merge($namen, $bw_qn);
-    }
-    if ($mangel) {
-        /* Eine Beanstandung in EINEM Teil laesst ALLE drei unberuehrt. */
-        return array(null, $mangel, $anzahl, null, null);
-    }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
-     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
-     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
-     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
-     * zurueck - quittiert mit "1 Wert uebernommen".
-     *
-     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
-     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
-     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
-     * Bestand ausgerollt (30 Linien).
-     *
-     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
-     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
-     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
-     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
-    $fehlend = array();
-    foreach (array_keys(bw_vorgaben()) as $fk) {
-        /* Gardena-1: das Ventil-Token fehlt in jeder Sicherung mit Absicht. */
-        /* Gruppe 2 (0.9.44): der Haken der Befehlsbruecke fehlt in jeder Sicherung vor 0.9.44 - er bleibt
-         * dann aus (Vorgabe 0), das ist kein Mangel (Entwurf bw 3.3: Sicherung verträglich). */
-        /* 0.9.52: ebenso die neuen Schluessel dieser Fassung - eine aeltere Sicherung kennt sie nicht, sie
-         * bleiben dann auf Werk (Ventilbefehl aus, keine Zisterne). */
-        if ($fk !== 'gardena_token' && $fk !== 'befehle_mqtt_ein' && !array_key_exists($fk, $daten)
-            && !in_array($fk, array('befehl_ventil_ein', 'befehl_ventil_max_min', 'zisterne_einheit',
-                                    'zisterne_volumen_l', 'zisterne_reserve_prozent'), true)) {
-            $fehlend[] = $fk;
-        }
-    }
-    if ($fehlend) {
-        $mangel[] = sprintf(bw_t('EINST.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
-    }
-    return array($neu, $mangel, $anzahl, $zonen, $quellen);
+    return array('zonen' => bw_zonen(), 'quellen' => bw_quellen());
 }
 
+/** Teil "zonen" (Rueckruf des Moduls): geprueft wie bis 0.9.56. Rueckgabe array(Liste|null, Beanstandungen). */
+function bw_sicherung_zonen($w)
+{
+    $n = array();
+    list($z, $m) = bw_zonen_pruefen($w, $n);
+    return $m ? array(null, $m) : array($z, array());
+}
+
+/** Teil "quellen" (Rueckruf des Moduls): geprueft wie bis 0.9.56. Rueckgabe array(Zuordnung|null, Beanstandungen). */
+function bw_sicherung_quellen($w)
+{
+    $n = array();
+    list($q, $m) = bw_quellen_pruefen($w, $n);
+    return $m ? array(null, $m) : array($q, array());
+}
+
+/** Rueckruf 'quer': eine Sicherung dieses Plugins traegt nie ein Ventil-Token fuer GARDENA (Gardena-1). Traegt die
+ *  Datei eines, stammt sie nicht aus "Einstellungen sichern" und wird abgewiesen (Name, nie der Wert); das
+ *  gespeicherte bleibt. Ein leeres Feld ist keines. $daten: die Datei vor Regel 2 und 3. */
+function bw_sicherung_quer($neu, $r, $daten)
+{
+    if (is_array($daten) && array_key_exists('gardena_token', $daten)
+        && !(is_string($daten['gardena_token']) && $daten['gardena_token'] === '')) {
+        return array(array('gardena_token', bw_t('EINST.SICH_GARDENA_TOKEN')));
+    }
+    return array();
+}
+
+/** Rueckruf 'vorbereiten' (vor dem Speichern): der Block tts wird vervollstaendigt wie bis 0.9.56, und die geltenden
+ *  Sprechtoken bleiben (die Sicherung traegt keine). Kam er nicht aus der Datei, steht dort schon der geltende. */
+function bw_sicherung_vorbereiten($neu, $jetzt, $r)
+{
+    if (!in_array('tts', $r['fehlt_behalten'], true) && isset($neu['tts']) && is_array($neu['tts'])) {
+        $jt = (is_array($jetzt) && isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : array();
+        list($tv) = ansage_vervollstaendigen($neu['tts'], 'aus');
+        $neu['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
+    }
+    return $neu;
+}
+
+/** Die Sicherung als Feld (Knopf "Einstellungen sichern"): Kopf und Einstellungen baut das Modul, dazu die Teile.
+ *  Wuerde das eigene Zurueckspielen sie abweisen, traegt sie _warnung mit den Namen (Modul, wie bis 0.9.56 X-3). */
+function bw_sicherung_bauen()
+{
+    return sicherung_bauen(bw_sicherung_beschreibung(), bw_config(), bw_sicherung_teile());
+}
 
 /**
  * X-3 (Verbesserungsbau 30.09.2026): wuerde die eigene Sicherung beim
- * Zurueckspielen abgewiesen? Gebaut wie der Knopf "Einstellungen sichern"
- * (bw_sicherung_bauen()) und durch DIESELBE Pruefung geschickt wie das
- * Zurueckspielen (bw_sicherung_lesen()). Rueckgabe: die Namen der
+ * Zurueckspielen abgewiesen? Seit 0.9.57 ueber das Modul: die Datei, die
+ * "Einstellungen sichern" liefert, gegen dieselbe Pruefung wie das
+ * Zurueckspielen (sicherung_selbstpruefung()). Rueckgabe: die Namen der
  * beanstandeten Werte (nie die Werte), leer = besteht.
- * Der Name enthaelt bewusst nicht "sicherung": das Kettenwerkzeug
- * sicherung_pruefen nimmt die erste Funktion *_sicherung* mit json_encode
- * fuer die Ausfuhr.
  */
 function bw_rueckspiel_altwerte()
 {
-    $j = json_encode(bw_sicherung_bauen(),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($j === false) {
-        return array('(json)');
-    }
-    $namen = array();
-    $erg = bw_sicherung_lesen($j, $namen);
-    if ($erg[0] !== null) {
-        return array();
-    }
-    return $namen ? array_values(array_unique($namen)) : array('(unbekannt)');
+    $b = bw_sicherung_beschreibung();
+    $cfg = bw_config();
+    return sicherung_selbstpruefung($b, sicherung_bauen($b, $cfg, bw_sicherung_teile()), $cfg);
 }
 
 /* ==================================================================

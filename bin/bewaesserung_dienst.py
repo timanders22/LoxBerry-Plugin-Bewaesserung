@@ -294,7 +294,9 @@ VORGABEN = {
     "ansage_ende": 1, "ansage_ventil": 1, "ansage_sperre": 1,
     # 0.9.49: nur "tts", wie bw_vorgaben(). ansage_regeln und ansage_token_herkunft standen seit 0.9.46 nur hier,
     # die Zeile "Vorgaben" im Reiter Test zeigte dadurch ein rotes Kreuz. Der Dienst liest keinen der drei.
-    "tts": None,
+    # 0.9.57: ansage_regeln und ansage_token_herkunft wieder hier - jetzt auch in bw_vorgaben() (die Oberflaeche
+    # schreibt beide in bewaesserung.json; Regeln/05). Wie "tts" nur als Namen: der Dienst liest keinen davon.
+    "tts": None, "ansage_regeln": None, "ansage_token_herkunft": None,
     #
     # Gruppe 2 / MQTT (0.9.44): der Haken "Befehle ueber MQTT annehmen" der gemeinsamen Befehlsbruecke
     # (PHP, bin/befehlsbruecke.php). AUS ab Werk. Der Dienst liest ihn nie; er steht hier, damit beide

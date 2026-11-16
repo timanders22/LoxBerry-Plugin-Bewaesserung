@@ -1242,20 +1242,17 @@ if ($bw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel'
  * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
  * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
  * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
- * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das.
+ *
+ * Seit 0.9.57 baut das gemeinsame Sicherungsmodul Kopf und Inhalt
+ * (bw_sicherung_bauen(), Beschreibung bw_sicherung_beschreibung()): _hinweis,
+ * _plugin = LoxBerry-Plugin-Bewaesserung, _fassung, _stand, bei Bedarf
+ * _warnung (X-3: das eigene Zurueckspielen wiese die Datei ab - nur Namen,
+ * nie Werte), danach jede Einstellung oben und die Teile zonen und quellen.
+ * Bis 0.9.56 lagen die Einstellungen unter "config", ohne _plugin. */
 if ($bw_post && isset($_POST['bw_sichern'])) {
-    /* X-3 (Verbesserungsbau 30.09.2026): besteht ein gespeicherter Wert das
-     * eigene Zurueckspielen nicht, geht die Sicherung trotzdem vollstaendig
-     * hinaus - mit '_warnung' (nur Namen, nie Werte). */
-    $bw_sich = bw_sicherung_bauen();
-    $bw_sw = bw_rueckspiel_altwerte();
-    if ($bw_sw) {
-        $bw_sich = array('_warnung' => sprintf(bw_t('EINST.SICH_ALTWERTE_DATEI'),
-                                               implode(', ', $bw_sw))) + $bw_sich;
-    }
-    $bw_js = json_encode($bw_sich,
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($bw_js !== false) {
+    $bw_js = sicherung_json(bw_sicherung_bauen());
+    if ($bw_js !== '') {
         while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="bewaesserung_einstellungen_'
@@ -1268,90 +1265,70 @@ if ($bw_post && isset($_POST['bw_sichern'])) {
 
 /* ---------------- Einstellungen zurueckspielen ----------------
  *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen.
+ * Seit 0.9.57 ueber das gemeinsame Sicherungsmodul, in jeder Linie gleich.
+ * sicherung_eingang() prueft zuerst den Haken zurueck_ok (ohne ihn wird nichts
+ * gelesen und nichts geaendert), dann is_uploaded_file() - ohne diese Pruefung
+ * liesse sich jede Datei des Servers unterschieben - und die Groesse (256 KB
+ * wie bisher). sicherung_zurueckspielen() liest (eine Sicherung 0.9.22 bis
+ * 0.9.56 erkennt es am Merkmal, packt "config" aus und laesst zonen und
+ * quellen daneben stehen), prueft jeden Wert, verwirft Unbekanntes mit Namen
+ * und aendert bei einer Beanstandung gar nichts - auch nicht an Zonen und
+ * Quellenzuordnung. Gespeichert wird genau der Stand, den das Modul liefert
+ * (bw_config_speichern() zieht die Zweitschrift, das alte MQTT-Praefix und
+ * die Abodatei mit); danach im Rueckruf 'nachziehen' die Teile, die in der
+ * Datei stehen, jeder mit gelesenem Rueckgabewert, und der Satz zum Dienst.
  *
  * Dieser Zweig stand bis 0.9.18 als einziger schreibender Handler HINTER dem
  * Ladeblock. Er schrieb die Datei, aber $bw_cfg und $bw_token im Speicher
  * blieben die alten: die Seite meldete 'uebernommen' und zeigte daneben an
  * sechzehn Stellen die Werte von vorher, samt altem Token in der
- * Loxone-Adresse. Deshalb steht er jetzt bei den uebrigen Handlern. */
+ * Loxone-Adresse. Deshalb steht er bei den uebrigen Handlern. */
 if ($bw_post && isset($_POST['bw_zurueck'])) {
-    if (!isset($_FILES['bw_sicherung']) || !is_array($_FILES['bw_sicherung'])
-        || !isset($_FILES['bw_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['bw_sicherung']['tmp_name'])) {
-        $bw_fehler[] = bw_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['bw_sicherung']['size'] > 262144) {
-        $bw_fehler[] = bw_t('EINST.SICH_ZU_GROSS');
-    } else {
-        list($bw_neu, $bw_mangel, $bw_n, $bw_szonen, $bw_squellen) = bw_sicherung_lesen(
-            (string) @file_get_contents($_FILES['bw_sicherung']['tmp_name']));
-        if ($bw_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $bw_fehler[] = bw_t('EINST.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $bw_mangel);
-        } else {
-            /* Traegt die Datei KEIN Aktionstoken, wird das laufende behalten.
-             * bw_sicherung_lesen() baut auf den Vorgaben auf, und dort ist es
-             * leer: eine von Hand gekuerzte Sicherung hat es bis 0.9.18 beim
-             * Zurueckspielen stillschweigend geloescht. Jede im Miniserver
-             * eingetragene Adresse antwortete danach mit 403, und weil ein
-             * virtueller Eingang die Antwort nicht auswertet, blieb der
-             * Ausfall stumm. */
-            $bw_altcfg = bw_config();
-            if (trim((string) $bw_neu['aktionstoken']) === ''
-                && trim((string) $bw_altcfg['aktionstoken']) !== '') {
-                $bw_neu['aktionstoken'] = $bw_altcfg['aktionstoken'];
-                $bw_meldungen[] = bw_t('EINST.SICH_TOKEN_BEHALTEN');
-            }
-            /* Gardena-1: das Ventil-Token steht nie in einer Sicherung, eine
-             * Datei mit Token ist oben abgewiesen. Es gilt das gespeicherte. */
-            $bw_neu['gardena_token'] = isset($bw_altcfg['gardena_token'])
-                ? (string) $bw_altcfg['gardena_token'] : '';
-            /* Nr. 36 b: die Sprechtoken stehen nie in einer Sicherung, eine Datei mit Token
-             * ist oben abgewiesen. Es gelten die gespeicherten - auch bei einer Sicherung
-             * aus einer Fassung ohne Sprachausgabe (dort gilt fuer den Rest die Vorgabe). */
-            $bw_neu['tts'] = ansage_sicherung_tokens_behalten(
-                (isset($bw_neu['tts']) && is_array($bw_neu['tts'])) ? $bw_neu['tts'] : ansage_vorgaben('aus'),
-                (isset($bw_altcfg['tts']) && is_array($bw_altcfg['tts'])) ? $bw_altcfg['tts'] : array());
-            /* Welle Mehrfach-Ziele (0.9.45): fehlt die Liste der weiteren Ziele in der Sicherung (aeltere Fassung),
-             * gelten die jetzigen weiteren Ziele (bw_sicherung_spaet(), genannt im Hinweis). */
-            list($bw_neu, $bw_spaet) = bw_sicherung_spaet($bw_neu, $bw_altcfg);
-            if (bw_config_speichern($bw_neu)) {
-                $bw_meldungen[] = sprintf(bw_t('EINST.SICH_UEBERNOMMEN'), $bw_n);
-                if ($bw_spaet) { $bw_meldungen[] = sprintf(bw_t('EINST.SICH_SPAET'), bw_e(implode(', ', $bw_spaet))); }
-                /* Die beiden anderen Teile, jeder mit gelesenem
-                 * Rueckgabewert. Sie sind zu diesem Zeitpunkt bereits
-                 * geprueft - bw_sicherung_lesen() haette sonst null
-                 * geliefert und dieser Zweig liefe gar nicht. */
-                if (is_array($bw_szonen)) {
-                    if (bw_zonen_speichern($bw_szonen)) {
-                        $bw_meldungen[] = sprintf(bw_t('EINST.SICH_ZONEN_OK'),
-                                                  count($bw_szonen));
-                    } else {
-                        $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'),
-                                               bw_e($bw_p['zonen']));
-                    }
+    $bw_sb = bw_sicherung_beschreibung();
+    list($bw_sroh, $bw_sr) = sicherung_eingang($bw_sb, $_POST, $_FILES, 'bw_sicherung');
+    if ($bw_sr === null) {
+        $bw_sb['speichern'] = function ($neu) { return bw_config_speichern($neu); };
+        $bw_sb['zweitschrift'] = function () {
+            $p = bw_paths();
+            return array($p['config'], $p['sicherung']);
+        };
+        $bw_sb['nachziehen'] = function ($neu, $jetzt, $r) use (&$bw_fehler, $bw_p) {
+            $h = array();
+            /* Die beiden anderen Teile, jeder mit gelesenem Rueckgabewert. Sie
+             * sind zu diesem Zeitpunkt bereits geprueft - sonst haette das Modul
+             * gar nicht gespeichert. Ein Teil, der in der Datei fehlt, bleibt. */
+            if (isset($r['teile']['zonen']) && is_array($r['teile']['zonen'])) {
+                if (bw_zonen_speichern($r['teile']['zonen'])) {
+                    $h[] = sprintf(bw_t('EINST.SICH_ZONEN_OK'), count($r['teile']['zonen']));
+                } else {
+                    $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['zonen']));
                 }
-                if (is_array($bw_squellen)) {
-                    if (bw_quellen_speichern($bw_squellen)) {
-                        $bw_meldungen[] = sprintf(bw_t('EINST.SICH_QUELLEN_OK'),
-                            count(isset($bw_squellen['felder']) ? $bw_squellen['felder'] : array()));
-                    } else {
-                        $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'),
-                                               bw_e($bw_p['quellen']));
-                    }
-                }
-                /* Der Dienst rechnet mit Zonen und Zuordnung. Er merkt die
-                 * Aenderung von selbst (_stand_der_dateien beobachtet beide
-                 * Dateien), aber der Anwender soll es lesen. */
-                $bw_meldungen[] = bw_t('EINST.SICH_DIENST');
-            } else {
-                $bw_fehler[] = bw_t('EINST.SICH_SCHREIBFEHLER');
             }
-        }
+            if (isset($r['teile']['quellen']) && is_array($r['teile']['quellen'])) {
+                $q = $r['teile']['quellen'];
+                if (bw_quellen_speichern($q)) {
+                    $h[] = sprintf(bw_t('EINST.SICH_QUELLEN_OK'),
+                                   count(isset($q['felder']) && is_array($q['felder']) ? $q['felder'] : array()));
+                } else {
+                    $bw_fehler[] = sprintf(bw_t('EINST.FEHLER_SPEICHERN'), bw_e($bw_p['quellen']));
+                }
+            }
+            /* Der Dienst rechnet mit Zonen und Zuordnung. Er merkt die
+             * Aenderung von selbst (_stand_der_dateien beobachtet beide
+             * Dateien), aber der Anwender soll es lesen. */
+            $h[] = bw_t('EINST.SICH_DIENST');
+            return $h;
+        };
+        $bw_sb['log'] = 'bw_log';
+        $bw_sr = sicherung_zurueckspielen($bw_sb, $bw_sroh);
+    }
+    /* Die Saetze des Moduls sind maskiert; die Meldungen dieser Seite werden roh ausgegeben. */
+    $bw_sm = sicherung_meldungen($bw_sb, $bw_sr);
+    foreach ($bw_sm['hinweise'] as $bw_s) {
+        $bw_meldungen[] = $bw_s;
+    }
+    foreach ($bw_sm['fehler'] as $bw_s) {
+        $bw_fehler[] = $bw_s;
     }
     $bw_tab = 'tab-settings';
 }
@@ -1848,6 +1825,7 @@ if ($bw_rahmen) {
     <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="file" name="bw_sicherung" accept=".json">
+    <?= sicherung_haken_zeile(bw_sicherung_beschreibung()) ?>
     <button data-role="none" class="sm-b sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_e(bw_t('EINST.K_ZURUECK')) ?></button>
   </form>
 </div>
