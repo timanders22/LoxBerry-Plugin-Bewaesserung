@@ -77,7 +77,8 @@ list($bw_mk_liegt, $bw_mk_gilt) = bw_upgrade_marke();
 if ($bw_mk_gilt) {
     $bw_mk_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
     if ($bw_mk_rahmen) {
-        LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
+        require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+        LBWeb::lbheader(plugin_kopftitel(bw_t('ALLG.TITEL'), __DIR__), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
     }
     echo '<div style="max-width:980px;margin:0 auto;'
        . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
@@ -1398,7 +1399,8 @@ $bw_rahmen = class_exists('LBWeb', false) && method_exists('LBWeb', 'lbheader');
 
 
 if ($bw_rahmen) {
-    LBWeb::lbheader(bw_t('ALLG.TITEL'), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel(bw_t('ALLG.TITEL'), __DIR__), 'https://www.fao.org/3/x0490e/x0490e00.htm', 'help.html');
 }
 
 ?>
