@@ -144,7 +144,8 @@ if (bw_tts($bw_cf)['mode'] === 'aus') {
 $bw_anl = (string) $bw_auftrag['anlass'];
 /* 0.9.49: 'sperre' geht in der Nachtruhe gar nicht erst in die Warteliste, der Sender wuerde sie verwerfen.
  * Rueckgabe 3 sagt dem Dienst: nicht merken, der naechste Rechengang fragt wieder. */
-if ($bw_anl === 'sperre' && ansage_nachtruhe(bw_ansage_regeln($bw_cf), time())) {
+/* 0.9.62: die Nachtruhe mit den Regeln fuer heute (an Nicht-Schultagen endet sie spaeter). */
+if ($bw_anl === 'sperre' && bw_nachtruhe_heute(bw_ansage_regeln($bw_cf), time(), bw_ansage_k())) {
     echo "ANSAGE;STAND=-2;KENNUNG=NACHTRUHE\n";
     exit(3);
 }
