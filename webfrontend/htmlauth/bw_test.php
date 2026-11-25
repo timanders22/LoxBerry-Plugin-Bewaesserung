@@ -1467,6 +1467,9 @@ function bw_pruefungen()
         $zeilen[] = bw_pruefzeile(1, bw_t('TEST.F_MQTT_EIN'),
             sprintf(bw_t('TEST.A_MQTT_EIN_AN'), bw_e(trim((string) $cfg['mqtt_topic'], '/'))));
     }
+    // 0.9.63: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $bw_hb = bw_pruef_praefix_haus($cfg);
+    $zeilen[] = bw_pruefzeile($bw_hb[0], bw_e(bw_t('HAUSBEREICH.F_TEST')), $bw_hb[1]);
     $g = bw_mqtt_zustand();
     if (empty($g['gefunden'])) {
         $zeilen[] = bw_pruefzeile(0, bw_t('TEST.F_MQTT'), bw_t('TEST.A_MQTT_NICHT_GEFUNDEN'));

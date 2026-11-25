@@ -450,6 +450,8 @@ if ($bw_post && isset($_POST['speichern'])) {
     $bw_cfg['tts'] = ansage_formular_lesen($_POST, bw_tts($bw_cfg), $bw_tmangel, $bw_tbean,
         array('modi' => bw_ansage_modi(), 'ziele' => bw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), bw_ansage_k(), $bw_thinw);
     list($bw_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, bw_ansage_regeln($bw_cfg), array(), $bw_tmangel, $bw_tbean, bw_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 0.9.63: der Block 'Meldungen an SignalBot' (eine Beanstandung haelt das Speichern an, wie die Ansage)
+    $bw_cfg['meldung'] = meld_formular_lesen($_POST, isset($bw_cfg['meldung']) ? $bw_cfg['meldung'] : null, bw_meld_anlaesse(), $bw_tmangel, $bw_tbean, bw_meld_k(), bw_meld_haken_vorgabe());
     // 0.9.49: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 0.9.48 ueberschrieb es der naechste Abgleich.
     $bw_cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($bw_cfg['ansage_token_herkunft']) ? $bw_cfg['ansage_token_herkunft'] : array());
     foreach ($bw_tmangel as $bw_tm) { $bw_fehler[] = bw_e($bw_tm['text']); }
@@ -497,6 +499,14 @@ if ($bw_post && isset($_POST['save_mqtt'])) {
         (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
     if ($bw_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $bw_mtopic)) {
         $bw_fehler[] = bw_t('EINST.FEHLER_TOPIC');
+        $bw_eingaben_form = 'mqtt';
+        $bw_beanstandet[] = 'mqtt_topic';
+    } elseif (hb_bereich($bw_mtopic) !== '' && trim($bw_mtopic, '/') !== (string) $bw_mcfg['mqtt_topic']) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        /* 0.9.63 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+         * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+         * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+        $bw_fehler[] = sprintf(bw_t('HAUSBEREICH.FEHLER'), bw_e(trim($bw_mtopic, '/')), bw_e(hb_bereich($bw_mtopic)));
         $bw_eingaben_form = 'mqtt';
         $bw_beanstandet[] = 'mqtt_topic';
     } else {
@@ -1215,6 +1225,12 @@ if ($bw_post && isset($_POST['selbsttest'])) {
  * die Meldung reist mit der Einmalmeldung, F5 spricht nicht erneut (PRG). */
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
  * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+/* 0.9.63: Testmeldung an SignalBot (Knopf unter den Ansage-Regeln). */
+if ($bw_post && isset($_POST['meld_test'])) {
+    list($meld_ok, $meld_satz) = bw_meld_test();
+    if ($meld_ok) { $bw_meldungen[] = bw_e($meld_satz); } else { $bw_misserfolg[] = bw_e($meld_satz); }
+    $bw_tab = 'tab-test';
+}
 if ($bw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
     $bw_tk = bw_ansage_k();
     $bw_tnur = (isset($_POST['ansage_test_ziel']) && bw_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
@@ -1793,6 +1809,7 @@ if ($bw_rahmen) {
     'm' => function ($n) { return bw_markierung($n); },
     'c' => function ($n, $g) { return bw_eingabe_an('settings', $n, $g); },
     'token_vor_ort' => true), bw_ansage_k()) ?>
+<?= bw_meld_form_html($bw_cfg) ?>
 <?php foreach (bw_ansage_anlaesse() as $bw_ak => $bw_as) { ?>
 <label><input data-role="none" type="checkbox" name="<?= bw_e($bw_ak) ?>" value="1"<?= bw_eingabe_an('settings', $bw_ak, !empty($bw_cfg[$bw_ak])) ? ' checked' : '' ?>>
   <?= bw_e(bw_t('EINST.L_ANSAGE_' . $bw_as)) ?></label><br>

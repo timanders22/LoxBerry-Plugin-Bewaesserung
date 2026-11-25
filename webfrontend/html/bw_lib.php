@@ -41,10 +41,12 @@ if (!function_exists('bw_e')) {
  * mit weiteren Ausgabezielen, bw_mit_zielen(), Welle Mehrfach-Ziele). Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden und weist einen
  * direkten Aufruf ueber den Webserver mit 403 ab. */
 require_once __DIR__ . '/sprachausgabe.php';
+require_once __DIR__ . '/meldung.php';     // Statusmeldungen an SignalBot (seit 0.9.63)
 /* Gemeinsames Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, seit 0.9.57): "Einstellungen sichern"
  * und "Einstellungen zurueckspielen" wie in allen Linien des Hauses; die Beschreibung dieser Linie steht in
  * bw_sicherung_beschreibung(). Die Abschrift weist einen direkten Aufruf ueber den Webserver mit 403 ab. */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 0.9.63, Regeln/07)
 
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
@@ -225,6 +227,7 @@ function bw_vorgaben()
         // einzeln ab und stehen ab Werk an - wer die Ausgabe einschaltet, hoert sofort etwas.
         // Der Dienst fuehrt 'tts' nur als Namen (seine Vorgaben stehen nur hier).
         'ansage_ende' => 1, 'ansage_ventil' => 1, 'ansage_sperre' => 1,     // ansage_sperre: 0.9.49
+        'meldung' => meld_vorgaben(bw_meld_anlaesse(), bw_meld_haken_vorgabe()),     // 0.9.63: Meldungen an SignalBot, ab Werk aus
         'tts' => ansage_werk_block(),
         // 0.9.57 (Regeln/05 "Was ein gemeinsames Modul in die Konfiguration schreibt ..."): die beiden Schluessel, die
         // die Sprachausgabe seit 0.9.46 in bewaesserung.json schreibt - ansage_regeln (Formular "Wann gesprochen
@@ -2801,6 +2804,7 @@ function bw_grenzen()
 
 function bw_wert_pruefen($k, $w)
 {
+    if ($k === 'meldung') { return !meld_block_pruefen($w, bw_meld_anlaesse()); }     // 0.9.63: Meldungen an SignalBot
     $v = bw_vorgaben();
     if (!array_key_exists($k, $v)) { return false; }
     $soll = $v[$k];
@@ -3354,6 +3358,8 @@ function bw_ansage_senden($jetzt = null)
         $conf = bw_config(false);
         bw_ansage_token_pflegen($conf);
         $conf = bw_config(false);
+        bw_meld_senden($frisch, $conf);     // 0.9.63: dieselben Anlaesse an SignalBot (eigene Haken)
+        $frisch = bw_meld_nur_ansage($frisch, $conf);     // die Ansage nur mit ihrem eigenen Haken
         $a = ansage_regel_sprechen($frisch, bw_tts($conf), bw_ansage_regeln($conf), bw_ansage_k());
         $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
         if ($a['r'] !== null) {
@@ -3619,6 +3625,7 @@ function bw_sicherung_beschreibung()
                      }),
         /* "Wann gesprochen wird" (seit 0.9.46): ungueltig = abgewiesen (seit 0.9.49), gueltig = in der Form von
          * ansage_regeln_wert() uebernommen. */
+        'meldung' => meld_sicherung_knoten(bw_meld_anlaesse(), bw_meld_k()),     // 0.9.63
         'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())) + array(
             'pruefen' => function ($w) {
                 $g = '';
@@ -3660,6 +3667,10 @@ function bw_sicherung_beschreibung()
         'nie_aus_datei' => array('gardena_token', 'ansage_token_herkunft'),
         'teile' => array('zonen' => 'bw_sicherung_zonen', 'quellen' => 'bw_sicherung_quellen'),
         'pruefen' => function ($k, $w) {
+            /* 0.9.63: kein Praefix auf einem gemeinsamen Bereich unter haus/ (Regeln/07) - wie im Formular. */
+            if ($k === 'mqtt_topic' && is_string($w) && hb_bereich($w) !== '') {
+                return sprintf(bw_t('EINST.SICH_WERT'), bw_e($k)) . ' ' . bw_e(sprintf(bw_t('HAUSBEREICH.SICH_W'), hb_bereich($w)));
+            }
             return (bw_wert_taugt($w) && bw_wert_pruefen($k, $w)) ? '' : sprintf(bw_t('EINST.SICH_WERT'), bw_e($k));
         },
         'quer' => 'bw_sicherung_quer',
@@ -4595,4 +4606,151 @@ function bw_bruecke_lage()
     $wie = !$pids ? 'kein Dienst' : ($alter === null ? 'kein Zustand' : ($alter > BB_WACHE_GRENZE
         ? 'Zustand ' . $alter . ' s alt' : 'ohne Abo' . (is_array($zu) && !empty($zu['fehler']) ? ': ' . $zu['fehler'] : '')));
     return array(false, sprintf(bw_t('BEFEHL.T_STEHT'), $wie));
+}
+
+/**
+ * 0.9.63 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Dazu der Vergleich der Liste mit der, die der Dienst in seinen Zustand schreibt (haus_bereiche).
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function bw_pruef_praefix_haus($cfg)
+{
+    $p = (trim((string) $cfg['mqtt_topic'], '/') !== '' ? trim((string) $cfg['mqtt_topic'], '/') : 'bewaesserung');
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(!empty($cfg['mqtt_ein']))) {
+            return array(-1, sprintf(bw_t('HAUSBEREICH.A_AUS'), bw_e($p), bw_e($b)));
+        }
+        return array(0, sprintf(bw_t('HAUSBEREICH.A_NEIN'), bw_e($p), bw_e($b)));
+    }
+    $z = (is_array(bw_json_lesen(bw_paths()['datadir'] . '/haus_bereiche.json')) && isset(bw_json_lesen(bw_paths()['datadir'] . '/haus_bereiche.json')['haus_bereiche'])) ? bw_json_lesen(bw_paths()['datadir'] . '/haus_bereiche.json')['haus_bereiche'] : null;
+    if (!is_array($z)) {
+        return array(-1, sprintf(bw_t('HAUSBEREICH.A_UNBEKANNT'), bw_e($p)));
+    }
+    if ($z !== hb_bereiche()) {
+        return array(0, sprintf(bw_t('HAUSBEREICH.A_LISTE'), bw_e(implode(', ', hb_bereiche())),
+            bw_e(implode(', ', array_map('strval', $z)))));
+    }
+    return array(1, sprintf(bw_t('HAUSBEREICH.A_JA'), bw_e($p)));
+}
+
+if (!function_exists('bw_meld_block')) {
+
+/* ---------------- Statusmeldungen an SignalBot (0.9.63, gemeinsames Modul meldung.php) ----------------
+ *
+ * Auftrag des Hausherrn 23.11.2026, Entscheidungen 23./24.11.2026: dieselben Anlaesse wie die Ansage, eigener Haken je
+ * Anlass, ab Werk aus; Sperre, Bremse und Versand im Modul. Die Erkennung laeuft auch ohne Ausgabeart, wenn eine Meldung
+ * eingeschaltet ist (bw_meld_aktiv()), und legt einen Anlass hin, wenn Ansage ODER Meldung ihn will
+ * (bw_meld_will()); der Sender trennt die Wege wieder (bw_meld_nur_ansage()).
+ */
+
+/** Die meldbaren Anlaesse: Name => Beschriftung (dieselben wie die Ansage). */
+function bw_meld_anlaesse()
+{
+    return array('ende' => bw_t('EINST.N_ENDE'), 'ventil' => bw_t('EINST.N_VENTIL'), 'sperre' => bw_t('EINST.N_SPERRE'));
+}
+
+/** Die ab-Werk-Haken der Ansage dieser Linie: so stehen auch die Haken der Meldung, solange der Block nie gespeichert ist. */
+function bw_meld_haken_vorgabe()
+{
+    return array('ende' => 1, 'ventil' => 1, 'sperre' => 1);
+}
+
+/** Ist der Haken dieses Anlasses fuer die ANSAGE gesetzt? */
+function bw_ansage_anlass_sprache($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = bw_config(false); }
+    return in_array((string) $a, array('ende', 'ventil', 'sperre'), true) && is_array($cfg) && !empty($cfg['ansage_' . $a])
+        && bw_tts($cfg)['mode'] !== 'aus';
+}
+
+/** Der wirksame Block 'meldung' fuer den Betrieb (ungueltig gespeichert gilt als aus und wird im Formular genannt). */
+function bw_meld_block($cfg = null)
+{
+    if ($cfg === null) { $cfg = bw_config(false); }
+    list($b) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, bw_meld_anlaesse(), bw_meld_haken_vorgabe());
+    return $b;
+}
+
+/** Die Beanstandungen eines gespeicherten Blocks (leer = gueltig). */
+function bw_meld_bean($cfg = null)
+{
+    if ($cfg === null) { $cfg = bw_config(false); }
+    list(, $f) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, bw_meld_anlaesse(), bw_meld_haken_vorgabe());
+    return $f;
+}
+
+/** Ist irgendein Anlass zur Meldung eingeschaltet? Dann laeuft die Erkennung auch ohne Ausgabeart. */
+function bw_meld_aktiv($cfg = null)
+{
+    return meld_irgendein_an(bw_meld_block($cfg));
+}
+
+/** Will die Ansage ODER die Meldung diesen Anlass? */
+function bw_meld_will($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = bw_config(false); }
+    return bw_ansage_anlass_sprache($a, $cfg) || meld_anlass_an(bw_meld_block($cfg), (string) $a);
+}
+
+/** Der Kontext des Moduls: Datenordner (data/plugins/<ordner>, daraus der Absender) und Texte - wie bei der Ansage. */
+function bw_meld_k()
+{
+    return bw_ansage_k();
+}
+
+/** Fuer die Ansage nur Eintraege, deren Ansage-Haken gesetzt ist; ein Eintrag ohne bekannten Anlass bleibt wie bisher. */
+function bw_meld_nur_ansage(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = bw_config(false); }
+    $anl = bw_meld_anlaesse();
+    $aus = array();
+    foreach ($l as $e) {
+        if (is_array($e) && array_key_exists(meld_anlass_von($e), $anl) && !bw_ansage_anlass_sprache(meld_anlass_von($e), $cfg)) { continue; }
+        $aus[] = $e;
+    }
+    return $aus;
+}
+
+/** Die Eintraege an SignalBot melden. Protokoll: eine Zeile, wenn gesendet oder gescheitert (nie der Text). */
+function bw_meld_senden(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = bw_config(false); }
+    $b = bw_meld_block($cfg);
+    if (empty($b['ein']) || !$l) { return null; }
+    $a = meld_regel_senden($l, $b, bw_meld_k());
+    if ($a['regel'] === '' || in_array($a['regel'], array('BREMSE', 'STAND', 'ORDNER'), true)) {
+        bw_log(meld_regel_kurz($a));
+    }
+    return $a;
+}
+
+/** Der Knopf "Testmeldung senden": array(angenommen, Satz). Geht an Haken, Sperre und Bremse vorbei. */
+function bw_meld_test()
+{
+    $r = meld_testmeldung(bw_meld_k());
+    bw_log('Testmeldung an SignalBot: ' . ($r[0] ? 'angenommen' : 'nicht angenommen'));
+    return $r;
+}
+
+/** Der Block im Einstellungsformular (unter den Ansage-Regeln, im selben Formular), mit Lage und Knopf. */
+function bw_meld_form_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = bw_config(false); }
+    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); };
+    $k = bw_meld_k();
+    $o = array();
+    /* 0.9.63: unsichtbarer Doppel des Speicherknopfs VOR dem Knopf Testmeldung - die Eingabetaste in einem Textfeld
+     * loest den ersten Absendeknopf des Formulars aus; sie soll speichern wie bisher, nicht die Testmeldung senden. */
+    $o[] = '<button data-role="none" type="submit" name="speichern" value="1" tabindex="-1" aria-hidden="true" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden"></button>';
+    $o[] = '<h3>' . $e(meld_t('TITEL', $k)) . '</h3>';
+    $o[] = meld_formular_html(bw_meld_block($cfg), bw_meld_anlaesse(), array(), $k);
+    list(, $lage) = meld_pruefzeile(bw_meld_block($cfg), bw_meld_bean($cfg), $k);
+    $o[] = '<div class="sm-hilfe">' . $e(meld_t('F_TEST', $k) . ' ' . $lage) . '</div>';
+    $o[] = '<div><button data-role="none" class="sm-b sm-b-aktion" type="submit" name="meld_test" value="1">'
+         . $e(meld_t('K_TEST', $k)) . '</button></div>';
+    return implode("\n", $o) . "\n";
+}
 }

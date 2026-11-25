@@ -137,7 +137,7 @@ if ($bw_mk_gilt) {
     exit(3);
 }
 $bw_cf = bw_config(false);
-if (bw_tts($bw_cf)['mode'] === 'aus') {
+if (bw_tts($bw_cf)['mode'] === 'aus' && !bw_meld_aktiv($bw_cf)) {     // 0.9.63: auch fuer die Meldung an SignalBot
     echo "ANSAGE;STAND=-2;KENNUNG=AUS\n";
     exit(3);
 }

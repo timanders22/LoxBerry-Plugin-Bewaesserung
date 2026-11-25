@@ -2315,6 +2315,19 @@ def ventil_lesen() -> tuple:
 ANSAGE_ZEITGRENZE_S = 20.0      # die Bruecke kappt jede Ansage auf 15 s ('frist', bin/bw_ansage.php; B2)
 ANSAGE_HOECHSTENS_WARTEND = 4
 ANSAGE_HAKEN = {"ende": "ansage_ende", "ventil": "ansage_ventil", "sperre": "ansage_sperre"}
+
+
+def meldung_will(cfg, art):
+    """0.9.63: Meldungen an SignalBot (Block 'meldung' des gemeinsamen Moduls): eingeschaltet und der Haken des Anlasses
+    gesetzt. Ein fehlender oder ungueltiger Block heisst aus. Geht ein Anlass so an die Bruecke, entscheidet sie und der
+    Sender ueber die Wege (Ansage nur mit Ausgabeart und Ansage-Haken)."""
+    b = (cfg or {}).get("meldung")
+    if not isinstance(b, dict) or not isinstance(b.get("haken"), dict):
+        return False
+    try:
+        return int(b.get("ein") or 0) == 1 and int(b["haken"].get(art) or 0) == 1
+    except (TypeError, ValueError):
+        return False
 _ANSAGE_SCHLOSS = threading.Lock()
 _ANSAGE_REIHE = threading.Lock()
 _ANSAGE_STAND: dict = {}
@@ -2374,7 +2387,7 @@ def ansage_ereignis(art: str, daten: dict, cfg) -> str:
         an = int((cfg or {}).get(haken) or 0) == 1
     except (TypeError, ValueError):
         an = False
-    if not an:
+    if not an and not meldung_will(cfg, art):     # 0.9.63: Ansage-Haken oder Meldung an SignalBot
         return "aus"
     with _ANSAGE_SCHLOSS:
         st = _ansage_stand()
@@ -2437,7 +2450,7 @@ def ansage_sperre(daten: dict, cfg) -> str:
         an = int((cfg or {}).get(ANSAGE_HAKEN["sperre"]) or 0) == 1
     except (TypeError, ValueError):
         an = False
-    if not an:
+    if not an and not meldung_will(cfg, "sperre"):     # 0.9.63: Ansage-Haken oder Meldung an SignalBot
         return "aus"
     with _ANSAGE_SCHLOSS:
         je = _ansage_stand()["sperre"]
@@ -3188,6 +3201,26 @@ def nachtplan_pflegen(abbild: dict, cfg: dict, jetzt_dt) -> dict:
     return fest
 
 
+def _haus_bereiche():
+    """0.9.63 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): das gemeinsame
+    Modul haus_bereiche.py neben dem Dienst, beim ersten Aufruf geladen."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    if hier not in sys.path:
+        sys.path.insert(0, hier)
+    import haus_bereiche  # noqa: E402
+    return haus_bereiche
+
+
+def praefix_haus_melden(praefix):
+    """0.9.63: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich unter
+    haus/ faellt; der Versand bleibt, wie er ist. Rueckgabe der gemeldete Bereich oder ""."""
+    hb = _haus_bereiche()
+    bereich = hb.hb_melden_faellig(praefix)
+    if bereich:
+        _LOG.warning("%s", hb.hb_logtext(praefix, bereich))
+    return bereich
+
+
 def veroeffentlichen(abbild: dict, cfg: dict) -> int:
     """Die Zahlen in den Broker legen.
 
@@ -3346,6 +3379,9 @@ def veroeffentlichen(abbild: dict, cfg: dict) -> int:
             behalten.add("%s/%s" % (s, f))
     praefix = str(cfg.get("mqtt_topic") or "bewaesserung")
     # 'behalten' ist seit 0.9.34 leer (RETAINED_GLOBAL, RETAINED_ZONE).
+    praefix_haus_melden(praefix)   # 0.9.63: im gemeinsamen Bereich? melden, nicht anhalten
+    json_schreiben(os.path.join(DATADIR, "haus_bereiche.json"),   # 0.9.63: Liste fuer den Reiter Test
+                   {"haus_bereiche": list(_haus_bereiche().HB_BEREICHE)})
     # Die Altwerte frueherer Fassungen ('ok', '<zone>/ok', 'sperrgrund',
     # seit 0.9.34 auch die Planwerte) einmal abraeumen - am Broker mit Nachlesen; geht das nicht,
     # hoechstens einmal je Stunde im selben Zug ueber den UDP-Eingang (M4, siehe
